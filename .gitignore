@@ -57,3 +57,6 @@ web/.next/
 web/.env
 web/.env.local
 
+
+# 本地回放（对局自动生成，机器特定，不入库）
+.replays/
