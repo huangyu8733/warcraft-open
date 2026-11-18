@@ -163,6 +163,7 @@ export const KO_KR: Partial<Record<MessageKey, string>> = {
   "hd.sortAsc": "오름차순 정렬",
   "hd.sortDesc": "내림차순 정렬",
   "hd.startGame": "게임 시작",
+  "hd.start": "시작",
   "hd.startingIn": "{n}초 후 게임이 시작됩니다...",
   "hd.status": "상태",
   "hd.suggestedPlayers": "권장 플레이어 수",

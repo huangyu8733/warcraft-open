@@ -55,7 +55,9 @@ const hooks = {
   isUnitIllusion: (id) => id === 1,
   // Unit 1 rides in unit 2; nothing else is in a hold.
   unitTransport: (id) => (id === 1 ? 2 : 0),
-  unitRace: (id) => (id === 1 ? 'human' : 'orc'),
+  // 3 is an `other` (UnitData.slk's spelling for RACE_OTHER), 4 a creep — a race common.j
+  // names no constant for.
+  unitRace: (id) => ({ 1: 'human', 2: 'orc', 3: 'other', 4: 'creeps' })[id] ?? '',
   isUnitIdType: (typeId, type) => typeId === 'Hamg' && type === 0,
   selectedUnits: (player) => (player === 0 ? [1] : []),
   isUnitInRange: (id, other, d) => { rangeCalls.push(['unit', id, other, d]); return d >= 300; },
@@ -131,7 +133,7 @@ function InItsTransport takes nothing returns boolean
     return IsUnitInTransport(a, b)
 endfunction
 function InAnotherTransport takes nothing returns boolean
-    return IsUnitInTransport(b, a)
+    return IsUnitInTransport(a, o)
 endfunction
 function Illusion takes nothing returns boolean
     return IsUnitIllusion(a)

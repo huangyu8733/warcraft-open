@@ -163,6 +163,7 @@ export const ZH_TW: Partial<Record<MessageKey, string>> = {
   "hd.sortAsc": "遞增排序",
   "hd.sortDesc": "遞減排序",
   "hd.startGame": "開始遊戲",
+  "hd.start": "開始",
   "hd.startingIn": "{n} 秒後遊戲開始……",
   "hd.status": "狀態",
   "hd.suggestedPlayers": "建議玩家",

@@ -127,9 +127,12 @@ export async function mountSkirmish(
    *  · Full Shared Unit Control — `AllianceType.SharedControl` between team-mates at seed
    *    time. `MeleeConfig.forces` carries `allied` and `sharedVision` and nothing else, so
    *    this is a change to the alliance seeding rather than to the screen.
-   *  · Random Races / Random Hero — both are `IsMapFlagSet` flags that Blizzard.j's melee
-   *    initialisation reads (`MAP_RANDOM_HERO` swaps the free-hero token for a rolled hero),
-   *    and that native answers false to everything today (jass/natives/melee.ts).
+   *  · Random Races — every seat's race rolled at Start whatever its row says; the LAN lobby
+   *    does it in `lobbySetup.ts`, and this screen's `toConfig` does not yet.
+   *
+   * Random Hero is LIVE (issue #296): it is `IsMapFlagSet(MAP_RANDOM_HERO)`, which Blizzard.j's
+   * `MeleeStartingUnits<Race>` read to swap the free-hero token for a rolled hero, and the flag
+   * rides to the script in `MeleeConfig.mapFlags` (advancedOptions.ts `mapFlagsOf`).
    *
    * The Observers dropdown is not among them: it is GONE, and `observerMode` stands in its
    * place (see below, and src/overrides/).

@@ -68,6 +68,8 @@ const hooks = {
   terrainCliffLevel: (x, y) => (x > 0 ? 3 : 2),
   pauseCompAi: (p, pause) => calls.push(['pauseCompAi', p, pause]),
 };
+const gold = new Map();
+const techLevels = new Map();
 
 const SRC = `
 globals
@@ -190,6 +192,66 @@ function PlayerIdIsOwn takes nothing returns boolean
 endfunction
 function PauseAi takes nothing returns nothing
     call PauseCompAI(Player(4), true)
+endfunction
+function AddGold takes integer n returns integer
+    call AddResourceAmountBJ(n, u)
+    return GetResourceAmount(u)
+endfunction
+function AddTech takes integer n returns integer
+    call AddPlayerTechResearched(Player(2), 'Rhme', n)
+    return GetPlayerTechCount(Player(2), 'Rhme', true)
+endfunction
+function Counts takes nothing returns string
+    call SetPlayers(6)
+    call SetTeams(3)
+    return I2S(GetPlayers()) + "," + I2S(GetTeams())
+endfunction
+function RectLoc takes nothing returns string
+    local rect r = Rect(0.0, 0.0, 1.0, 1.0)
+    call SetRectFromLoc(r, Location(300.0, -50.0), Location(-100.0, 200.0))
+    return R2S(GetRectMinX(r)) + "," + R2S(GetRectMinY(r)) + "," + R2S(GetRectMaxX(r)) + "," + R2S(GetRectMaxY(r))
+endfunction
+function LocInRegion takes real x, real y returns boolean
+    local region rg = CreateRegion()
+    call RegionAddRect(rg, Rect(0.0, 0.0, 100.0, 100.0))
+    call RegionAddRect(rg, Rect(500.0, 500.0, 600.0, 600.0))
+    return IsLocationInRegion(rg, Location(x, y))
+endfunction
+function PlainHandicapPct takes nothing returns real
+    return GetPlayerHandicapBJ(Player(1))
+endfunction
+function SetPlainHandicap takes nothing returns nothing
+    call SetPlayerHandicapBJ(Player(1), 70.00)
+endfunction
+function Suspended takes nothing returns boolean
+    return IsSuspendedXP(u)
+endfunction
+function Suspend takes nothing returns nothing
+    call SuspendHeroXPBJ(false, u)
+endfunction
+function Resume takes nothing returns nothing
+    call SuspendHeroXPBJ(true, u)
+endfunction
+globals
+    destructable gate = null
+    boolean sawGate = false
+    boolean sawDying = false
+endglobals
+function GateDied takes nothing returns nothing
+    set sawGate = GetTriggerDestructable() == gate
+    set sawDying = GetDyingDestructable() == GetTriggerDestructable()
+endfunction
+function WatchGate takes nothing returns nothing
+    local trigger t = CreateTrigger()
+    set gate = CreateDestructable('LTg1', 0.0, 0.0, 0.0, 1.0, 0)
+    call TriggerRegisterDeathEvent(t, gate)
+    call TriggerAddAction(t, function GateDied)
+endfunction
+function NoTriggerDestructable takes nothing returns boolean
+    return GetTriggerDestructable() == null
+endfunction
+function LocInNullRegion takes nothing returns boolean
+    return IsLocationInRegion(CreateRegion(), Location(0.0, 0.0))
 endfunction
 `;
 

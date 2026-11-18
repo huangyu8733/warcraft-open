@@ -216,6 +216,8 @@ export interface SpellApi {
   emitSplat(splatId: string, x: number, y: number): void;
   /** Register a repeating area effect (Blizzard waves, Rain of Fire, …). */
   addSpellField(f: SpellFieldInit): void;
+  /** Start a Locust Swarm around `caster` (SimWorld.tickLocustSwarms). */
+  startLocustSwarm(caster: SimUnit, def: AbilityDef, lvl: AbilityLevel): void;
   /** Drain up to `amount` mana from a unit; returns the mana actually removed
    *  (Mana Burn deals damage equal to what it burned). */
   burnMana(target: SimUnit, amount: number): number;
@@ -1656,7 +1658,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   },
 
   // Purge (Shaman) — strip ALL buffs from the target; an enemy is then slowed to a
-  // crawl for dataD seconds (movement only), and a summoned unit is destroyed outright.
+  // crawl for the row's duration (movement only), and a summoned unit takes DataC damage.
   Aprg: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
@@ -2630,8 +2632,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // for the FIRST THIRD of the duration (Dur=9 → 3s), then the subsiding "Half Damage
   // Dealt" (dataC) every "Half Damage Interval" (dataD, 1s) for the remaining two-thirds.
   // The old code spread dataA over the whole 9s as 1s waves (15 dps for 9s), so the burn
-  // did far too little per second and lasted three times too long. Heroes take the shorter
-  // herodur (2.67s) throughout. Damage begins the instant this handler runs — i.e. when the
+  // did far too little per second and lasted three times too long. Damage begins the instant this handler runs — i.e. when the
   // cast-point wind-up ends — since a field's first wave fires on its next tick (delay 0).
   AHfs: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
@@ -2917,22 +2918,23 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // column here at all. Modelling it as a nameless damage field (what this was) is why it
   // had "no particles": the locusts ARE the particles.
   //
-  // The field it still registers deals nothing — it is there to hold the swarm's own
-  // `Effectsoundlooped = LocustSwarmLoop` for the duration and to be torn down with it.
-  // NOT YET MODELLED: the DataD/DataE return that heals the Crypt Lord off their bites.
+  //
+  // …and twenty units that stand where they were summoned are not a swarm either. What they
+  // DO — come out one at a time, bite what is near the Crypt Lord (no more than DataC to a
+  // victim), carry DataD of each bite home once they hold DataE, and all fly home at the end —
+  // is SimWorld.tickLocustSwarms; this only starts it.
+  //
+  // The field it registers deals nothing: it holds the swarm's own `Effectsoundlooped =
+  // LocustSwarmLoop` for the duration, RIDING the Crypt Lord (the swarm goes where he goes,
+  // and it stops with him if he dies).
   AUls: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
     const total = lvl.heroDuration || lvl.duration || 30;
-    const unit = lvl.summon || "uloc";
-    const count = Math.max(1, d(lvl, 0, 20));
-    for (let i = 0; i < count; i++) {
-      const facing = caster.facing + (i / count) * Math.PI * 2;
-      api.requestSummon(unit, caster.x, caster.y, facing, caster.owner, caster.team, total, caster.id, summonArt(def), false);
-    }
+    api.startLocustSwarm(caster, def, lvl);
     api.addSpellField({
       code: def.code, x: caster.x, y: caster.y, area: lvl.area || 800,
       damagePerWave: 0, waves: Math.max(1, Math.round(total)), interval: 1,
-      casterId: caster.id, art: "", loopSound: fieldLoop(def),
+      casterId: caster.id, art: "", loopSound: fieldLoop(def), followCaster: true,
     });
   },
 
@@ -4517,7 +4519,16 @@ function lv(def: AbilityDef, rank: number): AbilityLevel {
  *   Spirit of Vengeance `Avng`  DataA 1  DataC even  Dur 50   Rng 600  DataE 6 — bound
  *
  *   DataA `Rai1` "Units Raised"      how many climb out of the ONE body
+ *   DataB `Rai2`                     …and how many of a SECOND type beside them
  *   DataC `Rai3` "Unit Type"         a RAWCODE, hence dataStr — not the SLK `unitid` column
+ *   DataD `Rai4`                     the second type's rawcode
+ *
+ * The second pair is `Arai`'s LEVEL 2 and nothing else's: 1 `uske` + 1 `uskm`, which is Skeletal
+ * Mastery — "Causes one of the two skeletons created by Raise Dead to be a Skeletal Mage"
+ * ([Rusm] Ubertip). The research sets that level through its own `rlev` effect, and its `rrai`
+ * half adds to the life of both (api.raiseDeadBonus). The bonus is the Raise Dead ROW's — in
+ * Reign of Chaos the effect names it outright (`rrai,15,-,Arai`) — and the caster must list
+ * the research, so the creep copy and the Rod of Necromancy raise at their own `Dur1`.
  *   DataE `Ucb5` "Max Summoned"      a live cap on the caster's total, 0 = uncapped
  *
  * `bound` is Vengeance's alone (its Spirits die with the Avatar). Everything else is data.

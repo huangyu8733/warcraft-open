@@ -279,8 +279,7 @@ export function registerMeleeNatives(rt: Runtime): void {
   });
   def(rt, "RemoveAllGuardPositions", (c, a) => (c.rt.hooks?.removeAllGuardPositions?.(playerIndex(c, a[0])), JNULL));
   for (const name of [
-    "StartCampaignAI", "CommandAI", "SetPlayerHandicap",
-    "RecycleGuardPosition", "RemoveGuardPosition", "SetUnitCreepGuard", "Preloader", "Preload",
+    "SetUnitCreepGuard", "Preloader", "Preload",
     "PreloadStart", "PreloadEnd", "PreloadEndEx", "PreloadRefresh", "PreloadGenClear", "PreloadGenStart",
     // TriggerSyncStart/Ready bracket a multiplayer sync block in the script. There is no
     // second client to wait for here, so the block is simply local code.

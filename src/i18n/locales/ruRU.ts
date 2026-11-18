@@ -163,6 +163,7 @@ export const RU_RU: Partial<Record<MessageKey, string>> = {
   "hd.sortAsc": "Сортировать по возрастанию",
   "hd.sortDesc": "Сортировать по убыванию",
   "hd.startGame": "Начать игру",
+  "hd.start": "Начать",
   "hd.startingIn": "Игра начнётся через {n} …",
   "hd.status": "Статус",
   "hd.suggestedPlayers": "Рекомендуемые игроки",

@@ -811,6 +811,9 @@ function inventoryAbilities(innate: ReadonlyArray<{ id: string; code: string; da
   return innate.filter((a) => a.code === "AInv").map((a) => ({ id: a.id, slots: inventoryCapacity(a.data[0]) }));
 }
 
+/** The least time between two of a Locust Swarm's bite noises (RtsController.swarmSoundDue). Ours. */
+const SWARM_SOUND_GAP_MS = 280;
+
 export class RtsController {
   private sim: SimWorld;
   private entries: Entry[] = [];
@@ -2882,7 +2885,7 @@ export class RtsController {
       // which the hit carries (SimWorld.hits), and only failing that the def's one art: a
       // two-slot unit throws two different missiles (the Chimaera's acid and lightning).
       const art = h.missileArt || this.defOf(h.attackerId)?.missileArt;
-      if (art) this.sounds.playMissile(art, "impact", at); // ranged
+      if (art && this.swarmSoundDue(art, "impact")) this.sounds.playMissile(art, "impact", at); // ranged
     }
     for (const workerId of this.sim.drainChops()) {
       const def = this.defOf(workerId);
@@ -5221,9 +5224,13 @@ export class RtsController {
   }
   /** JASS SetUnitFlyHeight (render half) — the Z lift the render loop adds; the sim
    *  altitude is set alongside in SimWorld.setUnitFlyHeight. */
-  setUnitFlyHeight(simId: number, height: number): void {
+  setUnitFlyHeight(simId: number, height: number, rate = 0): void {
     const e = this.byId.get(simId);
-    if (e) e.moveHeight = height > 0 ? height : 0;
+    if (!e) return;
+    // With a RATE the height is travelled, not written: the sim flies it (its `altitudeShift`)
+    // and the model follows the sim from here on, as it does for a morph (Entry.liftFromSim).
+    if (rate > 0 && Number.isFinite(rate)) e.liftFromSim = true;
+    else e.moveHeight = height > 0 ? height : 0;
   }
   /** JASS SetUnitTimeScale — a trigger override on the model's animation playback rate.
    *  It does not replace the engine's own attack/walk re-rating but multiplies on top of
@@ -7610,7 +7617,8 @@ export class RtsController {
       if (host && this.sim.isTransport(host)) {
         // A TRANSPORT's Load: the Zeppelin sets off for the unit and the unit for the
         // Zeppelin (SimWorld.issueLoad). "Unable to load target." — [Errors] Canttransport —
-        // for a building, a flier, a foe, or nobody at all.
+        // for a building, a flier, a foe, or nobody at all. A hold with no SEATS left for
+        // this passenger has its own line: `Noroom` "Cargo capacity unavailable." (issue #299).
         if (p && picked !== null && this.controls(picked) && this.sim.holdRoom(host) < p.cargoSize) return this.refuseOrder("Noroom");
         if (!p || picked === null || !this.controls(picked) || !this.execute(this.localPlayer, { c: "load", transportId: hostId, unitId: picked })) return this.refuseOrder("Canttransport");
         this.orderMode = null;
@@ -11522,6 +11530,40 @@ export class RtsController {
    */
   private isLocust(e: Entry): boolean {
     return !!this.sim.units.get(e.simId)?.locust || !!this.registry.get(e.typeId)?.abilities.includes("Aloc");
+  }
+
+  /** The missile arts thrown by LOCUST unit types (`Aloc` in the abilList — in the stock game
+   *  exactly `uloc`'s LocustMissile), lowercased and without extension. Built on first ask. */
+  private swarmArts: Set<string> | null = null;
+  /** When each swarm missile's launch / impact noise was last let through (swarmSoundDue). */
+  private readonly swarmSoundAt = new Map<string, number>();
+
+  /**
+   * May a LOCUST's missile make its noise now? A Locust Swarm is twenty units biting about once
+   * a second each, and the game's own data gives every bite two sounds (LocustMissile.mdx keys
+   * `MLSL`/`MLSH`, which AnimLookups maps to the Banshee's launch and hit). Asked for twenty
+   * times a second, each request cut the copy already playing and started it again — a
+   * stutter, not a swarm. So the swarm's bites are heard as a patter: one launch and one hit
+   * per SWARM_SOUND_GAP, whoever threw them. The gap is OURS — the engine's own voice limits
+   * are what do this in the game, and no file states them.
+   *
+   * Keyed on the ART rather than on the thrower, because a missile's spawn record does not say
+   * who threw it and a LAN client's copy says even less; true for anything that is not a
+   * locust's missile.
+   */
+  swarmSoundDue(art: string, kind: "launch" | "impact"): boolean {
+    const norm = (a: string): string => a.toLowerCase().replace(/\.(mdl|mdx)$/, "");
+    if (!this.swarmArts) {
+      this.swarmArts = new Set();
+      for (const d of this.registry.all()) if (d.missileArt && d.abilities.includes("Aloc")) this.swarmArts.add(norm(d.missileArt));
+    }
+    const key = norm(art);
+    if (!this.swarmArts.has(key)) return true;
+    const now = performance.now();
+    const last = this.swarmSoundAt.get(key + kind) ?? -Infinity;
+    if (now - last < SWARM_SOUND_GAP_MS) return false;
+    this.swarmSoundAt.set(key + kind, now);
+    return true;
   }
 
   /**

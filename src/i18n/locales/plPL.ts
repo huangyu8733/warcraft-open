@@ -163,6 +163,7 @@ export const PL_PL: Partial<Record<MessageKey, string>> = {
   "hd.sortAsc": "Sortuj rosnąco",
   "hd.sortDesc": "Sortuj malejąco",
   "hd.startGame": "Rozpocznij grę",
+  "hd.start": "Rozpocznij",
   "hd.startingIn": "Gra rozpocznie się za {n} ...",
   "hd.status": "Stan",
   "hd.suggestedPlayers": "Sugerowani gracze",

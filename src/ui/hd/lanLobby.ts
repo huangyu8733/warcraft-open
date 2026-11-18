@@ -22,6 +22,7 @@ import { HdScreen, el } from "./screen";
 import { webUiAssets } from "./assets";
 import { loadOfficialStyle } from "./official";
 import { cornerDecorations, primaryButton } from "./officialMenu";
+import { actionButton, baseFrame, officialDropdown, setActionEnabled } from "./skirmish";
 import { settingsRow } from "./lan";
 import { isRoc } from "../../data/edition";
 import { imageToDataUrl } from "../../render/blputil";
@@ -65,14 +66,26 @@ export async function mountHdLanLobbyScreen(
   const isHost = (): boolean => lobby.isHost;
 
   // --- the shell ----------------------------------------------------------------------
-  const root = el("div", "GameLobbyMain");
-  const band = el("div", "GameLobby-ContentContainer");
-  const panel = el("div", "GameLobby-MainPanel");
+  // 3.0's lobby page wears the same band as Custom Games: a wood title header over the
+  // scrolling player list, and the metal `Official-MatchSide` column on the right. The LAN
+  // lobby used to draw its own flat plates, which is why it sat apart from the rest.
+  const tft = !isRoc();
+  const root = el("div", "CustomGames GameLobby Official-CreateScreen");
+  const content = el("div", "CustomGames-ContentContainer Official-ContentContainer");
+  const panel = el("div", "CustomGames-MainPanel");
+  const grid = el("div", "CustomGames-LeftPanel-Grid Official-CreateGrid");
 
-  const left = el("div", "GameLobby-LeftPanel");
-  const playersBox = el("div", "GameLobby-PlayersFrame");
-  const playersScroll = el("div", "GameLobby-PlayersFrame-Scroll");
-  playersBox.appendChild(playersScroll);
+  const upper = el("div", "CustomGames-UpperLeftSection Official-UpperLeftSection Official-MatchHeader");
+  const header = el("div", "Simple-Header");
+  const title = el("div", "Simple-Header-Title");
+  title.appendChild(el("div", "Simple-Header-TitleText", t("hd.lan")));
+  const subtitle = el("div", "Simple-Header-TitleSubText", "");
+  title.appendChild(subtitle);
+  header.appendChild(title);
+  upper.appendChild(header);
+
+  const body = el("div", "GameLobby-Body");
+  const playersScroll = el("div", "Official-LobbyBody GameLobby-Players");
 
   const chatFrame = el("div", "GameLobby-ChatFrame");
   const chatLog = el("div", "ChatFrame-ChatContainer");
@@ -83,27 +96,10 @@ export async function mountHdLanLobbyScreen(
   chatInput.maxLength = 200;
   chatInputRow.append(chatInput, primaryButton(t("hd.send"), () => submit()));
   chatFrame.append(chatLog, chatInputRow);
-  left.append(playersBox, chatFrame);
-
-  const right = el("div", "GameLobby-RightPanel");
-  const mapFrame = el("div", "GameLobby-MapFrame");
-  const mapImage = el("div", "GameLobby-MapImage");
-  mapFrame.appendChild(mapImage);
-  const gameName = el("div", "GameLobby-GameName", "");
-  const mapName = el("div", "GameLobby-MapName", "");
-  const mapAuthor = el("div", "GameLobby-MapAuthor", "");
-  const mapDescription = el("div", "GameLobby-MapDescription", "");
-  const advancedBox = el("div", "GameLobby-Advanced", "");
-  const addressRow = el("button", "GameLobby-Address");
-  addressRow.type = "button";
-  const buttons = el("div", "GameLobby-Btns");
-  const startButton = primaryButton(t("hd.startGame"), () => startMatch(), "", true);
-  const cancelButton = primaryButton(t("hd.cancel"), () => cancel());
-  buttons.append(startButton, cancelButton);
-  right.append(mapFrame, gameName, mapName, mapAuthor, mapDescription, advancedBox, addressRow, buttons);
+  body.append(playersScroll, chatFrame);
 
   const base = el("div", "BaseFrame Official-BaseFrame");
-  const themed = isRoc() ? "" : " tft";
+  const themed = tft ? " tft" : "";
   base.append(
     el("div", `left-chain${themed}`),
     el("div", `right-chain${themed}`),
@@ -111,11 +107,50 @@ export async function mountHdLanLobbyScreen(
     el("div", "background-texture"),
   );
 
-  panel.append(left, right, base);
-  band.append(panel);
-  root.append(el("div", "Official-Background"), band);
+  grid.append(el("div", "CustomGames-Background Official-Background"), base, upper, body);
+
+  // --- the right column -----------------------------------------------------------------
+  const aside = el("div", "CustomGames-RightColumn Official-RightColumn Official-MatchSide");
+  const sideInner = el("div", "Official-SideInner");
+
+  const headerRow = el("div", "Official-PreviewHeader");
+  const swords = el("div", "Official-SwordsIcon");
+  swords.appendChild(el("div", "Official-MaxPlayerSize", String(map.info.maxPlayers)));
+  const mapName = el("div", "Official-MapName", map.info.name);
+  headerRow.append(swords, mapName);
+
+  const mapAuthor = el("div", "Official-MapAuthor", [map.info.recommendedPlayers, map.info.tileset].filter(Boolean).join(" · "));
+
+  const previewFrame = el("div", "Official-PreviewFrame Official-PreviewFrame-Lobby");
+  const mapImage = el("div", "Official-PreviewImage");
+  previewFrame.appendChild(mapImage);
+
+  const summary = el("div", "Official-Options Official-LobbySummary");
+  const gameNameRow = settingsRow(t("hd.gameName"), "");
+  const gameName = gameNameRow.lastElementChild as HTMLElement;
+  const mapDescription = el("p", "Official-OptionsDescription", "");
+  const advancedBox = el("div", "GameLobby-Advanced", "");
+  const addressRow = el("button", "GameLobby-Address");
+  addressRow.type = "button";
+  summary.append(gameNameRow, mapDescription, addressRow, advancedBox);
+
+  const action = el("div", "Official-ActionButton");
+  const startFrame = actionButton(t("hd.start"), () => startMatch(), true);
+  // Cancel is the same framed plate without the blue face, so Start stays the one lit control.
+  const cancelFrame = el("div", "Framed-Secondary-Button");
+  const cancelAlt = el("div", "Primary-Button-Frame-Alternate-B");
+  cancelAlt.appendChild(primaryButton(t("hd.cancel"), () => cancel()));
+  cancelFrame.appendChild(cancelAlt);
+  action.append(startFrame, cancelFrame);
+
+  sideInner.append(headerRow, mapAuthor, previewFrame, summary, action);
+  aside.append(el("div", "Official-Background"), baseFrame(tft), sideInner);
+
+  panel.append(grid, aside);
+  content.appendChild(panel);
+  root.append(content);
   screen.content.appendChild(root);
-  screen.element.appendChild(cornerDecorations(assets, !isRoc()));
+  screen.element.appendChild(cornerDecorations(assets, tft));
 
   const rescale = (): void => {
     root.style.zoom = String(Math.max(0.5, window.innerHeight / 1080));
@@ -347,7 +382,9 @@ export async function mountHdLanLobbyScreen(
 
   function render(): void {
     if (!alive) return;
-    gameName.textContent = setup?.gameName ?? lobby.snapshot.room?.name ?? "";
+    const name = setup?.gameName ?? lobby.snapshot.room?.name ?? "";
+    gameName.textContent = name;
+    subtitle.textContent = name;
     mapName.textContent = map.info.name;
     mapAuthor.textContent = [map.info.recommendedPlayers, map.info.tileset].filter(Boolean).join(" · ");
     mapDescription.textContent = map.info.description || "";
@@ -374,8 +411,9 @@ export async function mountHdLanLobbyScreen(
       ...(setup.observers.length ? [{ value: OBSERVERS_TEAM, label: t("hd.observer") }] : []),
     ];
 
+    // The force headings are the same plates the custom lobby puts over its team columns.
     for (const group of grouped()) {
-      if (group.name) playersScroll.appendChild(el("div", "GameLobby-ForceLabel", group.name));
+      if (group.name) playersScroll.appendChild(el("div", "Official-TeamName", group.name));
       for (const row of group.rows) {
         if (row.bench) paintBenchRow(row.index - setup.slots.length, locked, me, teams);
         else paintSlotRow(row.index, locked, me, fixed, computerPlus, teams);
@@ -396,79 +434,26 @@ export async function mountHdLanLobbyScreen(
     const mine = slot.kind === "player" && slot.peer === me;
     const ours = mine || (isHost() && slot.kind !== "player");
     const seated = isSeated(slot);
-    const row = el("div", `GameLobby-PlayerRow${mine ? " isYou" : ""}`);
+    const row = el("div", `Official-LobbyRow${mine ? " isYou" : ""}`);
 
-    const swatch = el("button", "GameLobby-PlayerColor");
-    swatch.type = "button";
-    swatch.style.backgroundColor = PLAYER_COLORS[slot.color % PLAYER_COLORS.length];
-    const colors = setup ? colorsFreeFor(setup, i) : [slot.color];
-    const colorSelect = el("select", "GameLobby-ColorSelect") as HTMLSelectElement;
-    for (const c of colors) {
-      const option = el("option", "", `Player ${c + 1}`);
-      option.value = String(c);
-      colorSelect.appendChild(option);
-    }
-    colorSelect.value = String(slot.color);
-    colorSelect.disabled = locked || !seated || !ours;
-    colorSelect.onchange = (): void => {
-      change(i, { color: Number(colorSelect.value) });
-    };
-    const colorCell = el("div", "GameLobby-ColorCell");
-    colorCell.append(swatch, colorSelect);
+    const multi = el("div", "GameLobbyDropdown-MultiHolder");
+    multi.append(
+      teamControl(slot.team, teams, locked || !seated || !ours || (fixed && !mine), (value) => {
+        if (value === OBSERVERS_TEAM) change(i, { observe: true });
+        else change(i, { team: parseInt(value, 10) });
+      }),
+      el("div", "GameLobby-PlayerRow-Divider"),
+      colorControl(i, slot.color, locked || !seated || !ours),
+    );
 
-    const nameCell = el("div", "GameLobby-PlayerName");
-    if (slot.kind === "player") {
-      nameCell.textContent = `${slot.name ?? t("lan.playerDefault")}${slot.download !== undefined ? ` — ${slot.download}%` : ""}`;
-    } else {
-      const select = el("select", "GameLobby-RowField") as HTMLSelectElement;
-      const options = slot.locked
-        ? [{ value: "computer", label: labelOf("computer") }]
-        : slotOptionsFor(computerPlus);
-      for (const o of options) {
-        const option = el("option", "", o.label);
-        option.value = o.value;
-        select.appendChild(option);
-      }
-      select.value = slot.kind === "computer" ? slotOptionValue("computer", slot.ai, computerPlus) : slot.kind;
-      select.disabled = locked || !isHost() || slot.locked;
-      select.onchange = (): void => hostSetKind(i, select.value);
-      nameCell.appendChild(select);
-    }
-
-    const race = el("select", "GameLobby-RowField") as HTMLSelectElement;
-    for (const r of RACES) {
-      const option = el("option", "", raceLabel(r));
-      option.value = r;
-      race.appendChild(option);
-    }
-    race.value = slot.race;
-    race.disabled = locked || !seated || !ours;
-    race.onchange = (): void => { change(i, { race: race.value }); };
-
-    const team = el("select", "GameLobby-RowField") as HTMLSelectElement;
-    for (const option of teams) {
-      const o = el("option", "", option.label);
-      o.value = option.value;
-      team.appendChild(o);
-    }
-    team.value = String(slot.team);
-    team.disabled = locked || !seated || !ours || (fixed && !mine);
-    team.onchange = (): void => {
-      if (team.value === OBSERVERS_TEAM) change(i, { observe: true });
-      else change(i, { team: parseInt(team.value, 10) });
-    };
-
-    const handicap = el("select", "GameLobby-RowField") as HTMLSelectElement;
-    for (const p of HANDICAPS) {
-      const option = el("option", "", `${p}%`);
-      option.value = String(p);
-      handicap.appendChild(option);
-    }
-    handicap.value = String(slot.handicap);
-    handicap.disabled = locked || !seated || !ours || (fixed && !mine);
-    handicap.onchange = (): void => { change(i, { handicap: parseInt(handicap.value, 10) }); };
-
-    row.append(colorCell, nameCell, race, team, handicap);
+    row.append(
+      multi,
+      slot.kind === "player"
+        ? playerPlate(`${slot.name ?? t("lan.playerDefault")}${slot.download !== undefined ? ` — ${slot.download}%` : ""}`)
+        : kindControl(slot, computerPlus, locked || !isHost() || slot.locked, (value) => hostSetKind(i, value)),
+      raceControl(slot.race, locked || !seated || !ours, (value) => { change(i, { race: value }); }),
+      handicapControl(slot.handicap, locked || !seated || !ours || (fixed && !mine), (value) => { change(i, { handicap: parseInt(value, 10) }); }),
+    );
     playersScroll.appendChild(row);
   }
 
@@ -481,39 +466,134 @@ export async function mountHdLanLobbyScreen(
     const seat = setup?.observers[j];
     if (!seat) return;
     const mine = seat.kind === "player" && seat.peer === me;
-    const row = el("div", `GameLobby-PlayerRow isObserver${mine ? " isYou" : ""}`);
+    const row = el("div", `Official-LobbyRow isObserver${mine ? " isYou" : ""}`);
 
-    const swatch = el("div", "GameLobby-PlayerColor isEmpty");
-    const nameCell = el("div", "GameLobby-PlayerName");
-    if (seat.kind === "player") {
-      nameCell.textContent = `${seat.name ?? t("lan.playerDefault")}${seat.download !== undefined ? ` — ${seat.download}%` : ""}`;
-    } else {
-      const select = el("select", "GameLobby-RowField") as HTMLSelectElement;
-      for (const o of SLOT_OPTIONS.filter((x) => x.controller === "open" || x.controller === "closed")) {
-        const option = el("option", "", o.label);
-        option.value = o.value;
-        select.appendChild(option);
-      }
-      select.value = seat.kind;
-      select.disabled = locked || !isHost();
-      select.onchange = (): void => hostSetBenchKind(j, select.value);
-      nameCell.appendChild(select);
-    }
+    const multi = el("div", "GameLobbyDropdown-MultiHolder");
+    multi.append(
+      teamControl(OBSERVERS_TEAM, teams, locked || !mine, (value) => {
+        if (value !== OBSERVERS_TEAM) benchChange(j, parseInt(value, 10));
+      }),
+      el("div", "GameLobby-PlayerRow-Divider"),
+      el("div", "GameLobbyDropdown GameLobby-Player-Color isDisabled"),
+    );
 
-    const team = el("select", "GameLobby-RowField") as HTMLSelectElement;
-    for (const option of teams) {
-      const o = el("option", "", option.label);
-      o.value = option.value;
-      team.appendChild(o);
-    }
-    team.value = OBSERVERS_TEAM;
-    team.disabled = locked || !mine;
-    team.onchange = (): void => {
-      if (team.value !== OBSERVERS_TEAM) benchChange(j, parseInt(team.value, 10));
-    };
-
-    row.append(swatch, nameCell, team);
+    row.append(
+      multi,
+      seat.kind === "player"
+        ? playerPlate(`${seat.name ?? t("lan.playerDefault")}${seat.download !== undefined ? ` — ${seat.download}%` : ""}`)
+        : kindControl(
+          seat,
+          false,
+          locked || !isHost(),
+          (value) => hostSetBenchKind(j, value),
+          SLOT_OPTIONS.filter((x) => x.controller === "open" || x.controller === "closed"),
+        ),
+    );
     playersScroll.appendChild(row);
+  }
+
+  /** The row's first cell: a team menu (observers included), on the lobby's blue plate. */
+  function teamControl(
+    value: string | number,
+    teams: Array<{ value: string; label: string }>,
+    disabled: boolean,
+    pick: (value: string) => void,
+  ): HTMLElement {
+    const control = officialDropdown("GameLobby-Player-Team", teams, String(value), pick);
+    if (disabled) control.classList.add("isDisabled");
+    return control;
+  }
+
+  function colorControl(index: number, color: number, disabled: boolean): HTMLElement {
+    const root = el("div", "GameLobbyDropdown GameLobby-Player-Color");
+    const plate = el("div", "GameLobbyDropdown-Selected-Item");
+    const swatch = el("div", "GameLobby-ColorDropdownItem");
+    swatch.style.background = PLAYER_COLORS[color % PLAYER_COLORS.length];
+    plate.appendChild(swatch);
+    const menu = el("div", "GameLobbyDropdown-Options");
+    const free = setup ? colorsFreeFor(setup, index) : [color];
+    for (const c of free) {
+      const item = el("div", "");
+      item.dataset.value = String(c);
+      const chip = el("div", "GameLobby-ColorDropdownItem");
+      chip.style.background = PLAYER_COLORS[c % PLAYER_COLORS.length];
+      item.appendChild(chip);
+      item.onclick = (): void => {
+        root.classList.remove("isOpen");
+        change(index, { color: c });
+      };
+      menu.appendChild(item);
+    }
+    plate.onclick = (): void => {
+      if (root.classList.contains("isDisabled")) return;
+      root.classList.toggle("isOpen");
+    };
+    root.append(plate, menu);
+    if (disabled) root.classList.add("isDisabled");
+    return root;
+  }
+
+  function playerPlate(text: string): HTMLElement {
+    const root = el("div", "GameLobbyDropdown");
+    const menu = el("div", "GameLobby-PlayerMenu");
+    menu.appendChild(el("div", "GameLobby-PlayerName", text));
+    root.appendChild(menu);
+    return root;
+  }
+
+  /** An Open/Closed or computer menu drawn in the lobby's own row plate. */
+  function kindControl(
+    seat: { kind: string; ai?: number; locked?: boolean },
+    computerPlus: boolean,
+    disabled: boolean,
+    pick: (value: string) => void,
+    choices?: Array<{ value: string; label: string }>,
+  ): HTMLElement {
+    const root = el("div", "GameLobbyDropdown");
+    const menu = el("div", "GameLobby-PlayerMenu-Interactable");
+    const items = choices
+      ?? (seat.locked ? [{ value: "computer", label: labelOf("computer") }] : slotOptionsFor(computerPlus));
+    const shown = items.find((o) => o.value === (seat.kind === "computer" ? slotOptionValue("computer", seat.ai as never, computerPlus) : seat.kind));
+    menu.appendChild(el("div", "GameLobby-PlayerName", shown?.label ?? t("slot.open")));
+    const list = el("div", "GameLobbyDropdown-Options");
+    for (const choice of items) {
+      const item = el("div", "", choice.label);
+      item.dataset.value = choice.value;
+      item.onclick = (): void => {
+        root.classList.remove("isOpen");
+        pick(choice.value);
+      };
+      list.appendChild(item);
+    }
+    menu.onclick = (): void => {
+      if (disabled) return;
+      root.classList.toggle("isOpen");
+    };
+    if (disabled) root.classList.add("isDisabled");
+    root.append(menu, list);
+    return root;
+  }
+
+  function raceControl(value: string, disabled: boolean, pick: (value: string) => void): HTMLElement {
+    const control = officialDropdown(
+      "GameLobby-PlayerRace",
+      RACES.map((r) => ({ value: r, label: raceLabel(r) })),
+      value,
+      pick,
+    );
+    if (disabled) control.classList.add("isDisabled");
+    return control;
+  }
+
+  function handicapControl(value: number, disabled: boolean, pick: (value: string) => void): HTMLElement {
+    const control = officialDropdown(
+      "GameLobby-PlayerHandicap",
+      HANDICAPS.map((h) => ({ value: String(h), label: `${h}%` })),
+      String(value),
+      pick,
+    );
+    if (disabled) control.classList.add("isDisabled");
+    return control;
   }
 
   function paintAdvanced(): void {
@@ -570,11 +650,8 @@ export async function mountHdLanLobbyScreen(
 
   function syncButtons(): void {
     const canPress = isHost() && !!setup && countdown === null && canStart(setup, lobby.snapshot.peers);
-    startButton.classList.toggle("isDisabled", !canPress);
-    startButton.setAttribute("aria-disabled", String(!canPress));
-    const live = cancelLive();
-    cancelButton.classList.toggle("isDisabled", !live);
-    cancelButton.setAttribute("aria-disabled", String(!live));
+    setActionEnabled(startFrame, canPress);
+    setActionEnabled(cancelFrame, cancelLive());
   }
 
   // --- the seating's rules ----------------------------------------------------------------

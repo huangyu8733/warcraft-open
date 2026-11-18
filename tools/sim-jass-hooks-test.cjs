@@ -56,7 +56,8 @@ const EXPECTED = [
   "damagePoint", "stripHeroLevel", "xpHandicap", "setXpHandicap", "pauseTimedLife",
   // …the LOBBY handicap beside the experience rate (a different number), and the two natives
   // that drive a building's own clock (DotA v6.83d's "-fastbuild") plus the food opt-out.
-  "playerHandicap", "setPlayerHandicap", "setConstructionProgress", "setUpgradeProgress",
+  "playerHandicap", "setPlayerHandicap",
+  "setConstructionProgress", "setUpgradeProgress",
   "setUnitUseFood", "unitRallyPoint", "abilityEffectArt",
   "setUnitClassification", "removeBuffs", "countBuffs", "createCorpse", "terrainCliffLevel",
   // The PREDICATES whose answer is the world's rather than a viewpoint's (pass 4). The vision
@@ -388,6 +389,26 @@ check("…and the spot reads as fogged", vh.isPointFoggedTo(0, 640, 640), true);
 vh.destroyFogModifier(fogOver);
 visionWorld.units.delete(901);
 vp0.rebuild(regs());
+
+// The campaigns' reveal-and-ping: a VISIBLE modifier started and destroyed on adjacent lines,
+// with no rebuild in between (Blackrock & Roll's Blademaster, Ravages of the Plague's Fountain of
+// Health). The spot must come out EXPLORED — on the minimap, and fogged rather than black — and
+// must NOT stay visible once vision is rebuilt.
+console.log("\na started-and-destroyed VISIBLE modifier explores the spot");
+check("the spot starts masked", vh.isPointMaskedTo(0, 950, 100), true);
+const blink = vh.createFogModifier(0, 4, { kind: "circle", x: 950, y: 100, radius: 128 }, false);
+vh.fogModifierStart(blink);
+vh.destroyFogModifier(blink);
+vp0.rebuild(regs());
+check("…and is explored after the blink", vh.isPointMaskedTo(0, 950, 100), false);
+check("…but back under the fog, not visible", vh.isPointFoggedTo(0, 950, 100), true);
+check("another team's player is not handed it", vh.isPointMaskedTo(1, 950, 100), true);
+// A MASKED one is not stamped at start: it would erase exploration for good.
+const black = vh.createFogModifier(0, 1, { kind: "circle", x: 950, y: 100, radius: 128 }, false);
+vh.fogModifierStart(black);
+vh.destroyFogModifier(black);
+vp0.rebuild(regs());
+check("a started-and-destroyed MASKED modifier leaves the exploration alone", vh.isPointFoggedTo(0, 950, 100), true);
 
 console.log("\nFogEnable is global, not local-only  (the bug seating exposed)");
 check("fog starts enabled", vh.isFogEnabled(), true);

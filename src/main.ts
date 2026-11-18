@@ -1810,20 +1810,28 @@ async function showLoadingScreen(
  * again. There is nothing to wait for there — what the fence buys is a chance to PAINT the
  * loading bar, and a hidden tab is painting nothing — so hand the step straight on instead,
  * both when we already know the tab is hidden and if it goes hidden while we are waiting.
+ * An OCCLUDED window (one browser window fully behind another, the usual two-machine test on
+ * one desktop) can stop frames without ever firing `visibilitychange`, so the fence is also
+ * capped by a timer: a load must never be held by a picture nobody is being shown.
  */
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => {
     if (document.hidden) return void setTimeout(resolve, 0);
     const onHide = (): void => { if (document.hidden) finish(); };
     let done = false;
+    let raf = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const finish = (): void => {
       if (done) return;
       done = true;
+      if (timer !== null) clearTimeout(timer);
+      cancelAnimationFrame(raf);
       document.removeEventListener("visibilitychange", onHide);
       resolve();
     };
+    timer = setTimeout(finish, 200);
     document.addEventListener("visibilitychange", onHide);
-    requestAnimationFrame(finish);
+    raf = requestAnimationFrame(finish);
   });
 }
 

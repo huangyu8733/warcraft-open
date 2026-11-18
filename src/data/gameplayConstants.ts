@@ -286,7 +286,8 @@ export const MISC_DATA = {
   ScaledAnimTime: 60,
   /** Max random reaction delay (seconds). */
   ReactionDelay: 0.25,
-  /** A missile's chance to miss a moving target, or one on high ground. */
+  /** "missile chance to miss if target is moving or on high ground" — the file's own comment.
+   *  Read by the sim's uphill roll (world.ts shootsUphill, issue #291). */
   ChanceToMiss: 0.25,
   MissDamageReduction: 0.5,
 
@@ -501,7 +502,7 @@ function parseLike(raw: string, base: unknown): Shaped | null {
 
 /**
  * Rows this module DECLARES that no code reads yet — each names a system that does not exist
- * (trading, a miss chance, a building's decay after death, the follow ranges, …) or one that
+ * (trading, a building's decay after death, the follow ranges, …) or one that
  * reads its own number instead. A map restating one changes nothing, and the map door's log
  * says so rather than reporting it applied. `tools/sim-map-misc-test.cjs` re-derives this list
  * from the source, so a row that gains a reader must leave it (and one that loses its reader
@@ -1034,8 +1035,9 @@ export function etherealDamageMultiplier(attack: AttackType): number {
   return i < 0 ? 1 : gameList("EtherealDamageBonus")[i] ?? 1;
 }
 
-/** The multiplier untyped ability damage (`spellDamage`, dealt as AttackType.None)
- *  applies to an ethereal target — the file's Spells column, ×1.66. */
+/** The multiplier ability damage (`spellDamage`) applies to an ethereal target — the
+ *  file's Spells column, ×1.66. The armour CLASS is graded beside it, by `DamageBonusSpells`
+ *  (SimWorld.spellTypeMult). */
 export function etherealSpellBonus(): number {
   return etherealDamageMultiplier(AttackType.Spells);
 }

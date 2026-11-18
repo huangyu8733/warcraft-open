@@ -464,7 +464,7 @@ export class SoundBoard {
    *  the keys queued behind it, and what file each key is on (an owner or a waiter) —
    *  the stop call is given only the key. */
   private loopOwner = new Map<string, string>();
-  private loopQueue = new Map<string, Array<{ key: string; at?: SoundPos; group?: number }>>();
+  private loopQueue = new Map<string, Array<{ key: string; at?: SoundPos; group?: number; gain?: number }>>();
   private loopFile = new Map<string, string>();
   /** The gain node of every LIVE path loop that belongs to a volume group, so a slider move
    *  (VolumeGroupSetVolume) can re-scale a bed that is already playing — ambient beds run for
@@ -484,6 +484,18 @@ export class SoundBoard {
   private listener: Listener | null = null; // last camera frame (for WANT3D panning)
   /** VolumeGroupSetVolume scales (0–1), one per SOUND_VOLUMEGROUP_* index. */
   private groups = new Array<number>(VOLUME_GROUPS).fill(1);
+  /** The PLAYER's volumes (Options → Sound), kept apart from the script's `groups` above:
+   *  a map's VolumeGroupSetVolume / VolumeGroupReset / SetMusicVolume belong to the map (a
+   *  cinematic ducks UNITSOUNDS and puts it back with VolumeGroupResetImmediateBJ), and when
+   *  both lived in one array the map's reset quietly handed the player full volume again.
+   *  The two multiply. */
+  private userGroups = new Array<number>(VOLUME_GROUPS).fill(1);
+  private userMusic = 1;
+  /** The script's own `sound` handles (campaign dialogue — Arthas, Gerard, the bandit lord —
+   *  and every other CreateSound) belong to no volumegroup (see SOUND_GROUP), but they are
+   *  still SOUND EFFECTS to the player, so the effects slider scales them through this bus. */
+  private userScript = 1;
+  private scriptBus: GainNode | null = null;
   /** Sounds a trigger script started (StartSound), keyed by its `sound` handle id, so
    *  StopSound / GetSoundIsPlaying / a moving attached sound can all find them again. */
   private scripts = new Map<number, ScriptVoice>();
@@ -567,6 +579,9 @@ export class SoundBoard {
       this.master = this.ctx.createGain();
       this.applyMasterGain();
       this.master.connect(this.ctx.destination);
+      this.scriptBus = this.ctx.createGain();
+      this.scriptBus.gain.value = this.userScript;
+      this.scriptBus.connect(this.master);
       this.applyListener(); // push the camera frame captured before the first gesture
     }
     if (this.ctx.state === "suspended") {
@@ -1596,14 +1611,14 @@ export class SoundBoard {
   /** The panner each positioned path loop plays through, by its key (movePathLoop). */
   private readonly loopPanners = new Map<string, PannerNode>();
 
-  setPathLoop(key: string, path: string, on: boolean, at?: SoundPos, group?: number): void {
+  setPathLoop(key: string, path: string, on: boolean, at?: SoundPos, group?: number, gain = 0.6): void {
     if (on) {
       if (this.loops.has(key) || this.loopFile.get(key) === path) return;
       if (!path || !this.vfs.exists(path)) return;
       const owner = this.loopOwner.get(path);
       if (owner !== undefined && owner !== key) {
         const queue = this.loopQueue.get(path) ?? this.loopQueue.set(path, []).get(path)!;
-        queue.push({ key, at, group });
+        queue.push({ key, at, group, gain });
         this.loopFile.set(key, path);
         return;
       }
@@ -1612,7 +1627,7 @@ export class SoundBoard {
       this.loops.set(key, placeholder); // reserve synchronously so we don't double-start
       this.loopOwner.set(path, key);
       this.loopFile.set(key, path);
-      const clip: Clip = { paths: [path], gain: 0.6, pitch: 1, pitchVar: 0, threeD: true, refDist: 800, maxDist: 10000, cutoff: 0 };
+      const clip: Clip = { paths: [path], gain, pitch: 1, pitchVar: 0, threeD: true, refDist: 800, maxDist: 10000, cutoff: 0 };
       void this.buffer(path).then((buf) => {
         // Bail if the loop was stopped (or restarted) while the WAV was decoding —
         // otherwise a Blizzard cancelled mid-load leaves its wind howling forever.
@@ -1655,7 +1670,7 @@ export class SoundBoard {
       const next = queue?.shift();
       if (next) {
         this.loopFile.delete(next.key); // it's no longer waiting — let the start path run
-        this.setPathLoop(next.key, file, true, next.at, next.group); // the bed carries on at their spot
+        this.setPathLoop(next.key, file, true, next.at, next.group, next.gain); // the bed carries on at their spot
       }
     }
   }
@@ -1747,10 +1762,10 @@ export class SoundBoard {
       if (positional) {
         const panner = this.panner(clip, s.at!);
         applyCone(panner, s);
-        out.connect(panner).connect(this.master);
+        out.connect(panner).connect(this.scriptBus ?? this.master);
         token.panner = panner;
       } else {
-        out.connect(this.master);
+        out.connect(this.scriptBus ?? this.master);
       }
       token.src = src;
       token.gain = gain;
@@ -2036,7 +2051,7 @@ export class SoundBoard {
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     const gain = this.ctx.createGain();
-    gain.gain.value = this.musicVolume * (this.groups[VG_MUSIC] ?? 1);
+    gain.gain.value = this.musicGain();
     src.connect(gain).connect(this.master);
     src.start(0, Math.max(0, offsetSec));
     return { src, gain, startedAt: this.ctx.currentTime - Math.max(0, offsetSec) };
@@ -2055,8 +2070,12 @@ export class SoundBoard {
     }
   }
 
+  private musicGain(): number {
+    return this.musicVolume * (this.groups[VG_MUSIC] ?? 1) * this.userMusic;
+  }
+
   private applyMusicGain(): void {
-    const v = this.musicVolume * (this.groups[VG_MUSIC] ?? 1);
+    const v = this.musicGain();
     if (this.music) this.music.gain.gain.value = v;
     if (this.thematic) this.thematic.gain.gain.value = v;
   }
@@ -2340,7 +2359,7 @@ export class SoundBoard {
    *  for the one-shot pools (they're a second long); the music bus holds a live gain. */
   private gain(value: number, group?: number): GainNode {
     const g = this.ctx!.createGain();
-    g.gain.value = value * (group === undefined ? 1 : this.groups[group] ?? 1);
+    g.gain.value = value * (group === undefined ? 1 : (this.groups[group] ?? 1) * (this.userGroups[group] ?? 1));
     return g;
   }
 
@@ -2354,6 +2373,19 @@ export class SoundBoard {
     for (const [, loop] of this.loopGroups) {
       if (loop.group === group) loop.node.gain.value = loop.base * this.groups[group];
     }
+  }
+
+  /** The player's Options → Sound volumes, as GAINS (0–1, already through the slider's
+   *  taper — `sliderGain` in data/options.ts). Separate from the script's groups above. */
+  setUserVolumes(groups: Partial<Record<number, number>>, music: number, script: number): void {
+    for (const [k, v] of Object.entries(groups)) {
+      const g = Number(k);
+      if (g >= 0 && g < VOLUME_GROUPS && v !== undefined) this.userGroups[g] = Math.max(0, Math.min(1, v));
+    }
+    this.userMusic = Math.max(0, Math.min(1, music));
+    this.userScript = Math.max(0, Math.min(1, script));
+    if (this.scriptBus) this.scriptBus.gain.value = this.userScript;
+    this.applyMusicGain();
   }
 
   /** VolumeGroupReset — back to full on every group. */

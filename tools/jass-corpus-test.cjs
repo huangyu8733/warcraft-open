@@ -2174,7 +2174,7 @@ endfunction`;
   } else fail(`local defeat played no sound: ${JSON.stringify(sounds)}`);
 
   // The defeat dialog offers "Continue Observing" only when the map allows observers on
-  // death (IsMapFlagSet(MAP_OBSERVERS_ON_DEATH)) — which we report false, so: quit only.
+  // death (IsMapFlagSet(MAP_OBSERVERS_ON_DEATH)) — unset here (no lobby asked for it), so: quit only.
   if (lost && lost.buttons.length === 1 && lost.buttons[0].quit === true) {
     ok(`with no observers-on-death map flag, the defeat dialog offers only Quit — no "Continue Observing"`);
   } else fail(`defeat buttons: ${JSON.stringify((lost?.buttons ?? []).map((b) => plain(b.text)))}`);

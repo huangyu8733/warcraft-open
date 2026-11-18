@@ -291,6 +291,25 @@ console.log("\na CARRIED ability is an ability  (passiveLevelData reads the inve
   check("…and an empty inventory does not", bare.maxMana, 500);
 }
 
+// Issue #282. `Units\MiscGame.txt` MoveSpeedBonusesStack=0 on the melee tables, 1 on the
+// two custom copies: whether a second pair of Boots of Speed (`bspd` → `AIms`, DataA 60) adds
+// anything is the data set's answer.
+console.log("\ntwo Boots of Speed are one pair's worth in melee  (MoveSpeedBonusesStack=0)");
+{
+  const { setMapDataSet } = require(join(REPO, ".sim-build", "src", "data", "edition.js"));
+  world = newWorld();
+  const one = give(unit({ isHero: true }), "bspd");
+  check("one pair is +60", one.speed, 330);
+  const two = give(give(unit({ isHero: true }), "bspd", 0), "bspd", 1);
+  check("a second pair adds nothing", two.speed, 330);
+  setMapDataSet("custom");
+  world.recomputeStats(two);
+  check("…but on a CUSTOM map they stack (the custom tables say 1)", two.speed, 390);
+  setMapDataSet("melee");
+  world.recomputeStats(two);
+  check("…and back in melee it is +60 again", two.speed, 330);
+}
+
 console.log("\nthe two damage cuts, each on the pipe its own tooltip names");
 {
   world = newWorld();

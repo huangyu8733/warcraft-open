@@ -171,6 +171,7 @@ export const IT_IT: Partial<Record<MessageKey, string>> = {
   "hd.sortAsc": "Ordine crescente",
   "hd.sortDesc": "Ordine decrescente",
   "hd.startGame": "Avvia partita",
+  "hd.start": "Avvia",
   "hd.startingIn": "La partita inizia tra {n} ...",
   "hd.status": "Stato",
   "hd.suggestedPlayers": "Giocatori consigliati",

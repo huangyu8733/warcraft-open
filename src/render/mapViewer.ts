@@ -200,7 +200,7 @@ import { MultiboardOverlay } from "../ui/multiboard";
 import { TimerDialogOverlay } from "../ui/timerDialog";
 import { SuspendDialogOverlay, type SuspendRow } from "../ui/suspendDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
-import { ScriptCamera, type CameraState } from "./scriptCamera";
+import { ScriptCamera, farPlane, type CameraState } from "./scriptCamera";
 import { AutoCamera } from "../game/autoCamera";
 import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, MISS_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
@@ -1473,6 +1473,11 @@ export function mapLoadRefusal(bytes: Uint8Array, vfs: DataSource, registry: Uni
   }
   return null;
 }
+
+/** A field bed that plays quieter than the rest (SoundBoard.setPathLoop's default is 0.6).
+ *  Locust Swarm's rides the hero the camera is on for thirty seconds, so it never falls off
+ *  with distance the way a Blizzard cast across the screen does. OURS, by ear. */
+const FIELD_LOOP_GAIN: Record<string, number> = { AUls: 0.28 };
 
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
@@ -4757,18 +4762,32 @@ export class MapViewerScene {
       const t0 = performance.now();
       const drain = onProgress ? new LoaderProgress() : null;
       let settledFrames = 0;
+      let done = false;
+      let raf = 0;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        onProgress?.(1);
+        resolve();
+      };
       const poll = (): void => {
+        if (done) return;
         if (drain && onProgress) onProgress(drain.sample(this.viewer.promiseMap));
         settledFrames = ready() ? settledFrames + 1 : 0;
         if (settledFrames >= 2 || performance.now() - t0 > timeoutMs) {
           if (settledFrames < 2) console.warn(`[Warcraft Open] ${what} still streaming after ${Math.round(timeoutMs / 1000)}s — starting anyway.`);
-          onProgress?.(1);
-          resolve();
+          finish();
           return;
         }
-        requestAnimationFrame(poll);
+        // A hidden or fully occluded window is served NO animation frames at all — the exact
+        // state a second browser window puts this one in during a two-machine load. This poll
+        // is what advances both the bar and its own timeout, so a frame-only schedule stands
+        // still forever behind "Loading". Race the frame against a timer and cancel whichever
+        // loses, so the next poll is scheduled exactly once either way.
+        const timer = setTimeout(() => { cancelAnimationFrame(raf); poll(); }, 100);
+        raf = requestAnimationFrame(() => { clearTimeout(timer); poll(); });
       };
-      requestAnimationFrame(poll);
+      raf = requestAnimationFrame(poll);
     });
   }
 
@@ -5735,9 +5754,9 @@ export class MapViewerScene {
       setUnitVertexColor: (id, r, g, b, a) => this.rts?.setUnitVertexColor(id, r, g, b, a),
       // Fly height lives in two places: the sim (missile launch/land Z) and the render lift.
       // DUAL-WRITER, same shape as setUnitOwner above — `world` writes the sim, this adds the lift.
-      setUnitFlyHeight: (id, height) => {
-        world.setUnitFlyHeight?.(id, height);
-        this.rts?.setUnitFlyHeight(id, height);
+      setUnitFlyHeight: (id, height, rate) => {
+        world.setUnitFlyHeight?.(id, height, rate);
+        this.rts?.setUnitFlyHeight(id, height, rate);
       },
       setUnitTimeScale: (id, scale) => this.rts?.setUnitTimeScale(id, scale),
       selectedUnits: (player) => (player === this.localPlayer ? this.rts?.selectedUnitIds() ?? [] : []),
@@ -7843,7 +7862,7 @@ export class MapViewerScene {
   /** Reconcile the looping bed of every running channelled field against last frame:
    *  start one for each new field, stop the ones whose field is gone. Keyed by code +
    *  position so two simultaneous Blizzards each howl at their own spot. */
-  private updateFieldLoops(fields: Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean }>): void {
+  private updateFieldLoops(fields: Array<{ code: string; x: number; y: number; loopSound: string; shake: boolean; casterId?: number; follow?: boolean }>): void {
     const live = new Set<string>();
     // Earthquake is the one thing in the game that moves the CAMERA as a gameplay effect,
     // and Blizzard.j says how: `CameraSetEQNoiseForPlayer` → `CameraSetTargetNoiseEx(…,
@@ -7864,12 +7883,15 @@ export class MapViewerScene {
       if (!this.pointVisible(f.x, f.y)) continue;
       const wav = this.sounds?.abilityLoopPath(f.loopSound) ?? "";
       if (!wav) continue;
-      const key = `${f.code}|${Math.round(f.x)}|${Math.round(f.y)}`;
+      // A field that RIDES its caster (Locust Swarm) is keyed on him and its bed carried
+      // along: keyed on the spot, every step he took was a new field and the loop restarted.
+      const key = f.follow ? `${f.code}|u${f.casterId}` : `${f.code}|${Math.round(f.x)}|${Math.round(f.y)}`;
       live.add(key);
+      const at = { x: f.x, y: f.y, z: this.rts!.groundHeightAt(f.x, f.y) };
       if (!this.fieldLoops.has(key)) {
         this.fieldLoops.add(key);
-        this.sounds?.setPathLoop(key, wav, true, { x: f.x, y: f.y, z: this.rts!.groundHeightAt(f.x, f.y) });
-      }
+        this.sounds?.setPathLoop(key, wav, true, at, undefined, FIELD_LOOP_GAIN[f.code]);
+      } else if (f.follow) this.sounds?.movePathLoop(key, at);
     }
     for (const key of this.fieldLoops) {
       if (live.has(key)) continue;
@@ -10907,10 +10929,12 @@ export class MapViewerScene {
   /** Position/scale/colour the flat selection + hover rings each frame, plus
    *  the transient yellow harvest-order flashes. */
   private updateSelectionCircles(dt: number): void {
-    // "Aiming mode": a spell or an aimed ITEM is armed for targeting. While
-    // aiming, the persistent selection/preview rings under the army are suppressed so
-    // the ground isn't cluttered (issue #20). What replaces them depends on the aim:
-    //   • point-AoE (ubersplat): the splat + green rings on the units it would hit;
+    // "Aiming mode": a spell or an aimed ITEM is armed for targeting. The SELECTION rings
+    // under the army STAY — the caster and the army it leads are still selected, and WC3 keeps
+    // their circles through an aim (an Ensnare or an Impale used to blank them, issue #20's
+    // decluttering taken back out). Only the drag-box preview is dropped, since an armed
+    // click cannot start a marquee. What the aim adds on top depends on its shape:
+    //   • point-AoE (ubersplat): the splat + the green tint on the units it would hit;
     //     the hover ring is hidden (the green target rings are the indicator).
     //   • single-target: the normal hover ring stays on whatever unit the cursor is
     //     over — allegiance-coloured, NOT green — so the player still sees their target.
@@ -10922,7 +10946,7 @@ export class MapViewerScene {
     // The ring keys painted this frame; anything in ringKeys that isn't refreshed here
     // is a stale ring (deselected unit / expired flash) and gets removed at the end.
     const live = new Set<string>();
-    const rings = aiming ? [] : (this.rts?.selectionRings() ?? []);
+    const rings = this.rts?.selectionRings() ?? [];
     for (let i = 0; i < rings.length; i++) this.addRing(`sel-${i}`, rings[i], null, false, live);
     // Live drag-box preview: full-green rings on the units the marquee currently
     // covers, so the player sees the pick before releasing the mouse.
@@ -11240,7 +11264,7 @@ export class MapViewerScene {
       // (rts.playImpacts gates the shooter's own gunshot by the same test). The MODEL is
       // still created — a missile is the one effect that travels, so it is hidden and shown
       // per frame as it crosses the fog line rather than being dropped at birth.
-      if (this.pointVisible(p.x, p.y)) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z }); // fire/whoosh/gunshot as it launches
+      if (this.pointVisible(p.x, p.y) && this.rts!.swarmSoundDue(p.art, "launch")) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z }); // fire/whoosh/gunshot as it launches
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
@@ -12623,7 +12647,8 @@ export class MapViewerScene {
       },
       commandCard: () => this.commandCard(),
       cardPage: () => this.cardPage,
-      runCommand: (id) => this.runCommand(id),
+      runCommand: (id, clicked) => this.runCommand(id, clicked),
+      commandClick: () => this.commandClick(),
       unloadCargo: (hostId, passengerId) => !!this.rts?.unloadCargo(hostId, passengerId),
       inventory: () =>
         (this.rts?.inventorySlots() ?? []).map((s) =>
@@ -16142,10 +16167,21 @@ export class MapViewerScene {
     }
   }
 
-  private runCommand(id: string): void {
+  /** The command card's button click: UISounds.slk `InterfaceClick` = Sound\Interface\MouseClick1.wav,
+   *  a UI sound on this client alone (no position). Played for EVERY press of a command — the
+   *  button being pressed, not the order being confirmed on the map — so a Move, a Hold Position,
+   *  a spell that then waits for its target, a passive and a greyed button all click alike. */
+  private commandClick(): void {
+    this.sounds?.unlock(); // the press is the gesture that may open the audio context — unlock FIRST
+    this.sounds?.playUi("InterfaceClick");
+  }
+
+  /** `clicked`: the card already played the click at the mouse PRESS (HudDriver.commandClick). */
+  private runCommand(id: string, clicked = false): void {
     const rts = this.rts;
     if (!rts) return;
     const sent = rts.sendSeq;
+    if (!clicked) this.commandClick(); // a hotkey, the gamepad, a spoken command
     this.pressCommand(id);
     // A press that went to the host: draw the card NOW, off the prediction the command just
     // made, and hold it until the host has heard us (see heldCard). Drawn here rather than next
@@ -16155,9 +16191,7 @@ export class MapViewerScene {
 
   private pressCommand(id: string): void {
     if (!this.rts) return;
-    if (id === "noop") return;
-    this.sounds?.playUi("InterfaceClick"); // WC3 command-card button click
-    this.sounds?.unlock(); // keyboard hotkeys are a gesture too
+    if (id === "noop") return; // its click was played by runCommand / the card, like every other press
     if (id === "move" || id === "attack" || id === "attackground" || id === "patrol" || id === "rally" || id === "repair") {
       this.rts.orderMode = id;
       this.hud?.setArmed(true);
@@ -17605,7 +17639,7 @@ export class MapViewerScene {
       // AoI filter has already dropped the missiles this client has no business hearing, so
       // this is belt and braces — but a client's own grid is the one that must answer here,
       // exactly as it does for the flight itself (updateProjectiles).
-      if (this.pointVisible(p.x, p.y)) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z });
+      if (this.pointVisible(p.x, p.y) && this.rts!.swarmSoundDue(p.art, "launch")) this.sounds?.playMissile(p.art, "launch", { x: p.x, y: p.y, z: this.rts!.groundHeightAt(p.x, p.y) + p.z });
       this.projectileLoading.add(p.id);
       void this.loadProjectile(p.id, p.art);
     }
@@ -17711,7 +17745,8 @@ export class MapViewerScene {
       const d = this.registry.get(s.unitId);
       if (!d) continue;
       const summonLeft = s.summonLeft;
-      const [sx, sy] = this.summonSpot(s.x, s.y, s.facing, d.collision || 16, s.atPoint, summonClaimed);
+      // A LOCUST comes out of the Crypt Lord himself: no fan, no free cell (SummonRequest.swarm).
+      const [sx, sy] = s.swarm ? [s.x, s.y] : this.summonSpot(s.x, s.y, s.facing, d.collision || 16, s.atPoint, summonClaimed);
       // The summon burst belongs on the SPOT the unit lands on, not on the caster —
       // three wolves fan out around the Far Seer, and each arrives in its own.
       if (s.summonArt) world.emitEffectAt(s.summonArt, sx, sy, true); // the model carries its own SND event
@@ -17733,7 +17768,7 @@ export class MapViewerScene {
       // any unit and would have played whatever that unit's model happened to key.
       // It is the Birth clip's event and not "any" A event (playModelBirthSound): the Tornado's
       // model keys its Birth AND its Death, and landed to the sound of dying half the time.
-      else if (!s.illusion && this.pointVisible(sx, sy)) this.sounds?.playModelBirthSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
+      else if (!s.illusion && !s.swarm && this.pointVisible(sx, sy)) this.sounds?.playModelBirthSound(d.model, { x: sx, y: sy, z: this.rts!.groundHeightAt(sx, sy) });
       {
         // Made on THIS step (spawnUnitNow); its Birth clip, and the spawn lock that clip times,
         // wait for the body (`summonBirth`).
@@ -17750,6 +17785,12 @@ export class MapViewerScene {
         // Beetle has no clock, and Abolish Magic still kills it.
         if (su && s.summoned) su.isSummon = true;
         if (su && s.sourceId) su.summonedBy = s.sourceId; // whose cap it counts under (summonCapMake)
+        // …and a swarm's locust is enrolled in it — which may take it straight back off the
+        // field, if the swarm ended on the step it was let out (SimWorld.joinSwarm).
+        if (su && s.swarm) {
+          world.joinSwarm(su, s.sourceId);
+          if (!world.units.has(simId)) continue;
+        }
         // A RAISED body is a shell, not the unit that fell: "the raised units keep their
         // attacks but lose all abilities and spells" (Animate Dead). It walks and swings and
         // nothing else — no autocast, no casting, no Web, no Burrow.
@@ -18527,7 +18568,10 @@ export class MapViewerScene {
         // Sustain the looping bed under each running channelled field, and drop it the
         // frame the field ends — waves exhausted OR caster interrupted (world tears the
         // field down either way, so this needs no interrupt handling of its own).
-        this.updateFieldLoops(world.activeSpellFields());
+        // …and a STOPPED world is silent: a bed is a sound the world is making, and left
+        // running it droned on under the pause menu for as long as the game sat there. An
+        // empty list stops every bed; the reconcile starts them again on the frame play resumes.
+        this.updateFieldLoops(this.paused ? [] : world.activeSpellFields());
         this.updateConstructionLoops(world);
         this.updateDoodadLoops();
         this.updateWeatherSound();
@@ -19595,6 +19639,10 @@ export class MapViewerScene {
       for (const inst of cell.instances ?? []) {
         if (this.mapProps.has(inst)) continue; // the map's own — handled above, with its tint
         if (this.rts?.managesViewerInstance(inst)) continue; // adopted map unit: the RTS's rule
+        // The order-confirmation arrows are the PLAYER's own feedback, not a thing in the
+        // world: a right-click into the black mask still gets its arrows, and hiding them
+        // here cut the clip off after one frame.
+        if (this.orderArrows.some((a) => a.inst === inst)) continue;
         const loc = inst.localLocation;
         if (!loc) continue;
         if (vision.bestStateAt(loc[0], loc[1], 0) === FogState.Unexplored) {
@@ -20080,7 +20128,7 @@ export class MapViewerScene {
     const fov = cine ? 2 * Math.atan(Math.tan(this.fov / 2) / CINE_STRIP) : this.fov;
     // The NEAR plane is the game's own 100 (CAMERA.NEARZ has why it matters): a cinematic's
     // camera object may sit inside a doodad the real client never draws from there.
-    scene.camera.perspective(fov, this.aspect(), CAMERA.NEARZ, this.farZ > 0 ? this.farZ : this.distance * 8);
+    scene.camera.perspective(fov, this.aspect(), CAMERA.NEARZ, farPlane(this.farZ, this.distance));
     scene.camera.moveToAndFace(eye, this.target, this.upVector(eye));
     if (cine) cinematicLens(scene.camera);
     this.sky?.follow(scene.camera); // the sky surrounds the EYE (render/sky.ts)
@@ -20383,7 +20431,7 @@ export class MapViewerScene {
       this.target[1] - sy * cp * this.distance,
       this.target[2] + sp * this.distance,
     ];
-    const far = this.farZ > 0 ? this.farZ : this.distance * 8;
+    const far = farPlane(this.farZ, this.distance);
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const s of [-1, 1]) {
       for (const v of [-1, 1]) {
