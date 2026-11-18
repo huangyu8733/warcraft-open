@@ -13,9 +13,9 @@
 // untrusted; Voice Control does the same and says so first (`withInputOverride`).
 
 /** How a COMMAND was given. */
-export type CommandSource = "hotkey" | "card" | "smart" | "click" | "minimap" | "voice" | "gamepad" | "other";
+export type CommandSource = "hotkey" | "card" | "smart" | "click" | "minimap" | "voice" | "gamepad" | "gesture" | "other";
 /** How a SELECTION was made. */
-export type SelectionSource = "click" | "box" | "dblclick" | "type" | "group" | "tab" | "hotkey" | "minimap" | "hud" | "voice" | "gamepad" | "other";
+export type SelectionSource = "click" | "box" | "dblclick" | "type" | "group" | "tab" | "hotkey" | "minimap" | "hud" | "voice" | "gamepad" | "gesture" | "other";
 
 interface Gesture {
   device: "key" | "pointer";
@@ -36,8 +36,11 @@ const FRESH_MS = 400;
 /** A press that moved this far before release was a drag. Ours. */
 const DRAG_PX = 6;
 
+/** A non-hand input that says so first: Voice Control, or the touch gesture console. */
+type OverrideSource = "voice" | "gesture";
+
 let last: Gesture | null = null;
-let override: { src: "voice"; until: number } | null = null;
+let override: { src: OverrideSource; until: number } | null = null;
 let down: { x: number; y: number } | null = null;
 const cursor = { x: 0, y: 0 };
 let installed = false;
@@ -76,8 +79,9 @@ export function watchInputSource(): void {
   }, { capture: true, passive: true });
 }
 
-/** Run `fn` as VOICE CONTROL's doing: what it issues is the voice's, not the click it borrows. */
-export function withInputOverride<T>(src: "voice", fn: () => T): T {
+/** Run `fn` as VOICE CONTROL's (or the GESTURE console's) doing: what it issues is that
+ *  input's, not the click or key it borrows. */
+export function withInputOverride<T>(src: OverrideSource, fn: () => T): T {
   override = { src, until: performance.now() + FRESH_MS };
   return fn();
 }
@@ -86,7 +90,7 @@ function fresh(): Gesture | null {
   return last && performance.now() - last.at <= FRESH_MS ? last : null;
 }
 
-function overridden(): "voice" | null {
+function overridden(): OverrideSource | null {
   return override && performance.now() <= override.until ? override.src : null;
 }
 

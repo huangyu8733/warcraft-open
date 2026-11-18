@@ -1,0 +1,24 @@
+{
+  "//": "Throwaway config: compile the gesture RECOGNISER (pure, DOM-free) to CommonJS so tools/gesture-intent-test.cjs can feed it synthetic pointer sequences in headless Node. Strict typechecking stays with `pnpm typecheck` (tsconfig.json includes src/).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "types": [],
+    "lib": ["ES2022", "DOM"],
+    "rootDir": "..",
+    "outDir": "../.gesture-build",
+    "noEmit": false
+  },
+  "files": [
+    "../src/ui/gesture/intents.ts",
+    "../src/ui/gesture/recognizer.ts",
+    "../src/ui/gesture/host.ts",
+    "../src/ui/gesture/actions.ts"
+  ]
+}

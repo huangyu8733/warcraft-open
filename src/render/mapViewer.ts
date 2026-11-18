@@ -174,6 +174,8 @@ import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
 import { gameInfoMessagesEnabled, peonDoubleTapFocus } from "./gameplayOptions";
 import { defaultCameraDistance, maxCameraDistance, minCameraDistance } from "./cameraOptions";
 import { centreGamepadCursor, gamepadPan, setGamepadHost } from "../ui/gamepad";
+import { gestureEnabled, setGestureHost } from "../ui/gesture";
+import { virtualCursor } from "../ui/virtualCursor";
 import { TerrainCull } from "./terrainCull";
 import type { PickVolume } from "./modelCollision";
 import { setSimProfiler } from "../sim/profile";
@@ -11205,6 +11207,17 @@ export class MapViewerScene {
     this.playerPitch = MapViewerScene.pitchForZoomStep(step);
     this.zoomT = 0;
   }
+  /**
+   * The wheel's ladder, exposed to one caller only — the gesture console's pinch (ui/gesture/).
+   * `steps` is whole notches: +1 closer, −1 further. The current stop is read off the LIVE
+   * distance (zoomStopOf), so a pinch mid-ease continues from where the view is, not from the
+   * rung it left, exactly as a run of wheel notches does.
+   */
+  private zoomBy(steps: number): void {
+    if (!steps) return;
+    const stop = clamp(Math.round(MapViewerScene.zoomStopOf(this.playerDistance)) + steps, 0, MapViewerScene.ZOOM_STEPS);
+    this.setZoomStop(stop);
+  }
   private static readonly EDGE_MARGIN = 6; // px from a screen edge that triggers scrolling
   private static readonly SCROLL_ARROW_PX = cursorPx(32); // the edge-pan chevron's box, in step with .scroll-arrow
   private pointerInWindow = false; // the cursor is on the page at all — gates edge-scroll
@@ -11465,19 +11478,7 @@ export class MapViewerScene {
       cinematicPlaying: () => !this.interfaceShown,
       paused: () => this.playerPaused,
       duckAudio: (on) => this.sounds?.setDucked(on),
-      skipCinematic: () => {
-        // The ESC skip, exactly: the map's own trigger must be listening, or nothing is covered.
-        if (this.interfaceShown) return false;
-        const interp = this.mapScript?.interp;
-        if (!interp?.playerEventAnswered(this.localPlayer, EVENT_PLAYER_END_CINEMATIC)) {
-          // 战役章节的跳过触发器常常在开场几秒后才 Enable（NightElfX01 是 2.5 秒）。玩家刚
-          // 进图就喊“跳过”时先排队，等地图开始答应再跳，而不是直接拒绝。
-          this.cinematicSkipPending = SKIP_PENDING_SECS;
-          return true;
-        }
-        this.beginCinematicSkip();
-        return true;
-      },
+      skipCinematic: () => this.skipCinematicNow(),
       quests: () => {
         const rt = this.mapScript?.interp.rt;
         if (!rt) return [];
@@ -11763,6 +11764,113 @@ export class MapViewerScene {
     rts.orderClickAt(clientX - this.frame.left, clientY - this.frame.top, false);
     rts.orderMode = null;
     this.hud?.clearOrderMode();
+  }
+
+  /**
+   * The match's side of the touch gesture console (ui/gesture/, 手机平板手势控制台方案.md §7.1).
+   * Every door it lends is a door the mouse already uses — `runCommand`, `selectAt`,
+   * `selectBox`, `orderClickAt`, `moveAt`, the console's own `press`, `midPan` — so a finger is
+   * gated exactly as a click is and the command stream is the same for both (§9.3 第三条).
+   * Nothing here invents a Command or touches `Authority.execute` (§7.4).
+   */
+  private installGesture(): void {
+    setGestureHost({
+      // The same gate the HUD's key handler and the pad ask, plus the gesture-only ones:
+      // a modal dialog (anyModalOpen) and a text field being typed into (§12).
+      canAct: () => !!this.hud?.acceptsInput() && !this.hardPaused && this.userControl
+        && !anyModalOpen() && !isTyping(document.activeElement),
+      isCinematic: () => !this.interfaceShown,
+      // A tap during a cinematic skips it — the same road ESC and Voice Control take (§12).
+      skipCinematic: () => this.skipCinematicNow(),
+      press: (id) => this.runCommand(id),
+      card: () => this.commandCard(),
+      armed: () => this.isTargeting(),
+      selectAt: (x, y, mods) => this.rts?.selectAt(x, y, mods ?? {}),
+      selectBox: (x0, y0, x1, y1, additive) => this.rts?.selectBox(x0, y0, x1, y1, additive),
+      orderAt: (x, y, queued) => {
+        if (!this.rts) return;
+        // The left-press's own three meanings, in its order (`attachControls`): a build ghost
+        // places, an armed order lands, and every other press is a selection elsewhere.
+        if (this.placement) {
+          this.placeBuilding(x, y, queued);
+          return;
+        }
+        if (this.rts.orderClickAt(x, y, queued)) this.hud?.clearOrderMode();
+      },
+      smartAt: (x, y, queued) => {
+        if (!this.rts) return;
+        // …and the right-press's: placement first, then an armed order, then the smart command.
+        // A long press during placement must NOT drop a building (§12), so it cancels instead.
+        if (this.placement) {
+          this.cancelPlacement();
+          return;
+        }
+        if (this.rts.orderMode) {
+          this.rts.orderMode = null;
+          this.rts.armedCast = null; // disarm a pending spell target
+          this.hud?.clearOrderMode();
+          return;
+        }
+        this.rts.moveAt(x, y, queued);
+      },
+      // The squad bar's three verbs are Ctrl+N / Shift+N / N (rts.assignGroup / appendGroup /
+      // recallGroup) — the same calls the HUD's digit handler makes, so a group made on the
+      // bar is the one the keyboard recalls and the replay records.
+      group: (op, n, jump) => {
+        const key = String(n);
+        if (op === "assign") this.rts?.assignGroup(key);
+        else if (op === "append") this.rts?.appendGroup(key);
+        else if (this.rts?.recallGroup(key) && jump) this.jumpToSelection();
+      },
+      // 手势 HUD 的编队图标：人数 + 首单位的命令卡图标（与命令卡同一个 registry / blpIcon）。
+      groups: () => {
+        const out: { key: number; count: number; icon: string }[] = [];
+        for (let i = 0; i < 10; i++) {
+          const ids = this.rts?.groupMembers(String(i)) ?? [];
+          if (!ids.length) continue;
+          const typeId = this.rts?.simWorld.units.get(ids[0])?.typeId;
+          const path = typeId ? this.registry.get(typeId)?.icon ?? "" : "";
+          out.push({ key: i, count: ids.length, icon: path ? this.blpIcon(path) ?? "" : "" });
+        }
+        return out;
+      },
+      clearGroup: (n) => {
+        this.rts?.clearGroup(String(n));
+      },
+      // Two fingers dragging the world move it with the finger, as the middle-button drag does
+      // (midPan does the live-lens pixel→world conversion; no camera algorithm is changed).
+      panBy: (dx, dy) => this.midPan(dx, dy),
+      zoomBy: (steps) => this.zoomBy(steps),
+      focusSelection: () => {
+        this.cameraLock = false; // a jump releases a follow, as every other one does
+        this.groupFollow = false;
+        this.releaseCameraRide();
+        this.jumpToSelection();
+      },
+      cancel: () => {
+        if (this.placement) {
+          this.cancelPlacement();
+          return;
+        }
+        if (!this.rts?.orderMode) return;
+        this.rts.orderMode = null;
+        this.rts.armedCast = null;
+        this.hud?.clearOrderMode();
+      },
+      toggleMenu: () => this.togglePanelByKey("menu"),
+      toggleChat: () => { this.hud?.padToggleChat(); },
+      // A finger on the console is a real click at that point: the sync cursor's own
+      // press/release, so SD FDF buttons and HD WebUI buttons need no touch-specific path.
+      clickAt: (x, y, button = 0) => {
+        virtualCursor.show(x, y);
+        const release = virtualCursor.press(button);
+        release?.();
+        virtualCursor.hide();
+      },
+      hoverAt: (x, y) => virtualCursor.hoverAt(x, y),
+      // 手势 HUD 的读数（资源 / 人口 / 当前选择）：与经典控制台共用 GameHud 的 driver。
+      status: () => this.hud?.gestureStatus() ?? null,
+    });
   }
 
   private jumpToSelection(): void {
@@ -12621,6 +12729,7 @@ export class MapViewerScene {
     this.hud = new GameHud(ui, driver);
     this.consoleUi.mountQuestGlow(); // the strip may have built before there was a HUD to ask
     this.installGamepad();
+    this.installGesture();
     this.installVoiceControl(ui, driver);
     this.mountScriptUi(ui);
     this.gameMenu?.dispose();
@@ -18848,6 +18957,7 @@ export class MapViewerScene {
     this.disposed = true;
     this.preloadEpoch++; // stop any future-tech warmer the match left running
     setGamepadHost(null); // the pad's match actions die with the match
+    setGestureHost(null); // …and the touch console's
     this.stop();
     // The listeners first: they are the only leak that would keep FIRING — every keydown
     // handler a dead match left on `window` still answers keys typed at the main menu.
@@ -20650,6 +20760,27 @@ export class MapViewerScene {
     this.cinematicSkip = { t: 0, fired: false };
   }
 
+  /**
+   * "Skip this cinematic", asked by a hand instead of a key: Voice Control's spoken skip
+   * (src/voice/) and the touch console's tap both come here, so a finger and a voice cannot
+   * end up on two different roads.
+   *
+   * The ESC skip, exactly: the map's own trigger must be listening, or nothing is covered.
+   * A chapter enables its skip trigger a few seconds in (NightElfX01 at 2.5s), so an early
+   * ask QUEUES (`cinematicSkipPending`) rather than being refused — the screen is not blacked
+   * out for a trigger that does not exist yet.
+   */
+  private skipCinematicNow(): boolean {
+    if (this.interfaceShown) return false;
+    const interp = this.mapScript?.interp;
+    if (!interp?.playerEventAnswered(this.localPlayer, EVENT_PLAYER_END_CINEMATIC)) {
+      this.cinematicSkipPending = SKIP_PENDING_SECS;
+      return true;
+    }
+    this.beginCinematicSkip();
+    return true;
+  }
+
   /** Drive the skip cover and fire the skip itself at black. On the SIM's clock, like the rest
    *  of the cinematic (see the `cinematic.update` call site). */
   private tickCinematicSkip(dt: number): void {
@@ -20794,6 +20925,12 @@ export class MapViewerScene {
     // Left-drag rotates the camera; a left-click (no drag) selects a unit;
     // right-click issues a move order for the selection.
     this.on(c, "pointerdown", (e: PointerEvent) => {
+      // A finger on the world belongs to the gesture console when it is on (手机平板手势控制台
+      // 方案.md §7.2): the recogniser already turns this same pointer into selectAt / selectBox /
+      // orderAt, so letting the canvas read it too would select twice — and, with an armed
+      // order, order twice. Only TOUCH is turned away; the mouse path is untouched (P5), and
+      // with the switch off the browser's own touch behaviour stands exactly as before.
+      if (e.pointerType === "touch" && gestureEnabled()) return;
       // Never fatal: under Pointer Lock (ui/mouseCapture.ts) the press is a SYNTHETIC event at
       // the drawn cursor, and a pointer id no real pointer owns is not capturable — the browser
       // throws InvalidStateError. Nothing is lost: the replay already delivers every move the
@@ -20873,11 +21010,13 @@ export class MapViewerScene {
     });
     // Belt-and-suspenders: if the browser cancels/steals the pointer mid-drag,
     // tear the drag state down so the marquee can't get stuck on screen.
-    this.on(c, "pointercancel", () => {
+    this.on(c, "pointercancel", (e: PointerEvent) => {
+      if (e.pointerType === "touch" && gestureEnabled()) return; // the console never started it
       this.cancelDrag();
       this.midPanning = false;
     });
     this.on(c, "pointerup", (e: PointerEvent) => {
+      if (e.pointerType === "touch" && gestureEnabled()) return; // see pointerdown
       // Release capture only once ALL buttons are up, so a second button's release
       // can't strand the primary button's pointerup off-target (stuck marquee).
       if (e.buttons === 0) {
@@ -20914,6 +21053,7 @@ export class MapViewerScene {
       }
     });
     this.on(c, "pointermove", (e: PointerEvent) => {
+      if (e.pointerType === "touch" && gestureEnabled()) return; // see pointerdown
       this.lastMouse.x = e.offsetX;
       this.lastMouse.y = e.offsetY;
       if (this.midPanning) {
@@ -20951,7 +21091,19 @@ export class MapViewerScene {
     const trackCursor = (e: PointerEvent | MouseEvent) => {
       this.lastCursor.x = e.clientX;
       this.lastCursor.y = e.clientY;
-      this.pointerInWindow = true;
+      // Touch belongs to the console, not to the mouse (手机平板手势控制台方案.md §12). A finger
+      // may still place the drawn reticle / carried item, but it must never arm the mouse's
+      // edge-scroll: held near the frame edge it would pan at once on top of the console's own
+      // `edgeHold` (220 ms later), and lifted there it would keep panning until some later mouse
+      // move. A real mouse re-arms it on its very next move.
+      // `contextmenu` from a long press can be a plain MouseEvent (no `pointerType`), so only a
+      // pointer event with a known type may (un)arm edge-scroll — a finger raising the menu must
+      // not re-arm it just before the lift.
+      const pointerType = (e as PointerEvent).pointerType;
+      if (pointerType !== undefined) {
+        const touch = (pointerType === "touch" || pointerType === "pen") && gestureEnabled();
+        this.pointerInWindow = !touch;
+      }
       this.placeCarriedItem();
     };
     this.on(window, "pointermove", trackCursor, { capture: true });

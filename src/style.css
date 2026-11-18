@@ -4044,6 +4044,58 @@ body.in-game .fdf-screen.fdf-ingame {
    because the top bar is backdrop-filtered and would otherwise be its containing block. */
 .gesture-help { display: inline-flex; }
 
+/* The launcher's touch-console switch (src/ui/gestureToggle.ts), beside the language picker. */
+.gesture-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(216, 180, 90, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #b9b3a1;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.gesture-toggle::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6b6455;
+}
+
+.gesture-toggle[data-on="true"] {
+  color: var(--ow3-gold);
+  border-color: rgba(216, 180, 90, 0.55);
+}
+
+.gesture-toggle[data-on="true"]::before {
+  background: #79c27d;
+  box-shadow: 0 0 6px rgba(121, 194, 125, 0.6);
+}
+
+.gesture-toggle:hover,
+.gesture-toggle:focus-visible {
+  color: #fff;
+  border-color: #c9a338;
+  background: rgba(255, 203, 46, 0.12);
+}
+
+/* A finger needs the same 44px minimum as the in-game console's controls. */
+@media (pointer: coarse) {
+  .gesture-toggle {
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 13px;
+  }
+}
+
 .gesture-help__button {
   display: inline-flex;
   align-items: center;
@@ -6399,3 +6451,839 @@ body.in-game .home { display: none; }
     animation: none;
   }
 }
+
+/* --- the touch gesture console (手机平板手势控制台方案.md) -----------------------------------
+   The safe-area insets the notch / home bar / side-back gesture own, mirrored into custom
+   properties so src/ui/gesture/device.ts can read them ONCE (a layout read, not a per-event one)
+   and keep 24–72px of hot-zone margin clear of the system's own edges (§5.3 / §6.2). Android's
+   WebView gets the same numbers from its own shell (`ow3android.safeInsets()`), which wins. */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+/* `?gesture=1`'s readout: the recognition layer's own receipt, printed without any game action.
+   Outside `#ui`, like the loading layer, so `body.in-game`'s transform cannot re-box it. It takes
+   no input and sits under every dialog (z-index ≤ 6, §8.1). */
+#gesture-debug {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  max-width: 46vw;
+  margin: 0;
+  padding: 6px 9px;
+  pointer-events: none;
+  white-space: pre;
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: #9fe8b0;
+  background: rgba(0, 0, 0, 0.62);
+  border-radius: 0 0 4px 0;
+}
+
+/* The finger trail and the two-finger guide line (ui/gesture/trail.ts). Full-viewport and
+   OUTSIDE #ui, for the same reason the loading layer is: body.in-game transforms #ui, which
+   would re-box a fixed overlay into the 16:9 game frame. It never takes input and stays under
+   every dialog (z-index ≤ 6, §8.1); the canvas is only painted while fingers are down. */
+#gesture-viewport {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+#gesture-viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The console's PERSISTENT controls (ui/gesture/console.ts): the squad bar and the targeting
+   hint. Inside `#ui`, so they follow the stage box and any `--hud-scale` (P7). The container is
+   `pointer-events:none` and only the buttons take input — a full-frame `auto` layer would eat
+   the FDF top bar, the command card and the dialogs (§8.1 / R4). It exists only in a match with
+   the switch on, no modal and the HUD accepting input, which syncGestureConsole() decides. */
+#gesture-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 5; /* under .fdf-dialog 7, #loading 8, .game-tip 10000 */
+  display: none;
+  pointer-events: none;
+}
+
+#gesture-stage.gesture-on { display: block; }
+
+/* The in-match master switch (ui/gesture/toggle.ts), in the top-right corner of the stage — the
+   same place the game puts its upkeep panel, but outside the FDF console chrome so it never
+   competes with a menu button. 44px is the smallest reliable finger target, and it sits inside
+   the safe area so the notch / side-back gesture do not eat it. Only a match shows it: in the
+   menus there is nothing to switch, and the launcher's bar owns that job. z-index 6 keeps it
+   under dialogs (7) and the loading layer (8), above the HUD. */
+#gesture-power {
+  position: absolute;
+  top: calc(var(--safe-top) + 8px);
+  right: calc(var(--safe-right) + 8px);
+  z-index: 6;
+  display: none;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 10px;
+  pointer-events: auto;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(10, 10, 12, 0.55);
+  color: #e8e2d0;
+  font: 600 13px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+body.in-game #gesture-power { display: block; }
+
+#gesture-power[data-on="true"] {
+  border-color: rgba(252, 211, 18, 0.72);
+  color: #fcd312;
+  background: rgba(46, 36, 8, 0.62);
+}
+
+#gesture-power[data-on="false"] {
+  opacity: 0.72;
+}
+
+/* ── Gesture console skin ───────────────────────────────────────────────────────────────
+   Same metal as the HUD's own frames (`--gold` lit at the top, shaded at the bottom, 1px black
+   outline): a dark stone plate with a gold rim, square-ish corners and a top highlight. Web
+   pills floating over the map read as a browser toolbar, which is exactly what this console
+   must not look like. */
+#gesture-stage {
+  --gesture-gold: var(--gold);
+  --gesture-gold-lit: #f3dc9a;
+  --gesture-gold-dark: #7a5c28;
+  --gesture-ink: #efe4c8;
+  --gesture-plate: linear-gradient(180deg, #3b3426 0%, #211b12 55%, #120e08 100%);
+  --gesture-rim:
+    inset 0 0 0 1px rgba(243, 220, 154, 0.5),
+    inset 0 1px 0 rgba(255, 246, 214, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.75),
+    0 3px 10px rgba(0, 0, 0, 0.55);
+}
+
+/* The squad bar is one framed plate, and the ten keys are inset cells of it — the same reading
+   as the HUD's command card, not ten loose buttons. */
+.gesture-squad {
+  position: absolute;
+  left: calc(var(--safe-left) + 10px);
+  bottom: calc(var(--safe-bottom) + var(--gesture-console-top, 22%) + 6px);
+  display: grid;
+  grid-template-columns: repeat(5, 44px);
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.85);
+  border-radius: 4px;
+  background: var(--gesture-plate);
+  box-shadow: var(--gesture-rim);
+  pointer-events: none;
+}
+
+.gesture-squad[hidden] { display: none; }
+
+#gesture-stage[data-hand="left"] .gesture-squad {
+  left: auto;
+  right: calc(var(--safe-right) + 10px);
+}
+
+.gesture-group {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid #000;
+  border-radius: 3px;
+  background:
+    linear-gradient(180deg, rgba(243, 220, 154, 0.16) 0%, rgba(0, 0, 0, 0.12) 45%, rgba(0, 0, 0, 0.45) 100%),
+    #241e15;
+  box-shadow: inset 0 1px 0 rgba(255, 246, 214, 0.16);
+  color: var(--gesture-ink);
+  font: 700 17px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 1px #000, 0 0 6px rgba(0, 0, 0, 0.8);
+}
+
+.gesture-group:active {
+  transform: translateY(1px);
+}
+
+/* A press that is becoming an assign (or one that just appended): the same warm gold the HUD
+   uses for an active command button, so a long press reads as "held", not as "stuck". */
+.gesture-group.gesture-hot {
+  background: linear-gradient(to bottom, var(--gesture-gold-lit) 0%, var(--gesture-gold) 30%, #a8843e 75%, var(--gesture-gold-dark) 100%);
+  border-color: #000;
+  color: #1a1408;
+  text-shadow: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 236, 170, 0.8);
+}
+
+/* Armed cast / building placement: what the next tap will do, and how to back out, where the
+   player is already looking (top centre, under the safe area). Never takes input. */
+.gesture-target {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--safe-top) + 14px);
+  transform: translateX(-50%);
+  display: none;
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #ffd24d;
+  font: 600 13px/1.2 var(--game-font, sans-serif);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.gesture-target.on { display: block; }
+
+/* The first-match teaching sheet (`gestureShowHints`): one scrim, five lines, one 44px button.
+   Shown only while the console is active and this device has not dismissed it yet; any tap on
+   the scrim dismisses and records that, so it never returns. It takes input itself — a tap here
+   must dismiss, not fall through to the world underneath. */
+.gesture-hints {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  touch-action: none;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.gesture-hints[hidden] { display: none; }
+
+.gesture-hints__panel {
+  max-width: min(440px, 84vw);
+  padding: 16px 18px 14px;
+  border: 1px solid rgba(255, 210, 90, 0.45);
+  border-radius: 12px;
+  background: rgba(10, 10, 12, 0.92);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  color: #e8e2d0;
+  font: 500 14px/1.45 var(--game-font, sans-serif);
+}
+
+.gesture-hints__title {
+  margin-bottom: 8px;
+  color: #ffd24d;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.gesture-hints__list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.gesture-hints__list li { margin: 2px 0; }
+
+.gesture-hints__ok {
+  display: block;
+  min-width: 120px;
+  height: 44px;
+  margin: 12px auto 0;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 210, 90, 0.6);
+  border-radius: 8px;
+  background: rgba(255, 210, 90, 0.85);
+  color: #1a1408;
+  font: 600 15px/1 var(--game-font, sans-serif);
+  touch-action: none;
+}
+
+/* The command card MIRROR (`gestureCardMirror`): the same 4×3 card the HUD shows, redrawn on
+   the thumb side so a tablet player does not cross the screen to reach it. Data is `host.card()`
+   (ui/gesture/console.ts), so it cannot drift from the HUD's own card; the container takes no
+   input and the slots are real 44px targets. Hidden unless the option is on and a match, no
+   modal, and the HUD are all accepting input — syncGestureConsole() owns that decision. */
+.gesture-card {
+  position: absolute;
+  right: calc(var(--safe-right) + 12px);
+  bottom: calc(var(--safe-bottom) + 34%);
+  display: grid;
+  grid-template-columns: repeat(4, 46px);
+  grid-template-rows: repeat(3, 46px);
+  gap: 5px;
+  pointer-events: none;
+}
+
+.gesture-card[hidden] { display: none; }
+
+#gesture-stage[data-hand="left"] .gesture-card {
+  right: auto;
+  left: calc(var(--safe-left) + 12px);
+}
+
+.gesture-card__slot {
+  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  background-color: rgba(10, 10, 12, 0.62);
+  background-size: cover;
+  background-position: center;
+  color: #e8e2d0;
+  font: 600 12px/1.05 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+  overflow: hidden;
+}
+
+/* Greyed / passive: visible so the player can see the card's shape, never pressed — the action
+   layer refuses it with the same test the HUD uses (`performGesture`'s radial branch). */
+.gesture-card__slot.off { opacity: 0.35; }
+
+.gesture-card__slot.hot {
+  border-color: rgba(255, 236, 170, 0.95);
+  box-shadow: inset 0 0 0 2px rgba(255, 210, 90, 0.9);
+}
+
+.gesture-card__slot.down { transform: scale(0.94); }
+
+/* The 12-slot command wheel's trigger (ui/gesture/console.ts). A 56px round target on the
+   thumb side, above the console art; the squad bar keeps the other side. Layout A (minimal)
+   is "pure gestures, no persistent controls", so the trigger is hidden there. */
+.gesture-wheel {
+  position: absolute;
+  right: calc(var(--safe-right) + 12px);
+  bottom: calc(var(--safe-bottom) + 26%);
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  background: rgba(10, 10, 12, 0.6);
+  color: #e8e2d0;
+  font: 600 24px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+#gesture-stage[data-layout="minimal"] .gesture-wheel { display: none; }
+
+#gesture-stage[data-hand="left"] .gesture-wheel {
+  right: auto;
+  left: calc(var(--safe-left) + 12px);
+}
+
+.gesture-wheel.gesture-hot {
+  background: rgba(255, 210, 90, 0.85);
+  border-color: rgba(255, 236, 170, 0.95);
+  color: #1a1408;
+  text-shadow: none;
+}
+
+/* The wheel itself is a picture, not a control surface: the pointer stays captured by the
+   trigger, so this layer is `pointer-events:none` and can never eat a HUD / FDF click (R4).
+   It sits outside #ui (like the loading layer) so `body.in-game`'s transform cannot re-box it
+   into the 16:9 frame, and at z-index 6 it stays under every dialog and the loading screen. */
+#gesture-radial {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  display: none;
+  pointer-events: none;
+}
+
+#gesture-radial.on { display: block; }
+
+.gesture-radial__ring {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 210, 90, 0.5);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.18) 0%, rgba(0, 0, 0, 0.5) 70%);
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.5);
+}
+
+.gesture-radial__slot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 10px;
+  background: rgba(10, 10, 12, 0.82);
+  color: #e8e2d0;
+  font: 600 15px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+/* Greyed / passive / empty: visible so the player can see the card's shape, but never
+   pressed — the action layer refuses it with the same test the HUD uses. */
+.gesture-radial__slot.off { opacity: 0.35; }
+
+.gesture-radial__slot.hot {
+  background: rgba(255, 210, 90, 0.9);
+  border-color: rgba(255, 236, 170, 0.95);
+  color: #1a1408;
+  text-shadow: none;
+}
+
+/* ── 手势 HUD：替代经典 HUD（ui/gesture/hud.ts）───────────────────────────────────────────
+   开关打开且在对局里时，`body.gesture-ui` 让 FDF 控制台外框、4×3 命令卡、头像面板与顶部
+   菜单条一起让位，换成一套移动端布局：左上小地图、顶部资源、左下选择血条、右下攻击大圆钮
+   + 12 槽命令环。经典 HUD 的 DOM 一个都没删——小地图节点是被「借」进 #gesture-hud 的，
+   关掉开关就原样放回去（hud.ts 的 adoptMinimap / releaseMinimap）。 */
+/* 只藏控制台那一条 FDF 屏（`fdf-topbar` 是 ui/consoleUi.ts 独有的 overlayClass）；
+   F10 对话框、记分板、多面板、过场面板也是 `fdf-ingame`，必须留着。 */
+body.gesture-ui .fdf-screen.fdf-topbar,
+body.gesture-ui .hud-console,
+body.gesture-ui .hud-console-background,
+body.gesture-ui .hud-minimap-btn,
+body.gesture-ui .hud-idle-worker,
+body.gesture-ui .hud-autocam,
+body.gesture-ui .hud-msgcol,
+body.gesture-ui .hud-chatcol {
+  display: none;
+}
+
+/* 旧的轮盘钮与命令卡镜像由新 HUD 的命令环取代；极简形态的编队条仍留给用户。 */
+body.gesture-ui .gesture-wheel,
+body.gesture-ui .gesture-card {
+  display: none;
+}
+
+/* 数字编队条在手势模式里退场：编队改成大圆钮左侧的半圆图标（.ghud-gitem），
+   不再出现 1 / 2 / 3 这种玩家看不懂的键位。 */
+body.gesture-ui .gesture-squad { display: none; }
+
+#gesture-hud {
+  --ghud-gold: var(--gold);
+  --ghud-gold-lit: #f3dc9a;
+  --ghud-plate: linear-gradient(180deg, #3b3426 0%, #211b12 55%, #120e08 100%);
+  --ghud-rim:
+    inset 0 0 0 1px rgba(243, 220, 154, 0.45),
+    inset 0 1px 0 rgba(255, 246, 214, 0.2),
+    0 3px 10px rgba(0, 0, 0, 0.55);
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: none;
+  pointer-events: none;
+}
+
+body.gesture-ui #gesture-hud { display: block; }
+
+/* 借来的小地图：内联样式来自经典 HUD 的百分比布点，这里用 !important 顶成固定方块。 */
+.ghud-minimap {
+  position: absolute;
+  top: calc(var(--safe-top) + 8px);
+  left: calc(var(--safe-left) + 8px);
+  width: 168px;
+  height: 156px;
+  pointer-events: auto;
+}
+
+.ghud-minimap .hud-minimap {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 168px !important;
+  height: 156px !important;
+  margin: 0 !important;
+  border: 1px solid #000;
+  box-shadow: inset 0 0 0 1px rgba(243, 220, 154, 0.35), 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+/* 编队图标：大圆钮**左侧**的半圆，与右侧命令环同心，图标常驻不隐藏。
+   每一组 = 圆图标（首单位原图/彩色队旗）+ 人数角标；选中后正下方浮出红色 ×。 */
+.ghud-actions .ghud-gitem {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 42px;
+  height: 42px;
+  pointer-events: none;
+}
+
+.ghud-actions .ghud-gitem > button { pointer-events: auto; }
+
+.ghud-gflag,
+.ghud-gplus {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background: var(--ghud-plate);
+  box-shadow: var(--ghud-rim);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.ghud-gflag:active,
+.ghud-gplus:active { transform: scale(0.94); }
+
+/* 加号：一步编组，虚线金框，与组图标同尺寸同位置规律。 */
+.ghud-gplus {
+  border-style: dashed;
+  border-color: rgba(243, 220, 154, 0.55);
+  background: rgba(20, 17, 12, 0.6);
+  box-shadow: none;
+}
+
+.ghud-gplus::after {
+  content: "+";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #f3dc9a;
+  font: 700 20px/1 sans-serif;
+}
+
+/* 有单位图标时铺满圆形，底边留一条队色。 */
+.ghud-gflag.has-icon {
+  background-image: var(--icon);
+  background-size: cover;
+  background-position: center;
+  box-shadow:
+    inset 0 0 0 1px rgba(243, 220, 154, 0.45),
+    inset 0 -3px 0 var(--flag, #8a8a8a),
+    0 2px 6px rgba(0, 0, 0, 0.55);
+}
+
+.ghud-gflag.has-icon .ghud-flag { display: none; }
+
+/* 旗面：一面右向三角旗 + 旗杆，颜色按队区分，不出现键位数字。 */
+.ghud-flag {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 18px;
+  height: 20px;
+  margin: -10px 0 0 -9px;
+  background: var(--flag, #8a8a8a);
+  clip-path: polygon(0 0, 100% 0, 78% 50%, 100% 100%, 0 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.ghud-flag::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.ghud-gflag__n {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border: 1px solid rgba(243, 220, 154, 0.7);
+  border-radius: 8px;
+  background: #12100c;
+  color: #f3dc9a;
+  font: 700 10px/13px var(--game-font, sans-serif);
+  text-align: center;
+}
+
+.ghud-gflag.active {
+  border-color: rgba(252, 211, 18, 0.9);
+  box-shadow:
+    inset 0 0 0 1px rgba(252, 211, 18, 0.7),
+    0 0 10px rgba(252, 211, 18, 0.35);
+}
+
+/* 取消编组：只在被选中的那一组正下方出现，红框小 ×。 */
+.ghud-gclear {
+  position: absolute;
+  top: 45px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #000;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #5a1f1a 0%, #2a0f0c 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 140, 120, 0.55),
+    0 2px 5px rgba(0, 0, 0, 0.5);
+  color: #ffb0a0;
+  font: 700 16px/1 sans-serif;
+  text-shadow: 0 1px 2px #000;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.ghud-gclear[hidden] { display: none; }
+.ghud-gclear:active { transform: translateX(-50%) scale(0.92); }
+
+.ghud-top {
+  position: absolute;
+  top: calc(var(--safe-top) + 8px);
+  right: calc(var(--safe-right) + 60px);
+  display: flex;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.ghud-res {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 62px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #000;
+  border-radius: 4px;
+  background: var(--ghud-plate);
+  box-shadow: var(--ghud-rim);
+  color: #efe4c8;
+  font: 700 15px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+.ghud-res::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.ghud-res--gold::before { background: #f0c860; }
+.ghud-res--lumber::before { background: #b98246; }
+.ghud-res--food::before { background: #8fd18a; }
+
+/* 当前选择：头像 + 名称 + 生命 / 魔法，钉在左下；物品栏在它上面。 */
+.ghud-sel {
+  position: absolute;
+  left: calc(var(--safe-left) + 10px);
+  bottom: calc(var(--safe-bottom) + 10px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 320px;
+  padding: 7px 9px 9px;
+  border: 1px solid #000;
+  border-radius: 4px;
+  background: var(--ghud-plate);
+  box-shadow: var(--ghud-rim);
+  pointer-events: none;
+}
+
+.ghud-sel[hidden] { display: none; }
+
+.ghud-sel__body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 借来的单位头像：尺寸与经典控制台无关，这里给固定方块，边框自己画。 */
+.ghud-portrait {
+  width: 68px;
+  height: 68px;
+  flex: none;
+  pointer-events: auto;
+}
+
+.ghud-portrait .hud-portrait {
+  position: static !important;
+  width: 68px !important;
+  height: 68px !important;
+  margin: 0 !important;
+  border: 1px solid #000;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(243, 220, 154, 0.45);
+}
+
+/* 借来的物品栏：六格横排，两格空也保留（空槽仍可接收物品，与经典 HUD 一致）。 */
+.ghud-inventory {
+  position: absolute;
+  left: calc(var(--safe-left) + 10px);
+  bottom: calc(var(--safe-bottom) + 96px);
+  pointer-events: auto;
+}
+
+.ghud-inventory .hud-inventory {
+  position: static !important;
+  left: auto !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: auto !important;
+  height: auto !important;
+  padding: 0 !important;
+  background: none !important;
+}
+
+.ghud-inventory .hud-inv-grid {
+  display: grid !important;
+  grid-template-columns: repeat(6, 42px) !important;
+  grid-template-rows: 42px !important;
+  gap: 4px !important;
+  height: auto !important;
+}
+
+.ghud-inventory .hud-slot {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  background-color: #161210;
+  background-size: 100% 100% !important;
+  border: 1px solid #000;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(243, 220, 154, 0.35);
+}
+
+.ghud-sel__name {
+  margin-bottom: 5px;
+  color: var(--ghud-gold-lit);
+  font: 700 14px/1.1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ghud-bar {
+  height: 11px;
+  margin-top: 4px;
+  border: 1px solid #000;
+  background: #0b0a07;
+  overflow: hidden;
+}
+
+.ghud-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  transition: width 180ms linear;
+}
+
+.ghud-bar--hp i { background: linear-gradient(180deg, #9cf59c 0%, #3fae3f 60%, #1f6b1f 100%); }
+.ghud-bar--mp i { background: linear-gradient(180deg, #a8c8ff 0%, #3f74e0 60%, #22459a 100%); }
+
+/* 右下动作簇：大圆钮（攻击 / 移动）+ 12 槽命令环，槽位坐标由 hud.ts 的 layoutRing 写死。 */
+.ghud-actions {
+  position: absolute;
+  right: calc(var(--safe-right) + 10px);
+  bottom: calc(var(--safe-bottom) + 10px);
+  width: var(--ghud-outer, 272px);
+  height: var(--ghud-outer, 272px);
+  pointer-events: none;
+}
+
+.ghud-attack {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 78px;
+  height: 78px;
+  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  border: 2px solid #000;
+  border-radius: 50%;
+  background-color: #1d170f;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 72% 72%;
+  box-shadow:
+    inset 0 0 0 2px rgba(243, 220, 154, 0.55),
+    inset 0 2px 6px rgba(0, 0, 0, 0.8),
+    0 4px 12px rgba(0, 0, 0, 0.6);
+  color: #efe4c8;
+  font: 700 15px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+.ghud-attack.off { opacity: 0.4; }
+.ghud-attack:active { transform: translate(-50%, -50%) scale(0.94); }
+
+.ghud-slot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background-color: #161210;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 108% 108%;
+  box-shadow:
+    inset 0 0 0 1px rgba(243, 220, 154, 0.4),
+    0 2px 6px rgba(0, 0, 0, 0.55);
+  color: #efe4c8;
+  font: 700 13px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+.ghud-slot[hidden] { display: none; }
+.ghud-slot.off { opacity: 0.32; }
+.ghud-slot:active { transform: translate(-50%, -50%) scale(0.92); }
+
+/* 瞄准中（armed）：命令环整体亮一圈，提示「下一指落目标」。 */
+#gesture-hud.armed .ghud-slot,
+#gesture-hud.armed .ghud-attack {
+  box-shadow:
+    inset 0 0 0 2px rgba(252, 211, 18, 0.8),
+    0 0 12px rgba(252, 211, 18, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.55);
+}
+
+.ghud-menu {
+  position: absolute;
+  top: calc(var(--safe-top) + 60px);
+  right: calc(var(--safe-right) + 8px);
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background: var(--ghud-plate);
+  box-shadow: var(--ghud-rim);
+  color: #efe4c8;
+  font: 700 12px/1 var(--game-font, sans-serif);
+}
+
+.ghud-menu:active { transform: scale(0.95); }
+

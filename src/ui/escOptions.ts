@@ -18,6 +18,7 @@ import { applyScrollOptions } from "../render/scrollOptions";
 import { bindGamepadButton } from "./gamepad";
 import { bindVoiceRow } from "./voiceOptions";
 import { applyVoiceOptions } from "../voice/control";
+import { applyGestureOptions } from "./gesture/profile";
 import {
   GAME_SPEED_MAX,
   GAME_SPEED_MIN,
@@ -152,6 +153,7 @@ export class EscOptions {
     applyHotkeyOptions(opts);
     applyScrollOptions(opts);
     applyVoiceOptions(opts);
+    applyGestureOptions(opts);
   }
 
   private bindOne(screen: FdfScreen, d: OptionDef, lib: FdfLibrary | null): void {
@@ -171,6 +173,7 @@ export class EscOptions {
         applyScrollOptions(this.working);
         applyVoiceOptions(this.working);
       }
+      if (d.panel === "input") applyGestureOptions(this.working);
     };
     if (d.kind === "bool") {
       const c = screen.checkBox(name);

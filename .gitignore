@@ -32,6 +32,9 @@ War3_*/
 # Sim throwaway build (tools/tsconfig.sim.json → CJS for headless targeting tests)
 .sim-build/
 
+# Gesture recogniser throwaway build (tools/tsconfig.gesture.json → CJS for the intent test)
+.gesture-build/
+
 # Campaign index throwaway build (tools/tsconfig.campaign.json → CJS for the headless check)
 .campaign-build/
 
@@ -42,6 +45,7 @@ War3_*/
 # Local recordings of local play — machine-specific, regenerated every match, never shared.
 .logs/
 release/
+release-win/
 build/
 .cdn-cache/
 

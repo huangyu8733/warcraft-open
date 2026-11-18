@@ -1,7 +1,7 @@
 // `pnpm test` — one entry point for every check the repo has.
 //
-// The checks used to be spread over `typecheck`, `cycles`, `relay:test`,
-// `app:test`, `sim:test` and `jass:test`, so a newcomer had to know which of them
+// The checks used to be spread over `typecheck`, `cycles`, `gesture:test`,
+// `relay:test`, `app:test`, `sim:test` and `jass:test`, so a newcomer had to know which of them
 // applied to them. Two of those suites cannot run without something local:
 //
 //   - `sim:test` and `jass:test` read `Warcraft III/ExtractedData`, which
@@ -27,6 +27,10 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const STEPS = [
   { name: "typecheck", cmd: "pnpm typecheck" },
   { name: "cycles", cmd: "pnpm cycles" },
+  // The touch console's own assertions (recogniser / action layer / flavour parity). They are
+  // pure functions with no install and no browser, so a regression here must fail the one
+  // command every contributor runs (手机平板手势控制台方案.md §14.1).
+  { name: "gesture:test", cmd: "pnpm gesture:test" },
   // sim first: it compiles `.sim-build/`, and jass:test builds on that output
   // while relay:test imports `.sim-build/src/net/commandLink.js` for its loopback
   // half. Both of those are consequences of the sim build, not of the relay.

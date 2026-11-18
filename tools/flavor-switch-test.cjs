@@ -12,8 +12,12 @@
 // Run: node tools/flavor-switch-test.cjs (needs `tsc -p tools/tsconfig.sim.json` first).
 
 const { join } = require("node:path");
+const { writeFileSync } = require("node:fs");
 
 const REPO = process.cwd();
+// The throwaway build is CommonJS while the repo is `"type": "module"` (as every other
+// .sim-build test does), so `require()` may load its .js files.
+writeFileSync(join(REPO, ".sim-build", "package.json"), '{"type":"commonjs"}');
 const MOD = join(REPO, ".sim-build", "src", "data", "flavor.js");
 
 let failed = 0;

@@ -20,6 +20,7 @@ import { buildInfoVersion } from "../vfs/casc";
 import { flavor, type GameFlavor } from "../data/flavor";
 import { dismissBootSplash, mountBootSplash, type BootSplash } from "./bootSplash";
 import { createGestureHelp } from "./gestureHelp";
+import { createGestureToggle } from "./gestureToggle";
 
 /** A mounted install, as the launcher hands it to the game (main.ts `mountInstall`). */
 export interface GateLoad {
@@ -170,6 +171,10 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   const topActions = document.createElement("div");
   topActions.className = "home-topbar-actions";
   topActions.append(createLanguagePicker());
+  // A phone / tablet browser can only reach the touch console's Options rows after a match has
+  // started, so the launcher carries its master switch. Desktop browsers use it with DevTools
+  // touch emulation.
+  if (!native) topActions.append(createGestureToggle());
   // A browser tab is the only place a swipe can leave the page (back / forward), so only the
   // browser build carries the way to turn it off.
   if (!native) topActions.append(createGestureHelp());

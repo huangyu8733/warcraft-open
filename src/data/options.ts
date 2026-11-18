@@ -399,6 +399,37 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   { key: "confineMouse", frame: "ConfineMouseMenu", cap: "PREF_INPUT_CONFINE_MOUSE_CURSOR", kind: "choice", panel: "input", def: "auto", choices: CONFINEMENT },
   { key: "reduceMouseLag", frame: "ReduceMouseLagCheckBox", cap: "PREF_INPUT_REDUCE_MOUSE_LAG", kind: "bool", panel: "input", def: false },
 
+  // --- The touch gesture console (手机平板手势控制台方案.md §10.1) ---
+  // Ours entirely — no 2003 or 3.0 file has a row for a touch console — so the frames come from
+  // `src/overrides/ui/*.fdf` and the labels from our `opt.*` table. They live on the Input panel
+  // beside Voice Control and Gamepad: all four are ways of driving the game besides the mouse.
+  //
+  // `gestureEnabled` is the master switch (device.ts also requires a touchscreen, so a desktop
+  // mouse never picks it up); off means not one listener is registered (P5). Everything below it
+  // is read live by `src/ui/gesture/profile.ts`: thresholds feed the recogniser, the two semantic
+  // switches feed the action layer, and the look-and-feel rows feed the console UI.
+  { key: "gestureEnabled", frame: "GestureEnabledCheckBox", cap: "GESTURE_ENABLE", kind: "bool", panel: "input", def: true },
+  { key: "gestureLayout", frame: "GestureLayoutMenu", cap: "GESTURE_LAYOUT", kind: "choice", panel: "input", def: "light", choices: [
+    { value: "minimal", label: "GESTURE_LAYOUT_MINIMAL" },
+    { value: "light", label: "GESTURE_LAYOUT_LIGHT" },
+    { value: "full", label: "GESTURE_LAYOUT_FULL" },
+  ] },
+  { key: "gestureHandedness", frame: "GestureHandednessMenu", cap: "GESTURE_HANDEDNESS", kind: "choice", panel: "input", def: "right", choices: [
+    { value: "right", label: "GESTURE_RIGHT_HANDED" },
+    { value: "left", label: "GESTURE_LEFT_HANDED" },
+  ] },
+  { key: "gestureLongPressMs", frame: "GestureLongPressSlider", cap: "GESTURE_LONG_PRESS", kind: "range", panel: "input", def: 420, min: 300, max: 800, step: 25 },
+  { key: "gestureTapSlopPx", frame: "GestureTapSlopSlider", cap: "GESTURE_TAP_SLOP", kind: "range", panel: "input", def: 12, min: 8, max: 24, step: 1 },
+  { key: "gesturePinchZoom", frame: "GesturePinchZoomCheckBox", cap: "GESTURE_PINCH_ZOOM", kind: "bool", panel: "input", def: true },
+  { key: "gestureLongPressIsRightClick", frame: "GestureLongPressRightClickCheckBox", cap: "GESTURE_LONG_PRESS_RIGHT_CLICK", kind: "bool", panel: "input", def: true },
+  { key: "gestureHaptics", frame: "GestureHapticsCheckBox", cap: "GESTURE_HAPTICS", kind: "bool", panel: "input", def: true },
+  { key: "gestureTrail", frame: "GestureTrailCheckBox", cap: "GESTURE_TRAIL", kind: "bool", panel: "input", def: true },
+  { key: "gestureCardMirror", frame: "GestureCardMirrorCheckBox", cap: "GESTURE_CARD_MIRROR", kind: "bool", panel: "input", def: false },
+  { key: "gestureShowHints", frame: "GestureHintsCheckBox", cap: "GESTURE_HINTS", kind: "bool", panel: "input", def: true },
+  // Tablet-only 3/4-finger gestures. OFF by default (§6.2): on iPadOS these collide with
+  // three-finger editing / four-finger app switching, and a phone never enables them.
+  { key: "gestureMultiFinger", frame: "GestureMultiFingerCheckBox", cap: "GESTURE_MULTI_FINGER", kind: "bool", panel: "input", def: false },
+
   // --- Graphics: Reforged's per-category art switches (data/artCategories.ts) ---
   ...ART_CATEGORIES.map((c): OptionDef => ({
     key: c.key,
@@ -440,6 +471,20 @@ export function defaultOptions(): Options {
 }
 
 const STORAGE_KEY = "warcraft-open.options";
+
+/** Has this machine ever committed options? False on a first boot — which is the one moment a
+ *  suggestion may be written without overwriting a player's own choice (ui/gesture/device.ts
+ *  uses it for the touch quality defaults in 手机平板手势控制台方案.md §4.3). */
+export function hasStoredOptions(): boolean {
+  const ls = typeof localStorage !== "undefined" ? localStorage : null;
+  if (!ls) return false;
+  try {
+    const raw = ls.getItem(STORAGE_KEY);
+    return raw !== null && raw !== "";
+  } catch {
+    return false;
+  }
+}
 
 /** The committed options, from localStorage merged over the defaults. Reads are best-effort:
  *  a disabled/quota-full/corrupt store just yields the defaults. */

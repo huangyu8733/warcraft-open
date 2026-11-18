@@ -24,6 +24,7 @@ import { applyScrollOptions } from "../../render/scrollOptions";
 import { uiThemeChoices } from "../../data/uiTheme";
 import { applyVoiceOptions } from "../../voice/control";
 import { gamepadButtonPressed, watchGamepadButton } from "../gamepad";
+import { applyGestureOptions } from "../gesture/profile";
 import { nativeVsync, relaunchNative, setNativeVsync } from "../../assets/nativeInstall";
 import { applyGameplayOptions } from "../../render/gameplayOptions";
 import { applyCameraOptions } from "../../render/cameraOptions";
@@ -125,6 +126,13 @@ const LAYOUT: Record<PanelName, readonly (readonly OptionsSection[])[]> = {
       // panel: both are ways of driving the game besides the mouse and keyboard.
       { title: "VOICE_CONTROL", keys: ["voiceControl"] },
       { title: "GAMEPAD", custom: "gamepad" },
+      // The touch console's own controls, live through `applyGestureOptions` (ui/gesture/profile).
+      { title: "GESTURE_CONTROL", keys: [
+        "gestureEnabled", "gestureLayout", "gestureHandedness",
+        "gestureLongPressMs", "gestureTapSlopPx", "gesturePinchZoom",
+        "gestureLongPressIsRightClick", "gestureHaptics", "gestureTrail",
+        "gestureCardMirror", "gestureShowHints", "gestureMultiFinger",
+      ] },
     ],
   ],
   graphics: [
@@ -211,7 +219,10 @@ export async function mountHdOptions(
     applyGameplayOptions(opts);
     applyCameraOptions(opts);
   };
-  const applyInput = (opts: Options): void => applyInputOptions(opts);
+  const applyInput = (opts: Options): void => {
+    applyInputOptions(opts);
+    applyGestureOptions(opts);
+  };
   const applyAll = (opts: Options): void => {
     applyAudio(opts);
     applyVideo(opts);
@@ -361,7 +372,10 @@ export async function mountHdOptions(
   function commitSave(): void {
     saveOptions(working);
     if (working.language !== committed.language) setLocale(working.language as Locale);
-    if (effectiveAntialias(working) !== effectiveAntialias(committed) || working.language !== committed.language) {
+    // The gesture master switch decides at BOOT whether the recogniser registers any listener at
+    // all (ui/gesture/index.ts), so turning it on takes a reload; turning it off is live.
+    const gesturesAwoke = working.gestureEnabled === true && committed.gestureEnabled !== true;
+    if (effectiveAntialias(working) !== effectiveAntialias(committed) || working.language !== committed.language || gesturesAwoke) {
       askReload();
       return;
     }

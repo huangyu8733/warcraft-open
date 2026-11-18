@@ -1023,6 +1023,14 @@ LAN 观察者从自己的通道读取所有人的（`watched`，只为旁观席�
   仅在同类单位有两个或以上时显示），这样就可以说出一个躯体，而 "," 切换一个提示框；
   对军队说出的命令会随摄像机跟随它的第一个英雄。"Gather" 会询问模拟的工人档案，绝
   不是"它是不是工人"（Ghoul）。
+- **触摸手势控制台：** 在改动 [`src/ui/gesture/`](src/ui/gesture/) 或 Android 壳的资产桥之
+  前，先读 [`docs/gesture-control.md`](docs/gesture-control.md)。手势是第三个外部输入
+  Host（仿 `GamepadMatchHost` / `VoiceHost`）：识别器只产出 `GestureIntent`，动作全部落到
+  `runCommand` / `selectAt` / `orderClickAt` / `moveAt` / `midPan` / `setZoomStop` 这些鼠标
+  已在用的门上，**不新增 `Command`、不碰 `Authority.execute`、不改 flavor 数据线**；SD 与
+  HD 共用一套识别与动作，唯一按美术变化的是底部禁区 `consoleTop`。关闭总开关时一个监听都
+  不注册，**打开需要重载**（识别器在启动时决定是否挂监听）。Android 的资产来源是 SAF 目录
+  授权 + `shouldInterceptRequest` 的虚拟安装（`ow3native` 页桥），APK 不含任何暴雪资产。
 - **永远不要编辑安装目录的 UI 文件。** `UI\FrameDef\` 是玩家的。Warcraft Open 需要而
   2003 年的 UI 没有框架的控件放进 [`src/overrides/`](src/overrides/) —— 我们自己的
   FrameDef 文件，在挂载时通过 `mountFdfScreen` 的 `overrides` 选项分层到界面上 —— 它

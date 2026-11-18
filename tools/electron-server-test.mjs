@@ -108,19 +108,19 @@ try {
       build("1.30.4.11274");
       ok("the build we play is accepted", looksLikeInstall(tmp), installVersion(tmp));
       build("1.29.2.9231");
-      ok("any 1.x install is accepted", looksLikeInstall(tmp), installVersion(tmp));
+      ok("a pre-1.30 build is refused — the line starts at 1.3", !looksLikeInstall(tmp), installVersion(tmp));
       build("1.32.10.18820");
-      ok("a later 1.x is accepted too — the rule is the major line", looksLikeInstall(tmp));
+      ok("a later 1.3x build is accepted too — the rule is the prefix", looksLikeInstall(tmp));
       // …except the one the game turns back into 1.30.4: the Internet Archive's copy, which
       // "Download game files" falls back on (src/vfs/downgrade.ts).
       build("1.31.1.12164");
       ok("the Internet Archive's 1.31.1 is accepted — the mount downgrades it", looksLikeInstall(tmp));
       build("2.0.3.22692");
-      ok("the remastered 2.x line is accepted", looksLikeInstall(tmp));
+      ok("the 2.x line is refused — HD is the 3.x line", !looksLikeInstall(tmp));
       build("3.0.0.1");
       ok("the Reforged 3.x line is accepted — HD pins the exact patch", looksLikeInstall(tmp));
       build("4.0.0.1");
-      ok("a major line outside 1.x/2.x/3.x is refused", !looksLikeInstall(tmp));
+      ok("a prefix outside 1.3/3. is refused", !looksLikeInstall(tmp));
       // The build NUMBER is not part of the rule: it varies with the download and says nothing
       // about the data.
       build("1.30.4.99999");
@@ -204,4 +204,7 @@ try {
   await server.stop();
 }
 console.log(failed ? `\nelectron server: ${failed} FAILED` : "\nelectron server: all checks passed");
-process.exit(failed ? 1 : 0);
+// Let the loop drain instead of `process.exit()`: under Node 25 on Windows, exiting while a
+// WebSocket's close is still in flight trips libuv's `UV_HANDLE_CLOSING` assertion (async.c:76)
+// and the test reports a crash even though every check passed.
+process.exitCode = failed ? 1 : 0;

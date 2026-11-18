@@ -65,6 +65,7 @@ import { WebSocketTransport } from "./net/transport";
 import { isDesktopApp, onServersFound, onShellClosing } from "./assets/nativeInstall";
 import { watchForUpdates } from "./ui/updatePrompt";
 import { startGamepad } from "./ui/gamepad";
+import { adoptTouchVideoDefaults, applyGestureOptions, gestureClaims, gestureEnabled, startGesture } from "./ui/gesture";
 import { installMouseCapture } from "./ui/mouseCapture";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
@@ -159,6 +160,11 @@ const ui = document.getElementById("ui") as HTMLElement;
 // is read as a texture is uploaded, so a setting applied after the first viewer exists would
 // miss everything that viewer had already loaded.
 const bootOptions = loadOptions();
+// The touch console's FIRST-BOOT quality suggestion (手机平板手势控制台方案.md §4.3 / §13): a
+// phone starts at 576p, a tablet at 720p, both with Low Performance Mode, and an HD phone at the
+// lowest rung — Reforged's `.dds` + `*Skin.txt` have no offline pack in a WebView (P4's gate).
+// Written only when no store exists, so a player's own choices are never overwritten.
+adoptTouchVideoDefaults(bootOptions);
 applyVideoOptions(bootOptions);
 // Which context version the flavour asks for, before the first canvas can create one:
 // Reforged → WebGL 2, classic → WebGL 1 (`?gl=1` forces WebGL 1). See render/glContext.ts.
@@ -184,6 +190,10 @@ applyHotkeyOptions(bootOptions);
 applyScrollOptions(bootOptions);
 // …and "Voice Control", whose push-to-talk key is only read while it is ticked (src/voice/).
 applyVoiceOptions(bootOptions);
+// …and the touch console's settings (ui/gesture/profile), read live by the recogniser and the
+// action layer. `startGesture()` further down registers nothing unless this says a touch device
+// has the switch on.
+applyGestureOptions(bootOptions);
 // …and the menus' half of it: every glue screen and in-game panel, read off the page when "." is
 // held (src/voice/menu.ts).
 setMenuVoiceHost(makeMenuVoiceHost());
@@ -2133,16 +2143,23 @@ window.addEventListener("wheel", (e) => { if (e.ctrlKey) e.preventDefault(); }, 
 
 // The rest of the SCREEN-LEVEL gestures — the ones a browser page has and a game must not. A page
 // that only ever draws a game has no document to pan, pinch, double-tap or key-zoom, and each of
-// those would otherwise land on the frame the player is commanding. The shell has none of them,
-// so none of this is registered there.
-if (!isDesktopApp()) {
+// those would otherwise land on the frame the player is commanding. A plain desktop shell has
+// none of them — but the Android WebView answers `ow3native`, so it IS `isDesktopApp()` here
+// while still being a touch surface: register them wherever the console can run.
+if (!isDesktopApp() || gestureEnabled()) {
   // Safari announces a trackpad pinch as `gesture*`, NOT as a ctrl+wheel — the only way to
-  // refuse it is by name. Chrome's ctrl+wheel is already above.
+  // refuse it is by name. These stay UNCONDITIONAL: nothing in the game consumes them, and
+  // letting one through zooms the whole page (iOS ignores `user-scalable=no` for them).
   for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
     window.addEventListener(type, (e) => e.preventDefault(), { passive: false });
   }
-  // Pinch on a touch screen arrives as two pointers on the page rather than as a wheel.
-  window.addEventListener("touchmove", (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+  // Pinch on a touch screen arrives as two pointers on the page rather than as a wheel. The
+  // recogniser arbitrates (手机平板手势控制台方案.md §5.1 / R2): while it owns the sequence
+  // (switch on, ≥2 fingers, inside the hot zone — `touch-action:none` already holds the page
+  // still under it) this leaves the event alone; otherwise it behaves exactly as before.
+  window.addEventListener("touchmove", (e) => {
+    if (e.touches.length > 1 && !gestureClaims()) e.preventDefault();
+  }, { passive: false });
   // The browser's zoom KEYS (Cmd/Ctrl with +/-/0), which the wheel listener cannot see. Text fields
   // keep them: a player typing a name may still use their own shortcuts.
   window.addEventListener("keydown", (e) => {
@@ -2170,11 +2187,20 @@ window.addEventListener("focusin", (e) => {
 // poll runs for the life of the page. See ui/gamepad.ts.
 startGamepad();
 
+// The touch gesture console (手机平板手势控制台方案.md): capture-phase pointer listeners over
+// the whole page. A no-op without a touch screen and when the switch is off, so the mouse and
+// keyboard paths are untouched. Registered before mouse capture so its arbitration sees the
+// first pointer of a sequence.
+startGesture();
+
 // The mouse is confined to the page during a match with the Pointer Lock API — the OS pointer
 // otherwise walks out of a windowed page over the title bar, or onto the menu bar of a second
 // display in fullscreen, and edge scroll stops. Wired at start-up so its listeners come before
 // the match's own; it takes the pointer on the first click in the game. See ui/mouseCapture.ts.
-installMouseCapture();
+// A touchscreen has no OS pointer to confine and no edge to scroll past — the console's own
+// fingers drive the camera (手机平板手势控制台方案.md §12) — so it is skipped where the gesture
+// layer is on. A hybrid laptop with a fine pointer keeps it, because the switch is off there.
+if (!gestureEnabled()) installMouseCapture();
 
 // Boot. Normally the load gate: a human picks their Warcraft III folder, because that gesture
 // is also what opens the browser's autoplay gate. Under `?dev` on a DEV SERVER ONLY, a scripted

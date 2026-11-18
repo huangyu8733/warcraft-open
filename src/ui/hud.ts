@@ -2196,6 +2196,14 @@ export class GameHud {
     return this.portraitCanvasEl;
   }
 
+  /** 手势 HUD（ui/gesture/hud.ts）的读数出口：与经典控制台同一个 driver，不另建状态源。 */
+  gestureStatus(): {
+    gold: number; lumber: number; foodUsed: number; foodMax: number;
+    selection: HudSelection | null;
+  } {
+    return { ...this.driver.resources(), selection: this.driver.selection() };
+  }
+
   /** Keep the portrait on screen for a speaker who is not the selection — a transmission during
    *  ordinary play puts its bust here (mapViewer `consoleTransmission`). */
   setPortraitForced(on: boolean): void {

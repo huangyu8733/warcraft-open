@@ -3,18 +3,26 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- A touchscreen is what the gesture console is for, but the app must stay installable on a
+         device without one (an Android TV, a Chromebook). -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen.multitouch" android:required="false" />
 
     <application
         android:label="@string/app_name"
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:supportsRtl="true"
+        android:resizeableActivity="true"
         android:theme="@style/Theme.WarcraftOpen">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

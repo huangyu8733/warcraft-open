@@ -18,6 +18,7 @@ import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
 import { uiThemeChoices } from "../data/uiTheme";
 import { applyVoiceOptions } from "../voice/control";
+import { applyGestureOptions } from "./gesture/profile";
 import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeInstall";
 import { showGlueDialog } from "./glueDialog";
 import { showHotkeyEditor } from "./hotkeyEditor";
@@ -114,7 +115,15 @@ export async function mountOptions(
   // per frame by the world overlays, so a bar changes colour as the pulldown is used — the
   // "Hotkeys:" row (issue #142), which the HUD's key handler asks before every keystroke — and
   // the two scroll sliders, which the camera asks every frame (render/scrollOptions.ts).
-  const applyGameplay = (opts: Options): void => { applyHealthBarOptions(opts); applyHotkeyOptions(opts); applyScrollOptions(opts); applyVoiceOptions(opts); };
+  const applyGameplay = (opts: Options): void => {
+    applyHealthBarOptions(opts);
+    applyHotkeyOptions(opts);
+    applyScrollOptions(opts);
+    applyVoiceOptions(opts);
+    // The gesture rows are on the HD Input panel; the classic screen applies the same snapshot
+    // whenever it commits so a value changed on the HD sheet cannot go stale in this session.
+    applyGestureOptions(opts);
+  };
 
   const num = (v: unknown, fallback: number): number => (typeof v === "number" ? v : fallback);
   const str = (v: unknown, fallback: string): string => (typeof v === "string" ? v : fallback);
