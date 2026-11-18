@@ -22,6 +22,7 @@
 // never-explored fog are hidden separately by the map viewer.
 
 import { FogState, type VisionMap } from "../sim/vision";
+import { isWebGL2 } from "./glContext";
 import { pipelineState } from "./glPipelineState";
 import { boundaryCorners, CELL, cornerHeight, type TerrainData } from "../world/terrain";
 import { FOG_OF_WAR } from "../data/gameplayConstants";
@@ -199,9 +200,10 @@ export class FogOverlay {
     }
     // Two triangles per cell, split on the SAME diagonal as the viewer's terrain
     // (BR–TL): faces [BL,BR,TL, BR,TR,TL]. Large maps overflow Uint16 vertex indices
-    // (257² = 66049 > 65535) → use OES_element_index_uint when available.
+    // (257² = 66049 > 65535) → use OES_element_index_uint when available — which is
+    // always on WebGL 2, where 32-bit indices are core and the extension is gone.
     const cells = (width - 1) * (height - 1);
-    const useUint32 = n > 65535 && !!gl.getExtension("OES_element_index_uint");
+    const useUint32 = n > 65535 && (isWebGL2(gl) || !!gl.getExtension("OES_element_index_uint"));
     const idx = useUint32 ? new Uint32Array(cells * 6) : new Uint16Array(cells * 6);
     this.indexType = useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     let k = 0;

@@ -15,6 +15,15 @@ attribute vec3 a_normal;
 attribute vec2 a_uv;
 attribute vec4 a_tangent;
 
+// OpenWar3: static doodad instancing. The same model drawn N times in one call carries its
+// matrix as four vertex attributes (one per column) instead of the u_instance uniform.
+#ifdef OW3_INSTANCED
+attribute vec4 a_instance0;
+attribute vec4 a_instance1;
+attribute vec4 a_instance2;
+attribute vec4 a_instance3;
+#endif
+
 varying vec2 v_uv;
 varying float v_layerAlpha;
 varying vec3 v_lightDir;
@@ -35,8 +44,11 @@ vec3 TBN(vec3 vector, vec3 tangent, vec3 binormal, vec3 normal) {
 }
 
 // OpenWar3 (issue #161): see sd.vert.ts — the instance's own matrix, identity unless this
-// instance is wearing a skeleton shared by a bucket of its own kind.
+// instance is wearing a skeleton shared by a bucket of its own kind. In the instanced variant
+// it is assembled per vertex instead (see a_instance0..3 above).
+#ifndef OW3_INSTANCED
 uniform mat4 u_instance;
+#endif
 
 void main() {
   vec3 position = a_position;
@@ -56,6 +68,12 @@ void main() {
       transformVertexGroupsHD(position, normal, tangent, binormal);
     #endif
   }
+
+  // OpenWar3: the instanced variant reads the matrix off the vertex stream; otherwise it is the
+  // issue #161 uniform, identity unless this instance wears a shared skeleton.
+#ifdef OW3_INSTANCED
+  mat4 u_instance = mat4(a_instance0, a_instance1, a_instance2, a_instance3);
+#endif
 
   // OpenWar3 (issue #161): identity unless this instance wears a shared skeleton, in which case
   // its bones are in its own space and this is what puts the body where it stands.

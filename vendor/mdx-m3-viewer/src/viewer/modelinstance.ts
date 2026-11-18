@@ -142,6 +142,13 @@ export default abstract class ModelInstance extends Node {
    */
   ow3TickHidden?(dt: number): void;
 
+  /**
+   * OpenWar3 (P2-2): implemented by the MDX handler — may this instance join an instanced
+   * static-doodad bucket, and what makes it draw-identical to the rest of one?
+   */
+  ow3InstancedStatic?(): boolean;
+  ow3InstKey?(): string;
+
   updateAnimations(_dt: number): void {
 
   }

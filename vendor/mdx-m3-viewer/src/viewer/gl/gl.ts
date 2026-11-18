@@ -13,17 +13,55 @@ export default class WebGL {
   currentShader: Shader | null = null;
   emptyTexture: WebGLTexture;
   extensions: {[key: string]: unknown } = {};
+  /**
+   * OpenWar3: was this context created as WebGL 2?
+   *
+   * The Reforged client asks for one (`src/render/glContext.ts` publishes `__OW3_GL2__` from
+   * the flavour; `?gl=1` forces WebGL 1). The classic client always asks for WebGL 1, so every
+   * branch on this flag is inert for it. `gl` keeps the WebGL 1 type: WebGL 2 is a superset of
+   * the calls the viewer makes, and the three extensions it dropped are shimmed below.
+   */
+  isWebGL2 = false;
+  /**
+   * OpenWar3: the wrap values last written to each texture object.
+   *
+   * `bindTextureAndWrap` is called six times per HD material and used to issue two
+   * `texParameteri` calls every time. Wrap is state of the TEXTURE OBJECT, not of the
+   * texture unit, so an unchanged pair can be skipped even though the texture is bound
+   * to a different unit. Kept here rather than on the texture so every caller benefits
+   * without a new API. `setTextureMode` clears it: that is the one other writer, and
+   * it binds a texture the caller owns.
+   */
+  private wrapCache = new Map<WebGLTexture, { s: number, t: number }>();
 
   constructor(canvas: HTMLCanvasElement, options: WebGLContextAttributes = { alpha: false }) {
-    let gl = canvas.getContext('webgl', options);
+    let gl: WebGLRenderingContext | null = null;
+    const flags = <{ __OW3_GL2__?: boolean }><unknown>globalThis;
+
+    // The Reforged client asks first, and falls back rather than showing a black canvas:
+    // a driver without WebGL 2 is exactly the case this branch exists for.
+    if (flags.__OW3_GL2__ === true) {
+      gl = <WebGLRenderingContext | null><unknown>canvas.getContext('webgl2', options);
+
+      if (!gl) {
+        console.warn('WebGL: WebGL 2 is unavailable here — falling back to WebGL 1.');
+        flags.__OW3_GL2__ = false;
+      }
+    }
 
     if (!gl) {
-      gl = <WebGLRenderingContext | null>canvas.getContext('experimental-webgl', options);
+      gl = canvas.getContext('webgl', options);
+
+      if (!gl) {
+        gl = <WebGLRenderingContext | null>canvas.getContext('experimental-webgl', options);
+      }
     }
 
     if (!gl) {
       throw new Error('WebGL: Failed to create a WebGL context!');
     }
+
+    this.isWebGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
 
     const twoByTwo = new Uint8ClampedArray(16).fill(255);
 
@@ -43,9 +81,18 @@ export default class WebGL {
    * Ensures that an extension is available.
    * 
    * If it is, it will be added to `extensions`.
+   *
+   * OpenWar3: on WebGL 2, three of the names this viewer asks for are CORE there and
+   * `getExtension` returns null for them — instanced arrays, vertex array objects and float
+   * textures. `coreExtension` hands back the same shape on top of the core calls, so the
+   * handlers that read `webgl.extensions[...]` do not need to know which context they are on.
    */
   ensureExtension(name: string): boolean {
-    const ext = this.gl.getExtension(name);
+    if (this.extensions[name] !== undefined) {
+      return true;
+    }
+
+    const ext = this.gl.getExtension(name) || this.coreExtension(name);
 
     if (ext) {
       this.extensions[name] = ext;
@@ -54,6 +101,48 @@ export default class WebGL {
     }
 
     return false;
+  }
+
+  /**
+   * OpenWar3: WebGL 1 shaped stand-ins for the extensions WebGL 2 made core.
+   *
+   * Only called when `getExtension` found nothing, and only answers on a WebGL 2 context.
+   */
+  private coreExtension(name: string): unknown | null {
+    if (!this.isWebGL2) {
+      return null;
+    }
+
+    const gl = this.gl as unknown as WebGL2RenderingContext;
+
+    switch (name) {
+      // Float textures are core in WebGL 2 (sized internal formats, see DataTexture).
+      // Presence is all any caller reads; linear filtering still needs its own extension,
+      // and nothing here filters a float texture.
+      case 'OES_texture_float':
+        return {};
+      case 'ANGLE_instanced_arrays':
+        return {
+          drawArraysInstancedANGLE: (mode: number, first: number, count: number, primcount: number): void => {
+            gl.drawArraysInstanced(mode, first, count, primcount);
+          },
+          drawElementsInstancedANGLE: (mode: number, count: number, type: number, offset: number, primcount: number): void => {
+            gl.drawElementsInstanced(mode, count, type, offset, primcount);
+          },
+          vertexAttribDivisorANGLE: (index: number, divisor: number): void => {
+            gl.vertexAttribDivisor(index, divisor);
+          },
+        };
+      case 'OES_vertex_array_object':
+        return {
+          createVertexArrayOES: (): WebGLVertexArrayObject | null => gl.createVertexArray(),
+          bindVertexArrayOES: (vao: WebGLVertexArrayObject | null): void => gl.bindVertexArray(vao),
+          deleteVertexArrayOES: (vao: WebGLVertexArrayObject | null): void => gl.deleteVertexArray(vao),
+          isVertexArrayOES: (vao: WebGLVertexArrayObject | null): boolean => gl.isVertexArray(vao),
+        };
+      default:
+        return null;
+    }
   }
 
   createShader(vertexSource: string, fragmentSource: string): Shader {
@@ -160,15 +249,30 @@ export default class WebGL {
 
     gl.activeTexture(gl.TEXTURE0 + unit);
 
+    let resource: WebGLTexture | null;
+
     if (texture) {
-      gl.bindTexture(gl.TEXTURE_2D, texture.webglResource);
+      resource = texture.webglResource;
+      gl.bindTexture(gl.TEXTURE_2D, resource);
     } else {
       // Bind an empty texture in case an invalid one was given, to avoid WebGL errors.
-      gl.bindTexture(gl.TEXTURE_2D, this.emptyTexture);
+      resource = this.emptyTexture;
+      gl.bindTexture(gl.TEXTURE_2D, resource);
+    }
+
+    if (!resource) {
+      return;
+    }
+
+    const cached = this.wrapCache.get(resource);
+
+    if (cached && cached.s === wrapS && cached.t === wrapT) {
+      return;
     }
 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapS);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrapT);
+    this.wrapCache.set(resource, { s: wrapS, t: wrapT });
   }
 
   /**
@@ -176,6 +280,10 @@ export default class WebGL {
    */
   setTextureMode(wrapS: number, wrapT: number, magFilter: number, minFilter: number): void {
     const gl = this.gl;
+
+    // The texture currently bound here is not necessarily one `bindTextureAndWrap`
+    // knows about, and its wrap is being overwritten — drop what the cache believes.
+    this.wrapCache.clear();
 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapS);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrapT);

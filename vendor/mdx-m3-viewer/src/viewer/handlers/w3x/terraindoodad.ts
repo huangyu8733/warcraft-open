@@ -20,6 +20,9 @@ export default class TerrainDoodad {
     const centeroffset = map.centerOffset;
     const instance = model.addInstance();
 
+    // OpenWar3 (P2-2): see Doodad — a static terrain doodad may join an instanced bucket.
+    instance.ow3StaticDoodad = true;
+
     locationHeap[0] = doodad.location[0] * 128 + centeroffset[0] + 128;
     locationHeap[1] = doodad.location[1] * 128 + centeroffset[1] + 128;
 

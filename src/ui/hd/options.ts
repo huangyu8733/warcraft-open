@@ -17,7 +17,7 @@ import { OW3_STRINGS } from "../../overrides";
 import {
   OPTION_DEFS, defaultOptions, loadOptions, saveOptions, applyAudioOptions, type Options, type OptionDef,
 } from "../../data/options";
-import { applyVideoOptions, LOW_PERF_FORCED } from "../../render/videoQuality";
+import { applyVideoOptions, effectiveAntialias, LOW_PERF_FORCED } from "../../render/videoQuality";
 import { applyHealthBarOptions } from "../../render/worldOverlays";
 import { applyHotkeyOptions } from "../../data/hotkeys";
 import { applyScrollOptions } from "../../render/scrollOptions";
@@ -299,6 +299,8 @@ export async function mountHdOptions(
   /** One repaint per row, so Reset can put every control back to the default without rebuilding
    *  the screen (the row closures own the control they draw). */
   const refreshers = new Map<string, () => void>();
+  /** The checkbox rows, so Low Performance Mode can paint the one it forces (Anti-Aliasing). */
+  const switches = new Map<string, { toggle: HTMLButtonElement; paint: (on: boolean) => void }>();
   const panels = new Map<PanelName, HTMLElement>();
   /** Subscriptions the sheet owns (the gamepad watch); released with the screen. */
   const cleanups: Array<() => void> = [];
@@ -356,7 +358,7 @@ export async function mountHdOptions(
   function commitSave(): void {
     saveOptions(working);
     if (working.language !== committed.language) setLocale(working.language as Locale);
-    if (working.antialiasing !== committed.antialiasing || working.language !== committed.language) {
+    if (effectiveAntialias(working) !== effectiveAntialias(committed) || working.language !== committed.language) {
       askReload();
       return;
     }
@@ -471,6 +473,7 @@ export async function mountHdOptions(
       };
       const vsyncLocked = d.key === "vsync" && shellVsync === null;
       paint(vsyncLocked ? true : working[d.key] === true);
+      switches.set(d.key, { toggle, paint });
       refreshers.set(d.key, () => paint(vsyncLocked ? true : working[d.key] === true));
       if (vsyncLocked || locked) {
         toggle.disabled = true;
@@ -761,7 +764,8 @@ export async function mountHdOptions(
   }
 
   /** While "Low Performance Mode" is on, the rungs under it are dead and read the forced value —
-   *  the same contract the FDF panel keeps (`syncVideoRows` in ui/fdfOptions.ts). */
+   *  the same contract the FDF panel keeps (`syncVideoRows` in ui/fdfOptions.ts). Anti-Aliasing
+   *  is the one CHECKBOX in that set; the table cannot paint it, so it is handled here. */
   function syncVideoRows(): void {
     const on = working.lowPerf === true;
     for (const d of OPTION_DEFS) {
@@ -771,6 +775,13 @@ export async function mountHdOptions(
       if (!picker) continue;
       picker.setDisabled(on);
       picker.setValue(on ? forced : String(working[d.key]));
+    }
+    // This screen is the HD client, so the mode does force MSAA off (effectiveAntialias).
+    const aa = switches.get("antialiasing");
+    if (aa) {
+      aa.toggle.disabled = on;
+      aa.toggle.title = on ? t("hd.notApplied") : "";
+      aa.paint(on ? false : working.antialiasing === true);
     }
   }
 

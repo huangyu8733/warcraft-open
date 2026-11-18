@@ -1,10 +1,11 @@
 import Scene from '../../scene';
+import Shader from '../../gl/shader';
 import Texture from '../../texture';
 import MdxModel from './model';
 import MdxModelInstance from './modelinstance';
 import Material, { HdSlot } from './material';
 import Layer from './layer';
-import mdxHandler, { MdxHandlerObject } from './handler';
+import mdxHandler, { MdxHandlerObject, hdLiteEnabled } from './handler';
 import { SkinningType } from './batch';
 
 // OpenWar3 (issue #161): what `u_instance` says when the bones are already world space.
@@ -19,43 +20,31 @@ export default class BatchGroup {
   isHd: boolean;
   objects: number[] = [];
 
+  // OpenWar3 (P2-2): the per-instance matrix buffer `renderInstanced` uploads into.
+  private ow3MatrixBuffer: WebGLBuffer | null = null;
+  private ow3MatrixData = new Float32Array(0);
+
   constructor(model: MdxModel, skinningType: SkinningType, isHd: boolean) {
     this.model = model;
     this.skinningType = skinningType;
     this.isHd = isHd;
   }
 
-  render(instance: MdxModelInstance): void {
-    const scene = <Scene>instance.scene;
-    const camera = scene.camera;
-    const textureOverrides = instance.textureOverrides;
-    const layerAlphas = instance.layerAlphas;
-    const model = this.model;
-    const textures = model.textures;
-    const batches = model.batches;
-    const viewer = model.viewer;
-    const mdxCache = <MdxHandlerObject>viewer.sharedCache.get('mdx');
+  /**
+   * OpenWar3: the SCENE's uniforms — camera, lights, fog, boundary mask — for this program.
+   *
+   * Pulled out of `render()` so the instanced path (`renderInstanced`, P2-2) writes exactly the
+   * same values once per (shader, scene, frame). A uniform lives on the PROGRAM, so writing it
+   * once instead of per instance leaves the GPU state identical; the stamp carries the scene as
+   * well as the frame because one viewer draws several (the glue screens have four).
+   */
+  private bindSceneUniforms(shader: Shader, scene: Scene): void {
+    const viewer = this.model.viewer;
     const gl = viewer.gl;
-    const webgl = viewer.webgl;
-    const skinningType = this.skinningType;
-    const isHd = this.isHd;
-    const teamColors = mdxCache.teamColors;
-    const teamGlows = mdxCache.teamGlows;
-    const shader = mdxHandler.getBatchShader(viewer, skinningType, isHd);
-
-    shader.use();
-
+    const camera = scene.camera;
     const uniforms = shader.uniforms;
+    const isHd = this.isHd;
 
-    // OpenWar3: everything from here to the end of this block belongs to the SCENE and not
-    // to the instance -- the camera, the scene's lights, its fog, its boundary mask. It was
-    // being re-uploaded for every instance of every batch group, which in a match is ~20
-    // redundant GL calls a time and several thousand a frame; a uniform lives on the PROGRAM,
-    // so writing it once per (shader, scene, frame) leaves exactly the same values in place.
-    // The stamp carries the SCENE as well as the frame because one viewer draws several
-    // (the glue screens have four), and `viewer.frame` advances in `update()`, which every
-    // render path calls first. `ow3HoistUniforms = false` turns it off so the saving can be
-    // measured in a real match, the way TerrainCull.enabled and SightStamps.enabled are.
     if (shader.ow3Scene !== scene || shader.ow3Frame !== viewer.frame || viewer.ow3HoistUniforms === false) {
       shader.ow3Scene = scene;
       shader.ow3Frame = viewer.frame;
@@ -147,7 +136,35 @@ export default class BatchGroup {
         gl.uniformMatrix4fv(uniforms['u_MV'], false, camera.viewMatrix);
         gl.uniform3fv(uniforms['u_eyePos'], camera.location);
       }
-    } // ---- end of the once-per-(shader, scene, frame) block -------------------------
+    }
+  }
+
+  render(instance: MdxModelInstance): void {
+    const scene = <Scene>instance.scene;
+    const textureOverrides = instance.textureOverrides;
+    const layerAlphas = instance.layerAlphas;
+    const model = this.model;
+    const textures = model.textures;
+    const batches = model.batches;
+    const viewer = model.viewer;
+    const mdxCache = <MdxHandlerObject>viewer.sharedCache.get('mdx');
+    const gl = viewer.gl;
+    const webgl = viewer.webgl;
+    const skinningType = this.skinningType;
+    const isHd = this.isHd;
+    const teamColors = mdxCache.teamColors;
+    const teamGlows = mdxCache.teamGlows;
+    const shader = mdxHandler.getBatchShader(viewer, skinningType, isHd);
+    // OpenWar3: HD-lite (Low Performance Mode) binds three maps instead of six -- the shader
+    // has no normal / emissive / environment sampler, and a unit whose program does not declare
+    // the sampler costs nothing to leave unbound (only ACTIVE samplers are validated at draw).
+    const lite = isHd && hdLiteEnabled();
+
+    shader.use();
+
+    const uniforms = shader.uniforms;
+
+    this.bindSceneUniforms(shader, scene);
 
     // ---- and from here it is the INSTANCE's ------------------------------------------
     // OpenWar3 (issue #161): in Low Performance Mode an instance may be wearing a skeleton a
@@ -257,11 +274,14 @@ export default class BatchGroup {
           const actualEnvironmentMapTexture = textureOverrides.get(environmentMapId) || environmentMapTexture.texture;
 
           webgl.bindTextureAndWrap(actualDiffuseTexture, 0, diffuseTexture.wrapS, diffuseTexture.wrapT);
-          webgl.bindTextureAndWrap(actualNormalsTexture, 1, normalsTexture.wrapS, normalsTexture.wrapT);
           webgl.bindTextureAndWrap(actualOrmTexture, 2, ormTexture.wrapS, ormTexture.wrapT);
-          webgl.bindTextureAndWrap(actualEmissiveTexture, 3, emissiveTexture.wrapS, emissiveTexture.wrapT);
           webgl.bindTextureAndWrap(actualTeamColorTexture, 4, teamColorTexture.wrapS, teamColorTexture.wrapT);
-          webgl.bindTextureAndWrap(actualEnvironmentMapTexture, 5, environmentMapTexture.wrapS, environmentMapTexture.wrapT);
+
+          if (!lite) {
+            webgl.bindTextureAndWrap(actualNormalsTexture, 1, normalsTexture.wrapS, normalsTexture.wrapT);
+            webgl.bindTextureAndWrap(actualEmissiveTexture, 3, emissiveTexture.wrapS, emissiveTexture.wrapT);
+            webgl.bindTextureAndWrap(actualEnvironmentMapTexture, 5, environmentMapTexture.wrapS, environmentMapTexture.wrapT);
+          }
 
           geoset.bindHd(shader, batch.skinningType, diffuseLayer.coordId);
           geoset.render();
@@ -341,6 +361,179 @@ export default class BatchGroup {
           geoset.render();
         }
       }
+    }
+  }
+
+  /**
+   * OpenWar3 (P2-2): draw this group once for a whole bucket of static doodads.
+   *
+   * Every instance in `instances` is the same MODEL and wears a shared skeleton whose bones are
+   * in INSTANCE space (`ow3SharedTexture`), so only one world matrix differs per instance. The
+   * caller (`Scene.renderOpaque`) has also bucketed by `ow3InstKey`, which means the six maps,
+   * the team colour and the layer alphas resolve identically — the material state below is
+   * therefore written once and the geometry drawn `instances.length` times.
+   *
+   * The matrix rides four `vec4` vertex attributes with a divisor of 1 (see the OW3_INSTANCED
+   * variant of hd.vert.ts). Attribute divisor state is GLOBAL, so it is put back to 0 and the
+   * four arrays are disabled before returning.
+   */
+  renderInstanced(instances: MdxModelInstance[]): void {
+    const count = instances.length;
+
+    if (!this.isHd || count === 0) {
+      return;
+    }
+
+    const model = this.model;
+    const viewer = model.viewer;
+    const webgl = viewer.webgl;
+    const gl = viewer.gl;
+    const instancedArrays = <ANGLE_instanced_arrays>webgl.extensions['ANGLE_instanced_arrays'];
+    const scene = <Scene>instances[0].scene;
+    const textures = model.textures;
+    const batches = model.batches;
+    const skinningType = this.skinningType;
+    const teamColors = (<MdxHandlerObject>viewer.sharedCache.get('mdx')).teamColors;
+    const shader = mdxHandler.getBatchShader(viewer, skinningType, true, true);
+    const uniforms = shader.uniforms;
+    const attribs = shader.attribs;
+    const lite = hdLiteEnabled();
+    // Scene only buckets instances whose ow3InstancedStatic() is true, which requires this.
+    const boneTexture = instances[0].ow3SharedTexture;
+    const reference = instances[0];
+    const textureOverrides = reference.textureOverrides;
+    const layerAlphas = reference.layerAlphas;
+
+    if (!instancedArrays) {
+      return;
+    }
+
+    shader.use();
+    this.bindSceneUniforms(shader, scene);
+
+    if (boneTexture) {
+      boneTexture.bind(15);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1f(uniforms['u_hasBones'], 1);
+      gl.uniform1i(uniforms['u_boneMap'], 15);
+      gl.uniform1f(uniforms['u_vectorSize'], 1 / boneTexture.width);
+      gl.uniform1f(uniforms['u_rowSize'], 1);
+    } else {
+      gl.uniform1f(uniforms['u_hasBones'], 0);
+    }
+
+    // One world matrix per instance, in bucket order.
+    let data = this.ow3MatrixData;
+
+    if (data.length < count * 16) {
+      data = this.ow3MatrixData = new Float32Array(count * 16);
+    }
+
+    for (let i = 0; i < count; i++) {
+      data.set(<Float32Array>instances[i].worldMatrix, i * 16);
+    }
+
+    if (this.ow3MatrixBuffer === null) {
+      this.ow3MatrixBuffer = <WebGLBuffer>gl.createBuffer();
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.ow3MatrixBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, count * 16), gl.DYNAMIC_DRAW);
+
+    const locations: number[] = [];
+
+    for (let i = 0; i < 4; i++) {
+      const location = attribs['a_instance' + i];
+
+      if (location === undefined) {
+        continue;
+      }
+
+      locations.push(location);
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribPointer(location, 4, gl.FLOAT, false, 64, i * 16);
+      instancedArrays.vertexAttribDivisorANGLE(location, 1);
+    }
+
+    // `geoset.bindHd` points the geometry attribs at whatever ARRAY_BUFFER is bound, so the
+    // model's buffer has to come back after the matrix buffer above.
+    gl.bindBuffer(gl.ARRAY_BUFFER, model.arrayBuffer);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.elementBuffer);
+
+    gl.enable(gl.DEPTH_TEST);
+
+    for (const index of this.objects) {
+      const batch = batches[index];
+      const geoset = batch.geoset;
+      const material = <Material>batch.material;
+
+      material.layers[0].bind(shader, 1);
+
+      const hdLayers = material.hdSlots || material.layers;
+      const [diffuseLayer, normalsLayer, ormLayer, emissiveLayer, teamColorLayer, environmentMapLayer] = hdLayers;
+      const layerAlpha = layerAlphas[diffuseLayer.index];
+
+      if (layerAlpha <= 0) {
+        continue;
+      }
+
+      gl.uniform1f(uniforms['u_layerAlpha'], layerAlpha);
+      gl.uniform1f(uniforms['u_filterMode'], diffuseLayer.filterMode);
+
+      const diffuseId = diffuseLayer.textureId;
+      const normalsId = normalsLayer?.textureId;
+      const ormId = ormLayer?.textureId;
+      const emissiveId = emissiveLayer?.textureId;
+      const teamColorId = teamColorLayer?.textureId;
+      const environmentMapId = environmentMapLayer?.textureId;
+      const anyTexture = textures.find(Boolean);
+      const diffuseTexture = textures[diffuseId] || anyTexture;
+
+      if (!diffuseTexture) {
+        continue; // a material with no texture at all cannot be drawn
+      }
+
+      const normalsTexture = textures[normalsId] || diffuseTexture;
+      const ormTexture = textures[ormId] || diffuseTexture;
+      const emissiveTexture = textures[emissiveId] || diffuseTexture;
+      let teamColorTexture = textures[teamColorId] || diffuseTexture;
+      const environmentMapTexture = textures[environmentMapId] || diffuseTexture;
+
+      const authored = (layer: Layer | HdSlot | undefined, texture: Texture | null | undefined): boolean => !!layer && (layer as HdSlot).synthetic !== true && !!texture && texture !== diffuseTexture.texture;
+
+      gl.uniform1f(uniforms['u_hasNormals'], authored(normalsLayer, normalsTexture.texture) ? 1 : 0);
+      gl.uniform1f(uniforms['u_hasOrm'], authored(ormLayer, ormTexture.texture) ? 1 : 0);
+
+      const teamSwatch = teamColors[reference.teamColor] || teamColors[0];
+
+      if (teamSwatch && (teamColorTexture.replaceableId === 0 || teamColorTexture.replaceableId === 1)) {
+        teamColorTexture = teamSwatch;
+      }
+
+      const actualDiffuseTexture = textureOverrides.get(diffuseId) || diffuseTexture.texture;
+      const actualNormalsTexture = textureOverrides.get(normalsId) || normalsTexture.texture;
+      const actualOrmTexture = textureOverrides.get(ormId) || ormTexture.texture;
+      const actualEmissiveTexture = textureOverrides.get(emissiveId) || emissiveTexture.texture;
+      const actualTeamColorTexture = textureOverrides.get(teamColorId) || teamColorTexture.texture;
+      const actualEnvironmentMapTexture = textureOverrides.get(environmentMapId) || environmentMapTexture.texture;
+
+      webgl.bindTextureAndWrap(actualDiffuseTexture, 0, diffuseTexture.wrapS, diffuseTexture.wrapT);
+      webgl.bindTextureAndWrap(actualOrmTexture, 2, ormTexture.wrapS, ormTexture.wrapT);
+      webgl.bindTextureAndWrap(actualTeamColorTexture, 4, teamColorTexture.wrapS, teamColorTexture.wrapT);
+
+      if (!lite) {
+        webgl.bindTextureAndWrap(actualNormalsTexture, 1, normalsTexture.wrapS, normalsTexture.wrapT);
+        webgl.bindTextureAndWrap(actualEmissiveTexture, 3, emissiveTexture.wrapS, emissiveTexture.wrapT);
+        webgl.bindTextureAndWrap(actualEnvironmentMapTexture, 5, environmentMapTexture.wrapS, environmentMapTexture.wrapT);
+      }
+
+      geoset.bindHd(shader, batch.skinningType, diffuseLayer.coordId);
+      geoset.renderInstanced(count);
+    }
+
+    for (const location of locations) {
+      instancedArrays.vertexAttribDivisorANGLE(location, 0);
+      gl.disableVertexAttribArray(location);
     }
   }
 }

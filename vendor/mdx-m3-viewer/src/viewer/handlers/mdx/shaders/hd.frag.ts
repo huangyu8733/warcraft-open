@@ -319,6 +319,30 @@ void lambert() {
   gl_FragColor = vec4(color, baseColor.a * v_layerAlpha);
 }
 
+// OpenWar3: HD-lite, Low Performance Mode's fragment path (__OW3_VIDEO__.hdLite). The same
+// surface minus the two maps and the lobe a weak GPU most feels: the normal map, the emissive
+// map and the GGX specular. ORM is KEPT -- its alpha is the team-colour factor, so dropping the
+// sample would untint every unit (and its red channel is the AO that keeps the day/night ramp
+// from flattening the model). Reads exactly like lambert() with "no normal map", which is the
+// branch the stock shader already draws for models that ship none.
+void lambertLite() {
+  vec4 baseColor = getDiffuseColor();
+  vec4 orm = getOrmColor();
+  vec3 tc = getTeamColor();
+  float aoFactor = orm.r > 0.0 ? orm.r : 1.0;
+  float tcFactor = orm.a;
+  float lambertFactor = clamp(normalize(v_lightDir).z, 0.0, 1.0);
+  vec3 color = baseColor.rgb;
+
+  if (tcFactor > 0.1) {
+    color *= tc * tcFactor;
+  }
+
+  color *= clamp(lambertFactor * aoFactor + 0.1, 0.0, 1.0);
+
+  gl_FragColor = vec4(color, baseColor.a * v_layerAlpha);
+}
+
 void main() {
   #if defined(ONLY_DIFFUSE)
   onlyDiffuse();
@@ -341,7 +365,11 @@ void main() {
   #elif defined(ONLY_TANGENTS)
   onlyTangents();
   #else
+  #if defined(OW3_LITE)
+  lambertLite();
+  #else
   lambert();
+  #endif
   #endif
 }
 `;

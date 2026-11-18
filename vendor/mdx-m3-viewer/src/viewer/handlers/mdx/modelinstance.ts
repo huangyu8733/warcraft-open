@@ -56,6 +56,9 @@ declare global {
     poseBucket?: number;
     noOwnClockShare?: boolean;
     noBillboardShare?: boolean;
+    hdLite?: boolean;
+    /** OpenWar3 (P2-2): set false to draw static doodads the old way, one draw per instance. */
+    instanceDoodads?: boolean;
   } | undefined;
 }
 
@@ -220,6 +223,95 @@ function ow3Shareable(model: MdxModel): boolean {
  * instead — see `ow3FixBillboards` — which costs the handful of nodes in those subtrees and a
  * bone texture of this instance's own, and still skips the whole sampling-and-composing walk.
  */
+// OpenWar3 (P2-2): stable numeric ids for texture OBJECTS, so a bucket key can say "every
+// instance here resolves this slot to the very same texture" without a hash of pixels.
+const ow3TextureIds = new WeakMap<Texture, number>();
+let ow3TextureIdNext = 1;
+
+function ow3TextureId(texture: Texture): number {
+  let id = ow3TextureIds.get(texture);
+
+  if (id === undefined) {
+    id = ow3TextureIdNext++;
+    ow3TextureIds.set(texture, id);
+  }
+
+  return id;
+}
+
+/**
+ * OpenWar3 (P2-2): does this sequence leave every node where the file put it?
+ *
+ * Trees, rocks and most decoration have a Stand sequence with no translation/rotation/scale
+ * tracks at all, so all instances of the model hold the same pose and only their world matrix
+ * differs. Cached per model: the answer is a property of the MDX data.
+ */
+function ow3StaticSequence(model: MdxModel, sequence: number): boolean {
+  let cache = model.ow3StaticSequences;
+
+  if (cache === undefined) {
+    cache = model.ow3StaticSequences = new Map();
+  }
+
+  let isStatic = cache.get(sequence);
+
+  if (isStatic === undefined) {
+    isStatic = true;
+
+    for (const object of model.sortedGenericObjects) {
+      const variants = object.variants;
+
+      if (variants['translation'][sequence] || variants['rotation'][sequence] || variants['scale'][sequence]) {
+        isStatic = false;
+        break;
+      }
+    }
+
+    cache.set(sequence, isStatic);
+  }
+
+  return isStatic;
+}
+
+/**
+ * OpenWar3 (P2-2): may this instance join a shared-skeleton doodad bucket?
+ *
+ * What has to differ between instances — a parent, a fade, a billboarded or dontInherit node,
+ * an animated layer/geoset — says no here and keeps the ordinary per-instance path. An animated
+ * Stand clip is FINE: its pose is shared per time bucket (ow3DoodadPoseFor), which is the same
+ * ~33 ms stepping Low Performance Mode already uses. WebGL 2 is required for the instanced draw.
+ */
+function ow3StaticDoodadShare(instance: MdxModelInstance, sequence: number): boolean {
+  const model = <MdxModel>instance.model;
+  const v = globalThis.__OW3_VIDEO__;
+
+  if (instance.ow3StaticDoodad !== true) {
+    return false;
+  }
+
+  if (v !== undefined && v.instanceDoodads === false) {
+    return false;
+  }
+
+  if (instance.parent !== null) {
+    return false;
+  }
+
+  if (!model.viewer.webgl.isWebGL2 || !model.hd || model.bones.length === 0) {
+    return false;
+  }
+
+  if (model.hasLayerAnims || model.hasGeosetAnims) {
+    return false;
+  }
+
+  if (!ow3SkeletonShareable(model) || ow3Billboards(model) !== null) {
+    return false;
+  }
+
+  return true;
+}
+
 function ow3SkeletonShareable(model: MdxModel): boolean {
   // `__OW3_VIDEO__.noBillboardShare` shuts the billboarded models out again, so what handling
   // them per instance is WORTH can be measured in a real match rather than argued — the same
@@ -324,7 +416,7 @@ function ow3ObjectNodes(instance: MdxModelInstance): number[] {
  * half of `wasDirty` that belongs to the POSE (the rest — a dirty parent, billboarding — is
  * the instance's own and is ORed in by the caller).
  */
-function ow3PoseFor(model: MdxModel, sequence: number, frame: number): Ow3Pose {
+function ow3PoseFor(model: MdxModel, sequence: number, frame: number, staticPose = false): Ow3Pose {
   let cache = model.ow3PoseCache;
 
   if (cache === undefined) {
@@ -333,7 +425,9 @@ function ow3PoseFor(model: MdxModel, sequence: number, frame: number): Ow3Pose {
   }
 
   const span = ow3Bucket();
-  const bucket = Math.round(frame / span);
+  // OpenWar3 (P2-2): a static doodad's pose never changes, so it is keyed by the sequence alone
+  // — otherwise every 33 ms bucket would mint another identical pose AND another bone texture.
+  const bucket = staticPose ? 0 : Math.round(frame / span);
   const key = sequence * 1000000 + bucket;
   let pose = cache.get(key);
 
@@ -361,6 +455,57 @@ function ow3PoseFor(model: MdxModel, sequence: number, frame: number): Ow3Pose {
 
   return pose;
 }
+/**
+ * OpenWar3 (P2-2): the pose for an animated static doodad, refreshed IN PLACE as the time
+ * bucket rolls over.
+ *
+ * `ow3PoseFor` keys a pose by (sequence, bucket), which is right for units in Low Performance
+ * Mode but wrong for thousands of doodads: a 30 Hz clip would mint a new pose and a new bone
+ * texture every bucket, and the global cap would eventually drop them all. Doodads of one model
+ * are created together and their Stand clips advance in lockstep, so ONE pose per sequence is
+ * enough: when the bucket changes the existing pose is marked unfilled and the next instance
+ * re-samples it into the same bones/texture. Instances in another bucket simply compose for
+ * themselves that frame (and are grouped apart by `ow3InstKey`).
+ */
+function ow3DoodadPoseFor(model: MdxModel, sequence: number, frame: number, staticPose: boolean): Ow3Pose {
+  if (staticPose) {
+    // The clip has no tracks at all: one pose for the whole match.
+    return ow3PoseFor(model, sequence, frame, true);
+  }
+
+  const span = ow3Bucket();
+  const bucket = Math.round(frame / span);
+  let live = model.ow3DoodadPoses;
+
+  if (live === undefined) {
+    live = model.ow3DoodadPoses = new Map();
+  }
+
+  let entry = live.get(sequence);
+
+  if (entry === undefined) {
+    const nodes = model.sortedGenericObjects.length;
+    const pose: Ow3Pose = {
+      trs: new Float32Array(nodes * 10), dirty: new Uint8Array(nodes),
+      frame: bucket * span, filled: false,
+      bones: null, rot: null, scl: null, texture: null, skeleton: false,
+    };
+
+    entry = { pose, bucket };
+    live.set(sequence, entry);
+  } else if (bucket > entry.bucket) {
+    // Never roll BACKWARDS: an instance a few milliseconds behind the rest sharing the newer
+    // pose costs one bucket of animation, while rolling back would make the whole model
+    // re-compose every frame as the two groups fight over which bucket is current.
+    entry.bucket = bucket;
+    entry.pose.frame = bucket * span;
+    entry.pose.filled = false;
+    entry.pose.skeleton = false;
+  }
+
+  return entry.pose;
+}
+
 /** Drop every cached pose. Called when the cache has grown past its cap — the models whose
  *  poses are being asked for right now re-fill within a lap of their clips. */
 function ow3ClearPoses(current: MdxModel): void {
@@ -756,6 +901,9 @@ export default class MdxModelInstance extends ModelInstance {
   // OpenWar3 (issue #161): the shared pose this instance WORE on its last update, or null.
   ow3WornPose: Ow3Pose | null = null;
   ow3LocalPose = false;
+  // OpenWar3 (P2-2): set by the w3x handlers for a placed doodad — the only instances that may
+  // be drawn in an instanced bucket across the scene (see ow3InstancedStatic below).
+  ow3StaticDoodad = false;
   // OpenWar3: has anything moved since the bone texture was last uploaded? `updateNodes`
   // already decides this per node -- `wasDirty` is what tells it whether to recompute a
   // node's world matrix at all -- so the answer costs nothing to collect, and the world
@@ -1002,9 +1150,15 @@ export default class MdxModelInstance extends ModelInstance {
     // per instance, mixing in a snapshot only it has — and neither does a forced update,
     // which is the one pass that must write every node whatever the tracks say.
     let pose: Ow3Pose | null = null;
+    // OpenWar3 (P2-2): a static doodad shares its pose REGARDLESS of the animation quality —
+    // its Stand clip has no tracks, so there is nothing to quantize — and that pose is keyed
+    // by the sequence alone (see ow3PoseFor's `staticPose`).
+    const staticShare = ow3StaticDoodadShare(this, sequence);
 
-    if (!this.ow3PoseReset && !blending && sequence !== -1 && ow3SharePoses(model) && ow3Shareable(model)) {
-      pose = ow3PoseFor(model, sequence, frame);
+    if (!this.ow3PoseReset && !blending && (sequence !== -1 || staticShare) && (staticShare || ow3SharePoses(model)) && ow3Shareable(model)) {
+      pose = staticShare
+        ? ow3DoodadPoseFor(model, sequence, frame, ow3StaticSequence(model, sequence))
+        : ow3PoseFor(model, sequence, frame);
     }
 
     // OpenWar3 (issue #161): …and whether the COMPOSED skeleton is shared too, which is the
@@ -1395,6 +1549,65 @@ export default class MdxModelInstance extends ModelInstance {
     return this.vertexColor[3] < 1;
   }
 
+  /**
+   * OpenWar3 (P2-2): may `Scene.renderOpaque` put this instance in an instanced doodad bucket?
+   *
+   * True only once the instance is actually wearing a shared, INSTANCE-space skeleton (that is
+   * what makes a single bone texture and a per-instance world matrix sufficient), and only when
+   * nothing about it varies between instances. Debug render modes are excluded because they use
+   * their own programs, which know nothing about the per-vertex matrix.
+   */
+  override ow3InstancedStatic(): boolean {
+    if (this.ow3StaticDoodad !== true) {
+      return false;
+    }
+
+    if (this.parent !== null || this.scene === null) {
+      return false;
+    }
+
+    if (this.model.viewer.debugRenderMode !== 0 || this.isFaded()) {
+      return false;
+    }
+
+    if (this.ow3LocalPose !== true || this.ow3SharedTexture === null) {
+      return false;
+    }
+
+    return ow3StaticDoodadShare(this, this.sequence);
+  }
+
+  /**
+   * OpenWar3 (P2-2): what makes two instances of the same model draw-identical, apart from
+   * their world matrix — the textures their overrides resolve to, and their team colour.
+   *
+   * `Scene.renderOpaque` buckets on this so `BatchGroup.renderInstanced` can bind the six maps
+   * once. Instance ids come from a WeakMap, so two instances handed the SAME texture object (the
+   * way the map handler gives a whole row of trees one skin) share a key.
+   */
+  override ow3InstKey(): string {
+    const overrides = this.textureOverrides;
+    let key = '';
+
+    if (overrides.size) {
+      const parts: string[] = [];
+
+      overrides.forEach((texture, index) => {
+        parts.push(index + ':' + (texture ? ow3TextureId(texture) : 0));
+      });
+
+      parts.sort();
+      key = parts.join(',');
+    }
+
+    // The sequence is part of the key because the shared bone texture is minted per
+    // (model, sequence): two Stand variants hold different poses, and a bucket may only bind
+    // one. The TIME bucket is deliberately NOT part of it — `ow3DoodadPoseFor` refreshes one
+    // live texture per (model, sequence) in place, so every instance of that pair already wears
+    // the same texture; splitting by frame bucket would only shred the draw back into pieces.
+    return key + '|' + this.teamColor + '|' + this.sequence;
+  }
+
   override renderOpaque(): void {
     const model = <MdxModel>this.model;
 
@@ -1585,6 +1798,13 @@ export default class MdxModelInstance extends ModelInstance {
     }
 
     this.forced = false;
+
+    // OpenWar3 (P2-2): a doodad whose clip is absent (sequence -1) is otherwise updated only
+    // once, and that first forced pass runs while `ow3PoseReset` is still set — so it would
+    // never reach a shared skeleton. Keep it forced until one exists (at most a few passes).
+    if (this.ow3StaticDoodad && (this.ow3LocalPose !== true || this.ow3SharedTexture === null) && ow3StaticDoodadShare(this, sequenceId)) {
+      this.forced = true;
+    }
   }
 
   /**

@@ -1,4 +1,5 @@
 import { CELL, cornerHeight, type TerrainData } from "../world/terrain";
+import { isWebGL2 } from "./glContext";
 import { pipelineState } from "./glPipelineState";
 
 // WC3's STATIC shadow layer — `war3map.shd`, the other half of the game's shadow story.
@@ -129,12 +130,26 @@ export class TerrainShadowOverlay {
     // The mask as an ALPHA texture — the fragment shader wants coverage, and the RGB is
     // black by definition. LINEAR so a 4-per-cell mask reads as a soft edge rather than as
     // the staircase its resolution would otherwise give.
+    //
+    // WebGL 2 rejects the ALPHA internal format outright, so the Reforged context gets the
+    // same coverage in the alpha channel of an RGBA texture; the shader is unchanged.
     this.tex = gl.createTexture()!;
     const prevTex = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
     const prevAlign = gl.getParameter(gl.UNPACK_ALIGNMENT) as number;
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); // rows are w bytes, not 4-aligned
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, mask.w, mask.h, 0, gl.ALPHA, gl.UNSIGNED_BYTE, mask.data);
+
+    if (isWebGL2(gl)) {
+      const rgba = new Uint8Array(mask.w * mask.h * 4);
+
+      for (let i = 0; i < mask.data.length; i++) {
+        rgba[i * 4 + 3] = mask.data[i];
+      }
+
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, mask.w, mask.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, mask.w, mask.h, 0, gl.ALPHA, gl.UNSIGNED_BYTE, mask.data);
+    }
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);

@@ -16,6 +16,7 @@ import { MapTableSource } from "../vfs/mapTables";
 import { LayeredDataSource } from "../vfs/layered";
 import { hdTexturePaths, tilesetOverlay } from "../vfs/tileset";
 import { createAssetSolver, movedModelCandidates, type MapFileLayer, type Solver } from "./assetSolver";
+import { installMdxParseWorker } from "./mdxParse";
 import { SkyDome, skyModelPath, type SkyViewer } from "./sky";
 import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, playableRect, type TerrainData, type WorldRect } from "../world/terrain";
 import { brushPoints, parseCellRarity, pickCell } from "./terrainBrush";
@@ -2390,6 +2391,9 @@ export class MapViewerScene {
     // full rate: it has nothing to share with, and a 30 Hz pose on the menu read as judder. See
     // `ow3SharePoses` in the viewer patch.
     (viewer as unknown as { ow3SharePoses?: boolean }).ow3SharePoses = true;
+    // P2-3: the same viewer parses HD models in a Worker, so the first appearance of a unit or
+    // effect pays fetch + upload on this thread but not the MDX parse. SD keeps the stock path.
+    if (hd) installMdxParseWorker(viewer as unknown as { ow3ParseMdx?: (bytes: Uint8Array) => Promise<unknown | null> });
     viewer.on("error", (e) => console.error("[mapviewer]", e));
 
     // Blob-url lifetime. Every model/texture path resolves to one stable blob URL (the
@@ -4800,14 +4804,28 @@ export class MapViewerScene {
     // a texture a skinned unit asked for) must be in too, or it pops in once the match starts.
     await this.waitForLoader(() => this.viewer.promiseMap.size === 0, 20000, "the map's remaining art", () => {});
     const tSettle = performance.now();
+    // P1-4: the one program set this map will still compile on first use is the PORTRAIT
+    // viewer's — a second WebGL context with its own MDX handler, built lazily today inside
+    // `updatePortrait` between the click and the first drawn frame (measured 100–280 ms on a
+    // Reforged mount, and that number is mostly program links). The bust MODEL stays on demand
+    // there: HD deliberately does not warm 62 of them (see `warmPortraits`). The VIEWER is only
+    // a link pass, and building it with the bar still up moves that pass off the first click.
+    let bustPrograms = 0;
+    if (isHd() && this.hud) {
+      const t = performance.now();
+      this.portraitViewer ??= new ModelViewerScene(this.hud.portraitCanvas(), this.assetFiles());
+      bustPrograms = performance.now() - t;
+    }
+    const tPrograms = performance.now();
     onProgress(1);
     const warm = deferred.slice(0, isHd() ? DEFERRED_MODEL_BUDGET_HD : DEFERRED_MODEL_BUDGET);
     console.info(
       `[Warcraft Open] preloaded ${priorityModels.length} priority model(s) for ${defs.length} ` +
       `unit type(s) and ${sounds.clips} sound clip(s) (${sounds.held} held) in ` +
-      `${Math.round(tSettle - t0)}ms (drain ${Math.round(tDrain - t0)} / models ` +
+      `${Math.round(tPrograms - t0)}ms (drain ${Math.round(tDrain - t0)} / models ` +
       `${Math.round(tModels - tDrain)} / textures ${Math.round(tTail - tModels)} / sounds ` +
-      `${Math.round(tSounds - tTail)} / settle ${Math.round(tSettle - tSounds)}); ` +
+      `${Math.round(tSounds - tTail)} / settle ${Math.round(tSettle - tSounds)}` +
+      `${bustPrograms ? ` / bust programs ${Math.round(bustPrograms)}` : ""}); ` +
       `${deferred.length} future model(s) on demand, ${warm.length} warming in the background.`,
     );
     // The bar and the loading screen are done; fetch the next slice of future tech one model

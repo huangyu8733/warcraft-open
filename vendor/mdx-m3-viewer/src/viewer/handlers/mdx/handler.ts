@@ -35,6 +35,21 @@ export interface MdxHandlerObject {
   hdShader: Shader;
   hdExtendedShader: Shader;
   hdSkinShader: Shader;
+  /** OpenWar3: the same three with `#define OW3_LITE` — Low Performance Mode (`hdLiteEnabled`). */
+  hdLiteShader: Shader;
+  hdLiteExtendedShader: Shader;
+  hdLiteSkinShader: Shader;
+  /**
+   * OpenWar3 (P2-2): the same six HD programs with `#define OW3_INSTANCED`, for static doodads
+   * drawn from a per-vertex matrix. NULL on a WebGL 1 context — the instanced path never runs
+   * there, so the programs are not compiled.
+   */
+  hdInstancedShader: Shader | null;
+  hdInstancedExtendedShader: Shader | null;
+  hdInstancedSkinShader: Shader | null;
+  hdLiteInstancedShader: Shader | null;
+  hdLiteInstancedExtendedShader: Shader | null;
+  hdLiteInstancedSkinShader: Shader | null;
   particlesShader: Shader;
   sdDebugShaders: Shader[][];
   hdDebugShaders: Shader[][];
@@ -50,6 +65,19 @@ export interface MdxHandlerObject {
 
 const mappedDataCallback = (data: FetchDataType): MappedData => new MappedData(<string>data);
 const decodedDataCallback = (data: FetchDataType): Promise<AudioBuffer | undefined> => decodeAudioData(<ArrayBuffer>data);
+
+/**
+ * OpenWar3: is HD-lite on? (`__OW3_VIDEO__.hdLite`, set by src/render/videoQuality.ts.)
+ *
+ * Read per batch group rather than latched in `load()`, so ticking Low Performance Mode in the
+ * Options screen reaches the very next frame instead of the next map. Vendor code cannot import
+ * the game's modules; the global is the whole coupling, as with `textureMipDrop`.
+ */
+export function hdLiteEnabled(): boolean {
+  const v = globalThis.__OW3_VIDEO__;
+
+  return v !== undefined && v.hdLite === true;
+}
 
 export default {
   load(viewer: ModelViewer, pathSolver?: PathSolver, reforged = false): void {
@@ -91,6 +119,31 @@ export default {
     const hdShader = webgl.createShader(hdVert, hdFrag);
     const hdExtendedShader = webgl.createShader(hdExtendedVert, hdFrag);
     const hdSkinShader = webgl.createShader(hdSkinVert, hdFrag);
+    // HD-lite: the Low Performance Mode variants (see `hdLiteEnabled`). Compiled up front so
+    // ticking the box mid-match does not stall on a link.
+    const hdLiteShader = webgl.createShader(hdVert, '#define OW3_LITE\n' + hdFrag);
+    const hdLiteExtendedShader = webgl.createShader(hdExtendedVert, '#define OW3_LITE\n' + hdFrag);
+    const hdLiteSkinShader = webgl.createShader(hdSkinVert, '#define OW3_LITE\n' + hdFrag);
+
+    // OpenWar3 (P2-2): the instanced variants (see hd.vert.ts). Only a WebGL 2 context can feed
+    // a per-vertex matrix with `vertexAttribDivisor`, so on a WebGL 1 context — every classic
+    // client, and HD when `?gl=1` forced the fallback — they are simply absent.
+    let hdInstancedShader: Shader | null = null;
+    let hdInstancedExtendedShader: Shader | null = null;
+    let hdInstancedSkinShader: Shader | null = null;
+    let hdLiteInstancedShader: Shader | null = null;
+    let hdLiteInstancedExtendedShader: Shader | null = null;
+    let hdLiteInstancedSkinShader: Shader | null = null;
+
+    if (webgl.isWebGL2) {
+      hdInstancedShader = webgl.createShader('#define OW3_INSTANCED\n' + hdVert, hdFrag);
+      hdInstancedExtendedShader = webgl.createShader('#define OW3_INSTANCED\n' + hdExtendedVert, hdFrag);
+      hdInstancedSkinShader = webgl.createShader('#define OW3_INSTANCED\n' + hdSkinVert, hdFrag);
+      hdLiteInstancedShader = webgl.createShader('#define OW3_LITE\n#define OW3_INSTANCED\n' + hdVert, hdFrag);
+      hdLiteInstancedExtendedShader = webgl.createShader('#define OW3_LITE\n#define OW3_INSTANCED\n' + hdExtendedVert, hdFrag);
+      hdLiteInstancedSkinShader = webgl.createShader('#define OW3_LITE\n#define OW3_INSTANCED\n' + hdSkinVert, hdFrag);
+    }
+
     const particlesShader = webgl.createShader(particlesVert, particlesFrag);
 
     const sdDebugShaders: Shader[][] = [];
@@ -162,6 +215,15 @@ export default {
       hdShader,
       hdExtendedShader,
       hdSkinShader,
+      hdLiteShader,
+      hdLiteExtendedShader,
+      hdLiteSkinShader,
+      hdInstancedShader,
+      hdInstancedExtendedShader,
+      hdInstancedSkinShader,
+      hdLiteInstancedShader,
+      hdLiteInstancedExtendedShader,
+      hdLiteInstancedSkinShader,
       particlesShader,
       sdDebugShaders,
       hdDebugShaders,
@@ -378,11 +440,28 @@ export default {
 
     return;
   },
-  getBatchShader(viewer: ModelViewer, skinningType: SkinningType, isHd: boolean): Shader {
+  getBatchShader(viewer: ModelViewer, skinningType: SkinningType, isHd: boolean, instanced = false): Shader {
     const mdxCache = <MdxHandlerObject>viewer.sharedCache.get('mdx');
     const debugRenderMode = viewer.debugRenderMode;
 
     if (isHd) {
+      // OpenWar3 (P2-2): the instanced program, when one was compiled and debug views are off.
+      if (instanced && debugRenderMode === DebugRenderMode.None) {
+        let shader: Shader | null = null;
+
+        if (skinningType === SkinningType.Skin) {
+          shader = hdLiteEnabled() ? mdxCache.hdLiteInstancedSkinShader : mdxCache.hdInstancedSkinShader;
+        } else if (skinningType === SkinningType.VertexGroups) {
+          shader = hdLiteEnabled() ? mdxCache.hdLiteInstancedShader : mdxCache.hdInstancedShader;
+        } else {
+          shader = hdLiteEnabled() ? mdxCache.hdLiteInstancedExtendedShader : mdxCache.hdInstancedExtendedShader;
+        }
+
+        if (shader) {
+          return shader;
+        }
+      }
+
       if (debugRenderMode !== DebugRenderMode.None) {
         const shaders = mdxCache.hdDebugShaders[skinningType];
         if (shaders) {
@@ -394,11 +473,11 @@ export default {
       }
       
       if (skinningType === SkinningType.Skin) {
-        return mdxCache.hdSkinShader;
+        return hdLiteEnabled() ? mdxCache.hdLiteSkinShader : mdxCache.hdSkinShader;
       } else if (skinningType === SkinningType.VertexGroups) {
-        return mdxCache.hdShader;
+        return hdLiteEnabled() ? mdxCache.hdLiteShader : mdxCache.hdShader;
       } else {
-        return mdxCache.hdExtendedShader;
+        return hdLiteEnabled() ? mdxCache.hdLiteExtendedShader : mdxCache.hdExtendedShader;
       }
     } else {
       if (debugRenderMode !== DebugRenderMode.None) {

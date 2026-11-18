@@ -586,10 +586,28 @@ export default class War3MapViewerMap {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.faceBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint8Array([0, 1, 2, 1, 3, 2]), gl.STATIC_DRAW);
 
+    // OpenWar3: WebGL 2 has no float ALPHA / LUMINANCE_ALPHA internal formats. The shaders
+    // read `.a` for the height (and the ground shader `.r` for the un-cliffed one), so on a
+    // WebGL 2 context the same values go into an RGBA32F texture with the channels replicated
+    // exactly as those old formats sampled: ALPHA → (0,0,0,a), LUMINANCE_ALPHA → (l,l,l,a).
+    // Same texels, same arithmetic, no shader changes; classic WebGL 1 keeps the stock upload.
+    const gl2 = webgl.isWebGL2 ? <WebGL2RenderingContext><unknown>gl : null;
+
     this.cliffHeightMap = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.cliffHeightMap);
     webgl.setTextureMode(gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE, gl.NEAREST, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, columns, rows, 0, gl.ALPHA, gl.FLOAT, cliffHeights);
+
+    if (gl2) {
+      const texels = new Float32Array(columns * rows * 4);
+
+      for (let i = 0, l = columns * rows; i < l; i++) {
+        texels[i * 4 + 3] = cliffHeights[i];
+      }
+
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl2.RGBA32F, columns, rows, 0, gl.RGBA, gl.FLOAT, texels);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, columns, rows, 0, gl.ALPHA, gl.FLOAT, cliffHeights);
+    }
 
     // OpenWar3: the ground's height map carries TWO heights per corner. Alpha is where the
     // corner IS (ground + cliff layer + the ramp's half layer) and positions the mesh, as
@@ -611,12 +629,39 @@ export default class War3MapViewerMap {
     this.heightMap = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.heightMap);
     webgl.setTextureMode(gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE, gl.NEAREST, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE_ALPHA, columns, rows, 0, gl.LUMINANCE_ALPHA, gl.FLOAT, groundAndCornerHeights);
+
+    if (gl2) {
+      const texels = new Float32Array(columns * rows * 4);
+
+      for (let i = 0, l = columns * rows; i < l; i++) {
+        const ground = groundAndCornerHeights[i * 2];
+
+        texels[i * 4] = ground;
+        texels[i * 4 + 1] = ground;
+        texels[i * 4 + 2] = ground;
+        texels[i * 4 + 3] = groundAndCornerHeights[i * 2 + 1];
+      }
+
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl2.RGBA32F, columns, rows, 0, gl.RGBA, gl.FLOAT, texels);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE_ALPHA, columns, rows, 0, gl.LUMINANCE_ALPHA, gl.FLOAT, groundAndCornerHeights);
+    }
 
     this.waterHeightMap = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.waterHeightMap);
     webgl.setTextureMode(gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE, gl.NEAREST, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, columns, rows, 0, gl.ALPHA, gl.FLOAT, waterHeights);
+
+    if (gl2) {
+      const texels = new Float32Array(columns * rows * 4);
+
+      for (let i = 0, l = columns * rows; i < l; i++) {
+        texels[i * 4 + 3] = waterHeights[i];
+      }
+
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl2.RGBA32F, columns, rows, 0, gl.RGBA, gl.FLOAT, texels);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.ALPHA, columns, rows, 0, gl.ALPHA, gl.FLOAT, waterHeights);
+    }
 
     this.instanceBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);

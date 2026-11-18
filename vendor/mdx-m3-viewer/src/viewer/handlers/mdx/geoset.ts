@@ -119,4 +119,23 @@ export default class Geoset {
 
     gl.drawElements(this.faceType, this.elements, gl.UNSIGNED_SHORT, this.faceOffset);
   }
+
+  /**
+   * OpenWar3 (P2-2): the same geometry, drawn once for `count` instances.
+   *
+   * The per-instance matrix is a vertex attribute the caller has already pointed at its
+   * buffer with a divisor of 1 (see BatchGroup.renderInstanced); all this does is issue the
+   * instanced draw. `ANGLE_instanced_arrays` is shimmed onto the WebGL 2 core calls.
+   */
+  renderInstanced(count: number): void {
+    const viewer = this.model.viewer;
+    const gl = viewer.gl;
+    const instancedArrays = <ANGLE_instanced_arrays>viewer.webgl.extensions['ANGLE_instanced_arrays'];
+
+    if (!instancedArrays || count <= 0) {
+      return;
+    }
+
+    instancedArrays.drawElementsInstancedANGLE(this.faceType, this.elements, gl.UNSIGNED_SHORT, this.faceOffset, count);
+  }
 }

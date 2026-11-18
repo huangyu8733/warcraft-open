@@ -71,6 +71,7 @@ import { applyAudioOptions, loadOptions } from "./data/options";
 import { profilePlayerName } from "./data/profiles";
 import { applyVideoOptions, videoSettings } from "./render/videoQuality";
 import { applyContextQuality, installContextQuality } from "./render/contextQuality";
+import { installGlVersion } from "./render/glContext";
 import { applyHealthBarOptions } from "./render/worldOverlays";
 import { applyHotkeyOptions } from "./data/hotkeys";
 import { applyScrollOptions } from "./render/scrollOptions";
@@ -159,6 +160,9 @@ const ui = document.getElementById("ui") as HTMLElement;
 // miss everything that viewer had already loaded.
 const bootOptions = loadOptions();
 applyVideoOptions(bootOptions);
+// Which context version the flavour asks for, before the first canvas can create one:
+// Reforged → WebGL 2, classic → WebGL 1 (`?gl=1` forces WebGL 1). See render/glContext.ts.
+installGlVersion();
 applyContextQuality(videoSettings());
 installContextQuality();
 // The rest of the Reforged rows, before the first match or menu can read them: camera bounds,

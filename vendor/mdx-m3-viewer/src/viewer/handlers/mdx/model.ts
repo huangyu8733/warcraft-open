@@ -79,6 +79,14 @@ export default class MdxModel extends Model {
   ow3DontInherit?: boolean;
   ow3SkeletonShareable?: boolean;
   ow3Billboards?: Ow3BillboardPlan | null;
+  /** OpenWar3 (P2-2): per sequence, whether no node has a translation/rotation/scale track. */
+  ow3StaticSequences?: Map<number, boolean>;
+  /**
+   * OpenWar3 (P2-2): one refreshable pose per sequence for animated static doodads. Unlike
+   * `ow3PoseCache` these are NOT keyed by time bucket — the pose is updated in place when the
+   * bucket rolls over, so a 30 Hz clip does not mint (and leak) a bone texture per bucket.
+   */
+  ow3DoodadPoses?: Map<number, { pose: import('./modelinstance').Ow3Pose; bucket: number }>;
 
   constructor(bufferOrParser: ArrayBuffer | string | Parser, resourceData: HandlerResourceData) {
     super(resourceData);

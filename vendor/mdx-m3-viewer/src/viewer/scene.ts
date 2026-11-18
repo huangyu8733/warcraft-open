@@ -6,6 +6,28 @@ import Cell from './cell';
 import ModelInstance from './modelinstance';
 import EmittedObjectUpdater from './emittedobjectupdater';
 
+/**
+ * OpenWar3 (P2-2): do two instances resolve every layer to the same alpha? A static doodad
+ * normally has no KMTA tracks at all, so this is a handful of number comparisons; the check
+ * exists so an animated alpha can never be baked into a shared instanced draw.
+ */
+function ow3SameLayerAlphas(a: ModelInstance, b: ModelInstance): boolean {
+  const alphasA = (<{ layerAlphas?: number[] }><unknown>a).layerAlphas;
+  const alphasB = (<{ layerAlphas?: number[] }><unknown>b).layerAlphas;
+
+  if (alphasA === undefined || alphasB === undefined || alphasA.length !== alphasB.length) {
+    return false;
+  }
+
+  for (let i = 0, l = alphasA.length; i < l; i++) {
+    if (alphasA[i] !== alphasB[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 /** OpenWar3: one evaluation of a DNC (day/night cycle) light, the terms of WC3's
  *  fixed-function lighting. `null` on scenes with no cycle. */
 export interface SceneDayNightLight {
@@ -360,6 +382,72 @@ export default class Scene {
    */
   renderOpaque(): void {
     const instances = this.instances;
+
+    // OpenWar3 (P2-2): static doodads are drawn once per (model, textures, team colour) instead
+    // of once per instance. Only a WebGL 2 context carries the per-vertex matrix attribute; and
+    // anything that does not qualify — units, animated props, faded instances, layers with
+    // animation — takes the original per-instance path unchanged.
+    if (this.viewer.webgl.isWebGL2) {
+      let buckets: Map<ModelInstance['model'], Map<string, ModelInstance[]>> | null = null;
+
+      for (let i = 0, l = instances.length; i < l; i++) {
+        const instance = instances[i];
+        const instancedStatic = instance.ow3InstancedStatic;
+
+        if (instancedStatic && instancedStatic.call(instance)) {
+          if (buckets === null) {
+            buckets = new Map();
+          }
+
+          const model = instance.model;
+          let byKey = buckets.get(model);
+
+          if (byKey === undefined) {
+            byKey = new Map();
+            buckets.set(model, byKey);
+          }
+
+          const key = instance.ow3InstKey ? instance.ow3InstKey() : '';
+          let bucket = byKey.get(key);
+
+          if (bucket === undefined) {
+            bucket = [];
+            byKey.set(key, bucket);
+          } else if (!ow3SameLayerAlphas(bucket[0], instance)) {
+            // A layer alpha track (KMTA) makes two otherwise identical doodads draw
+            // differently, and the instanced pass writes the alpha once. Keep those apart.
+            instance.renderOpaque();
+            continue;
+          }
+
+          bucket.push(instance);
+        } else {
+          instance.renderOpaque();
+        }
+      }
+
+      if (buckets !== null) {
+        buckets.forEach((byKey) => {
+          byKey.forEach((bucket) => {
+            // The MDX model's render groups; typed loosely so this file need not import the
+            // handler (and the import cycle that would come with it).
+            const model = <any>bucket[0].model;
+
+            for (const group of <any[]>model.opaqueGroups) {
+              if (group.isHd) {
+                group.renderInstanced(bucket);
+              } else {
+                for (let i = 0, l = bucket.length; i < l; i++) {
+                  group.render(bucket[i]);
+                }
+              }
+            }
+          });
+        });
+      }
+
+      return;
+    }
 
     for (let i = 0, l = instances.length; i < l; i++) {
       instances[i].renderOpaque();

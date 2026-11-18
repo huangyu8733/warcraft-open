@@ -88,6 +88,16 @@ export default class ModelViewer extends EventEmitter {
    */
   ow3SharePoses?: boolean;
   /**
+   * OpenWar3 (P2-3): optional off-thread preparse for fetched MDX bytes.
+   *
+   * Called with every fetched `Uint8Array` right before the format is detected; an answer
+   * replaces the bytes as the handler source. The game installs a version that returns `null`
+   * for anything that is not an MDX, and returns an `MdlxModel` parser instance that a Worker
+   * parsed, so the main thread only builds the viewer-side model from already-parsed data.
+   * Undefined (or a `null` answer) keeps the stock path: parse synchronously on this thread.
+   */
+  ow3ParseMdx?: (bytes: Uint8Array) => Promise<unknown | null>;
+  /**
    * The number of visible cells on the current frame.
    */
   visibleCells = 0;
@@ -298,6 +308,16 @@ export default class ModelViewer extends EventEmitter {
         if (actualSrc) {
           if (actualSrc instanceof ArrayBuffer) {
             actualSrc = new Uint8Array(actualSrc);
+          }
+
+          // OpenWar3 (P2-3): let the game parse an MDX in a Worker before we look at the bytes.
+          // It answers `null` for everything else, so textures and sounds are unaffected.
+          if (this.ow3ParseMdx !== undefined && actualSrc instanceof Uint8Array) {
+            const parsed = await this.ow3ParseMdx(actualSrc);
+
+            if (parsed) {
+              actualSrc = parsed;
+            }
           }
 
           // If the source is an image source, load it directly.

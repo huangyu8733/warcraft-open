@@ -59,16 +59,17 @@
 .hd-official .PlayerLoadingWidget-Background{display:flex;position:absolute;width:325px;height:94px;margin-left:76px;border-image:url(Widgets/PlayerWidget/portrait_frame_normal_4k.png) 54 80 90 80 fill repeat round;border-image-width:27px 40px 45px 40px;z-index:-1}
 .hd-official .PlayerLoadingWidget-PlayerInfo{display:flex;height:90px;width:220px;flex-direction:row;align-items:center;justify-content:center;z-index:1;margin-left:8px}
 .hd-official .PlayerLoadingWidget-PlayerInfo .RankedBadge-Wrapper{position:absolute;right:0}
-.hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details{display:flex;flex-direction:column;height:100%;padding-top:14px;padding-left:6px;justify-content:flex-start}
+.hd-official .Player-Details-Wrapper{display:flex;height:100%;align-items:center}
+.hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details{display:flex;flex-direction:column;height:auto;padding-top:0;padding-left:6px;justify-content:center}
 .hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-PlayerName{font-family:var(--game-font);color:#e6e6e6;font-size:21px;font-variant:small-caps;text-transform:none;line-height:1.1;letter-spacing:.06em;font-size:24px;text-shadow:0 1px 2px rgba(0,0,0,.9);overflow:hidden;white-space:nowrap;width:240px;text-overflow:ellipsis}
 .hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-Level,
 .hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-MMR,
 .hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-Race{font-size:15px;font-variant:small-caps;text-transform:none;line-height:1.1;letter-spacing:.08em;color:#e6e6e6;text-shadow:0 1px 2px rgba(0,0,0,.9);white-space:nowrap;width:200px;text-overflow:ellipsis}
 .hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-MMR{padding-top:8px}
 .hd-official .PlayerLoadingWidget-PlayerName-ClanName{font-size:18px;font-variant:normal;text-transform:uppercase;line-height:.9;letter-spacing:.1em;color:#ffc933}
-.hd-official .PlayerLoadingWidget-Race{display:flex;align-items:center;margin-left:144px;position:absolute}
-.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Name{display:flex;width:96px;height:100%;font-size:15px;font-variant:small-caps;text-transform:none;line-height:1.1;letter-spacing:.08em;color:#e6e6e6;text-shadow:0 1px 2px rgba(0,0,0,.9);white-space:nowrap;font-weight:700;font-size:16px;justify-content:flex-end;align-self:flex-end;margin-bottom:41px}
-.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon{width:96px;height:96px;margin-bottom:22px;align-self:center;background-size:cover}
+.hd-official .PlayerLoadingWidget-Race{display:flex;align-items:center;margin-left:144px;position:absolute;top:0;bottom:0}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Name{display:flex;width:96px;height:100%;font-size:15px;font-variant:small-caps;text-transform:none;line-height:1.1;letter-spacing:.08em;color:#e6e6e6;text-shadow:0 1px 2px rgba(0,0,0,.9);white-space:nowrap;font-weight:700;font-size:16px;justify-content:flex-end;align-self:center;align-items:center;margin-bottom:0}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon{width:96px;height:96px;margin-bottom:0;align-self:center;background-size:cover}
 .hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon.human{background-image:url(Icons/Versus/human-icon-resting.png)}
 .hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon.orc{background-image:url(Icons/Versus/orc-icon-resting.png)}
 .hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon.undead{background-image:url(Icons/Versus/undead-icon-resting.png)}
@@ -114,15 +115,18 @@
  * bar's right edge — half in, half onto the parchment — so anchor it there. */
 .hd-official .PlayerLoadingWidget-Race {
   position: absolute;
-  top: -14%;
+  top: 50%;
   right: -10%;
+  bottom: auto;
+  transform: translateY(-50%);
   margin-left: 0;
 }
 
 .hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Name {
   width: auto;
-  align-self: flex-end;
-  margin: 0 6px 20px 0;
+  height: auto;
+  align-self: center;
+  margin: 0 6px 0 0;
 }
 
 .hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon {

@@ -876,10 +876,39 @@ function pickLocale(
     }
     return n;
   };
+  /** A locale module can be partial: this install's zhCN-War3Local.mpq carries 5,660 files but
+   *  not `UI\FrameDef\GlobalStrings.fdf`, so picking it turns every FDF caption into its raw
+   *  `KEY_*` text. Only a module that can resolve the UI string table may become the mount.
+   *  The root file is a manifest of what the build *should* carry; the file is only really
+   *  here when its ckey also maps into the local encoding/index (a partial download lists it
+   *  but has no bytes). */
+  const hasUiStrings = (locale: string): boolean => {
+    const list = byArchive.get(`${locale}-War3Local.mpq`);
+    if (!list) return false;
+    return list.some(({ path, ckey }) => {
+      if (!/^ui[\\/]framedef[\\/]globalstrings\.fdf$/i.test(path)) return false;
+      const ekey = encoding.get(ckey);
+      return !!ekey && index.has(ekey.slice(0, INDEX_KEY_HEX));
+    });
+  };
+  const usable = (locale: string): boolean => present(locale) > 0 && hasUiStrings(locale);
   const preferred = currentLocale();
-  if (present(preferred) > 0) return preferred;
+  if (usable(preferred)) return preferred;
   const tagged = LOCALES.find((l) => (info.get("Tags") ?? "").includes(l));
-  if (tagged && present(tagged) > 0) return tagged;
+  if (tagged && usable(tagged)) return tagged;
+  // No preferred/tagged module is complete: take the largest one that still has the UI strings;
+  // only when the store has none at all fall back to the largest partial module.
+  let uiBest = "";
+  let uiCount = 0;
+  for (const locale of LOCALES) {
+    if (!hasUiStrings(locale)) continue;
+    const n = present(locale);
+    if (n > uiCount) {
+      uiBest = locale;
+      uiCount = n;
+    }
+  }
+  if (uiBest) return uiBest;
   let best = "zhCN";
   let bestCount = present(best);
   for (const locale of LOCALES) {

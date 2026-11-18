@@ -30,8 +30,23 @@ export default class DataTexture {
       this.height = Math.max(this.height, height);
 
       gl.bindTexture(gl.TEXTURE_2D, this.texture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, this.format, this.width, this.height, 0, this.format, gl.FLOAT, null);
+      gl.texImage2D(gl.TEXTURE_2D, 0, this.internalFormat(), this.width, this.height, 0, this.format, gl.FLOAT, null);
     }
+  }
+
+  /**
+   * OpenWar3: WebGL 2 rejects the unsized `RGBA`/`RGB` internal formats with type `FLOAT`.
+   * The same upload as a sized format is core there and samples identically; `format` (what
+   * `texSubImage2D` is told) stays as it was.
+   */
+  private internalFormat(): number {
+    const gl = this.gl;
+
+    if (typeof WebGL2RenderingContext === 'undefined' || !(gl instanceof WebGL2RenderingContext)) {
+      return this.format;
+    }
+
+    return this.format === gl.RGB ? gl.RGB32F : gl.RGBA32F;
   }
 
   bindAndUpdate(buffer: Float32Array, width = this.width, height = this.height): void {

@@ -1,4 +1,5 @@
 import type { Options } from "../data/options";
+import { isHd } from "../data/flavor";
 import { stageAspect } from "../ui/stage";
 import { setFixedMenuAspect } from "../ui/widescreen";
 import { applyWindowMode, type WindowMode } from "../ui/displayMode";
@@ -69,17 +70,29 @@ export interface VideoBridge {
   /** Mipmap levels to drop from the top of a BLP's chain as it is uploaded. 0 = full size. */
   textureMipDrop: number;
   /**
-   * Low Performance Mode's animation path: may an MDX instance take a pose another instance of
-   * the same model already sampled, at the same clip and the same 1/30 s of it?
+   * May an MDX instance take a pose another instance of the same model already sampled, at the
+   * same clip and the same 1/30 s of it?
    *
-   * This is the largest thing the mode does, and the only one that is not a rung of the panel —
-   * see `LOW_PERF_FORCED` for why it is here rather than there. Profiled at 257 units and 6x CPU
-   * throttle, the MDX node walk is ~41% of all CPU against ~7% for the drawing, and 317 visible
-   * instances were holding 60 distinct poses. The cache and the reasoning live at the top of
-   * `viewer/handlers/mdx/modelinstance.js` in the patch; what it costs is animation time
-   * quantized to 30 Hz, which is why it is off at full quality.
+   * Profiled at 257 units and 6x CPU throttle, the MDX node walk is ~41% of all CPU against ~7%
+   * for the drawing, and 317 visible instances were holding 60 distinct poses. The cache and the
+   * reasoning live at the top of `viewer/handlers/mdx/modelinstance.js` in the patch; what it
+   * costs is animation time quantized to 30 Hz, which is why it is off at full quality.
+   *
+   * HD only, and on whenever the client is not running Animation Quality at `high` — Low
+   * Performance Mode forces that rung to `low`, so the mode keeps it on through the same switch
+   * (see `LOW_PERF_FORCED`). The classic client samples every instance for itself at every
+   * setting: its animation path is the one this work must not touch, and the mode belongs to the
+   * HD options screen.
    */
   sharedPoses: boolean;
+  /**
+   * HD-lite: draw Reforged models with the diffuse + ORM maps only — no normal map, no
+   * emissive map, no GGX specular lobe. On only when the HD client is in Low Performance
+   * Mode; the classic client never sees it (its shader has no such variant). Read by
+   * `getBatchShader` in the vendored MDX handler, per batch group, so a tick reaches the
+   * frame that follows it.
+   */
+  hdLite: boolean;
   /**
    * How coarse a shared pose bucket is, in ms of ANIMATION time. Default 1000/30, which is about
    * the rate an MDX's tracks are authored at and so the rate at which stepping stops being
@@ -93,7 +106,7 @@ export interface VideoBridge {
 
 const bridge = (): VideoBridge => {
   const g = globalThis as { __OW3_VIDEO__?: VideoBridge };
-  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: false, poseBucket: POSE_BUCKET_MS });
+  return (g.__OW3_VIDEO__ ??= { particleScale: 1, textureMipDrop: 0, sharedPoses: false, hdLite: false, poseBucket: POSE_BUCKET_MS });
 };
 
 /**
@@ -215,6 +228,14 @@ const MAX_LIGHTS: Record<Quality, number> = { high: 8, medium: 4, low: 0 };
  * options it is handed; the player's own seven values sit untouched underneath, so unticking the
  * box gives every one of them back. The two Options screens grey these rows while the mode is on
  * and show the forced rung in them, so what the panel says and what the renderer does agree.
+ *
+ * AN EIGHTH ROW, NOT IN THE TABLE: **Anti-Aliasing**, and only on the HD client
+ * (`effectiveAntialias`). MSAA is a context attribute fixed when the WebGL context is created,
+ * so it is not a dropdown the applier can reach live — but a machine that ticked this box should
+ * not be asked to resolve four samples per pixel either. It is kept out of the table because the
+ * table is painted onto the FDF pulldowns, and this row is a CHECKBOX: the two panels would have
+ * to grow a second forcing path for one entry. HD-only because the classic client's look is the
+ * one thing this work must not touch; the box still restores it the moment it is unticked.
  */
 export const LOW_PERF_FORCED: Readonly<Record<string, string>> = {
   modelDetail: "low",
@@ -229,6 +250,19 @@ export const LOW_PERF_FORCED: Readonly<Record<string, string>> = {
 /** True while the mode is on — used by both Options screens to grey the rows it forces. */
 export function lowPerfMode(): boolean {
   return current.lowPerf;
+}
+
+/**
+ * Whether the WebGL context should be created with MSAA, for a given set of options.
+ *
+ * Separate from `applyVideoOptions` because the context is created ONCE: `main.ts` asks this at
+ * boot, and the Options screens compare it between their working and committed copies to decide
+ * whether a Save needs a reload. Low Performance Mode turns it off on the HD client only
+ * (`LOW_PERF_FORCED` says why it is HD-only and why it is not in the table).
+ */
+export function effectiveAntialias(options: Options): boolean {
+  if (isHd() && options.lowPerf === true) return false;
+  return options.antialiasing !== false;
 }
 
 const quality = (v: unknown, fallback: Quality): Quality =>
@@ -319,15 +353,20 @@ export function applyVideoOptions(options: Options): void {
     occlusion: opts.occlusion !== "off",
     gamma: typeof opts.gamma === "number" ? opts.gamma : DEFAULTS.gamma,
     lowPerf,
-    antialias: opts.antialiasing !== false,
+    antialias: effectiveAntialias(opts),
   };
   const b = bridge();
   b.particleScale = PARTICLE_SCALE[current.particles];
   b.textureMipDrop = MIP_DROP[current.textureQuality];
-  // The mode's own switch rather than a rung's: the pose cache is what Low Performance Mode is
-  // actually FOR (see `VideoBridge.sharedPoses`), and it is live — a tick takes effect on the
-  // next frame, and unticking has every instance sampling for itself again.
-  b.sharedPoses = current.lowPerf;
+  // HD-lite: the low-performance shader variant. HD only — the classic client keeps its
+  // shader byte for byte (see `VideoBridge.hdLite`).
+  b.hdLite = isHd() && lowPerf;
+  // HD animation quality. Below `high` the MDX node walk may take a pose another instance of
+  // the same model already sampled (see `VideoBridge.sharedPoses`) — the same trade Low
+  // Performance Mode makes, reached through the panel rung it actually is. The mode forces
+  // `animQuality` to `low`, so its branch is the same expression, kept explicit for the
+  // `lowperf` launch flag. SD never shares: every instance samples for itself, as before.
+  b.sharedPoses = isHd() && (current.lowPerf || current.animQuality !== "high");
   b.poseBucket = POSE_BUCKET_MS;
   applyGamma(current.gamma);
   // "4:3 Menus" is a layout switch rather than a renderer one, but it is a Video row and so it

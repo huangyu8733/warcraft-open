@@ -17,6 +17,10 @@ export default class Doodad extends Widget {
 
     const instance = this.instance;
 
+    // OpenWar3 (P2-2): a placed doodad may be drawn in an instanced bucket when its model's
+    // Stand sequence is static and the context is WebGL 2 (see mdx/modelinstance.ts).
+    instance.ow3StaticDoodad = true;
+
     instance.move(<vec3>doodad.location);
     instance.rotateLocal(quat.setAxisAngle(quat.create(), VEC3_UNIT_Z, doodad.angle));
     instance.scale(<vec3>doodad.scale);
