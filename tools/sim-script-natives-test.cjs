@@ -143,10 +143,10 @@ console.log("\nthe research events");
   world.captureResearch = true;
   world.enqueueResearch(lab.id, "hdef", 1, 10);
   check("queuing a research raises START with its rawcode",
-    world.drainResearchEvents().map((e) => [e.phase, e.upgradeId]), [["start", "hdef"]]);
+    world.drainResearchEvents().map((e) => [e.phase, e.techId]), [["start", "hdef"]]);
   world.cancelTrainAt(lab.id, 0);
   check("…and cancelling it raises CANCEL",
-    world.drainResearchEvents().map((e) => [e.phase, e.upgradeId]), [["cancel", "hdef"]]);
+    world.drainResearchEvents().map((e) => [e.phase, e.techId]), [["cancel", "hdef"]]);
   world.captureResearch = false;
 }
 

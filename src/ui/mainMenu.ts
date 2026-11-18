@@ -1,5 +1,6 @@
 import type { AssetResolver } from "../assets/resolver";
 import { pickInstall, requestPersistence } from "../assets/opfs";
+import { flavor } from "../data/flavor";
 import { loadProfile } from "../vfs/loader";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
 import { t, type MessageKey } from "../i18n";
@@ -62,7 +63,7 @@ export function mountMainMenu(
 }
 
 async function importInstall(resolver: AssetResolver, status: HTMLElement): Promise<void> {
-  const install = await pickInstall();
+  const install = await pickInstall(flavor());
   if (!install) return;
   status.textContent = t("menu.loadingArchives");
   try {

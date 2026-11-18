@@ -1,0 +1,1131 @@
+/*
+ * The HD (Reforged 3.0) glue screens — plain DOM dressed with the install's own WebUI art.
+ *
+ * The classic screens are FDF and get their look from UI\FrameDef; these get theirs here and
+ * from the images under WebUI\. The palette is the 3.0 front end's: near-black plates, a thin
+ * bronze/gold line, parchment-white type and a blue-white rim light on the metal.
+ */
+
+.hd-screen {
+  --hd-gold: #c8a35a;
+  --hd-gold-hot: #f2d79a;
+  --hd-ink: #e9e3d3;
+  --hd-dim: #a3937a;
+  --hd-line: rgba(200, 163, 90, 0.26);
+  --hd-line-hot: rgba(222, 184, 102, 0.72);
+  --hd-panel: rgba(8, 10, 15, 0.84);
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: auto;
+  font-family: var(--hd-font, var(--game-font));
+  color: var(--hd-ink);
+  background: #04060a;
+}
+
+.hd-content {
+  position: absolute;
+  inset: 0;
+  opacity: 1;
+  transition: opacity 240ms ease;
+}
+
+.hd-screen.hd-inert,
+.hd-screen.hd-disabled {
+  pointer-events: none;
+}
+
+.hd-screen .hd-btn,
+.hd-screen .hd-interactive {
+  pointer-events: auto;
+}
+
+.hd-screen.hd-inert .hd-btn,
+.hd-screen.hd-disabled .hd-btn,
+.hd-screen.hd-inert button,
+.hd-screen.hd-disabled button,
+.hd-screen.hd-inert select,
+.hd-screen.hd-disabled select {
+  pointer-events: none;
+}
+
+/* The full-bleed picture behind a screen. Its own layer, so a screen's contents can fade
+   without taking the art with them. */
+.hd-art {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: saturate(0.96) brightness(0.9);
+}
+
+/* The install's own WebM over the still: 3.0's menu motion. It fades up once it is decoding so
+   the first frame never snaps in. */
+.hd-art > .hd-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  animation: hd-video-in 700ms ease 80ms forwards;
+}
+
+@keyframes hd-video-in {
+  to {
+    opacity: 1;
+  }
+}
+
+/* The 3.0 vignette: the edges go to near-black and the eye stays on the middle. */
+.hd-screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 46%, transparent 42%, rgba(0, 0, 0, 0.55) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.5) 0%, transparent 18%, transparent 82%, rgba(0, 0, 0, 0.62) 100%);
+}
+
+/* --- the left-hand navigation rail (main menu) -------------------------------------- */
+
+.hd-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(16px, 3.4vh, 38px);
+  width: min(38vw, 560px);
+  min-width: 300px;
+  padding: 6vh clamp(24px, 3.4vw, 64px) 6vh clamp(26px, 3.4vw, 64px);
+  background: linear-gradient(90deg, rgba(3, 4, 7, 0.94) 0%, rgba(3, 4, 7, 0.74) 58%, rgba(3, 4, 7, 0) 100%);
+}
+
+.hd-rail-right {
+  left: auto;
+  right: 0;
+  align-items: flex-end;
+  background: linear-gradient(270deg, rgba(3, 4, 7, 0.94) 0%, rgba(3, 4, 7, 0.74) 58%, rgba(3, 4, 7, 0) 100%);
+  text-align: right;
+}
+
+.hd-logo {
+  width: clamp(210px, 18vw, 330px);
+  height: auto;
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.8));
+}
+
+.hd-nav {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(5px, 0.7vh, 10px);
+  width: 100%;
+  max-width: 350px;
+}
+
+.hd-rail-right .hd-nav {
+  align-items: flex-end;
+}
+
+.hd-menu-title {
+  margin: 0 0 4px;
+  font-size: clamp(22px, 2vw, 30px);
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  color: var(--hd-gold-hot);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+}
+
+.hd-subtitle {
+  margin: 0;
+  font-size: clamp(12px, 0.95vw, 15px);
+  letter-spacing: 0.2em;
+  color: var(--hd-dim);
+}
+
+.hd-version {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: rgba(163, 147, 122, 0.8);
+  text-shadow: 1px 1px 0 #000;
+}
+
+/* --- the 3.0 button ---------------------------------------------------------------- */
+
+.hd-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: clamp(10px, 1.15vh, 15px) 18px;
+  border: 1px solid var(--hd-line);
+  border-left: 3px solid rgba(200, 163, 90, 0.5);
+  background: linear-gradient(90deg, rgba(16, 20, 28, 0.86), rgba(16, 20, 28, 0.3));
+  color: var(--hd-ink);
+  font: inherit;
+  font-size: clamp(14px, 1.12vw, 19px);
+  letter-spacing: 0.15em;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.hd-btn::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-right: 2px;
+  border: 1px solid rgba(200, 163, 90, 0.55);
+  rotate: 45deg;
+  background: rgba(200, 163, 90, 0.16);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.hd-btn:hover:not(:disabled),
+.hd-btn.hd-hot {
+  color: var(--hd-gold-hot);
+  border-color: var(--hd-line-hot);
+  border-left-color: var(--hd-gold-hot);
+  background: linear-gradient(90deg, rgba(74, 54, 22, 0.9), rgba(24, 27, 34, 0.34));
+  box-shadow: 0 0 22px rgba(200, 163, 90, 0.16), inset 0 0 30px rgba(200, 163, 90, 0.08);
+}
+
+.hd-btn:hover:not(:disabled)::before,
+.hd-btn.hd-hot::before {
+  border-color: var(--hd-gold-hot);
+  background: var(--hd-gold);
+}
+
+.hd-btn:active:not(:disabled) {
+  transform: translateX(1px);
+}
+
+.hd-btn:disabled {
+  opacity: 0.4;
+  filter: grayscale(0.7);
+  cursor: default;
+}
+
+.hd-btn-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  opacity: 0.9;
+}
+
+.hd-btn-overline {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--hd-dim);
+}
+
+.hd-btn-label {
+  display: block;
+}
+
+/* --- panels and frames ------------------------------------------------------------- */
+
+/* The dark plate every 3.0 dialog sits on. */
+.hd-panel {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(24, 25, 28, 0.94), rgba(9, 10, 13, 0.96) 12%, rgba(9, 10, 13, 0.96) 88%, rgba(22, 22, 25, 0.94));
+  border: 1px solid rgba(0, 0, 0, 0.9);
+  box-shadow: 0 0 0 1px rgba(200, 163, 90, 0.16), 0 24px 60px rgba(0, 0, 0, 0.75), inset 0 0 60px rgba(0, 0, 0, 0.85);
+}
+
+/* The official `wc3_campaignselect_frame` stretched round a panel: a thin black rim with a
+   gold inner hairline. `fill` is off, so the plate above shows through. */
+.hd-frame {
+  border: 14px solid transparent;
+  border-image: var(--hd-frame-art) 30 / 14px / 0 stretch;
+}
+
+/* --- the campaign screen ----------------------------------------------------------- */
+
+.hd-head {
+  position: absolute;
+  top: clamp(22px, 4.2vh, 54px);
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  z-index: 2;
+}
+
+.hd-title {
+  margin: 0;
+  font-size: clamp(26px, 2.6vw, 40px);
+  font-weight: 400;
+  letter-spacing: 0.3em;
+  color: var(--hd-gold-hot);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.95);
+}
+
+.hd-ornament {
+  width: clamp(160px, 16vw, 260px);
+  height: 30px;
+  margin: 4px auto 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  opacity: 0.85;
+}
+
+/* The campaign list: one portrait keyart per campaign. */
+.hd-camp-grid {
+  position: absolute;
+  top: 53%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(16px, 1.8vw, 30px);
+  width: min(86vw, 1180px);
+}
+
+.hd-card {
+  position: relative;
+  flex: 1 1 0;
+  max-width: 250px;
+  aspect-ratio: 998 / 1668;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.9);
+  box-shadow: 0 0 0 1px rgba(200, 163, 90, 0.18), 0 18px 46px rgba(0, 0, 0, 0.7);
+  background-color: #0a0c10;
+  background-position: center top;
+  background-size: cover;
+  cursor: pointer;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
+  filter: saturate(0.92) brightness(0.88);
+}
+
+.hd-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 46%, rgba(3, 4, 7, 0.72) 76%, rgba(3, 4, 7, 0.96) 100%);
+}
+
+.hd-card:hover:not(.hd-locked) {
+  transform: translateY(-6px) scale(1.02);
+  filter: saturate(1.05) brightness(1);
+  box-shadow: 0 0 0 1px var(--hd-line-hot), 0 0 34px rgba(200, 163, 90, 0.24), 0 22px 54px rgba(0, 0, 0, 0.8);
+}
+
+.hd-card.hd-locked {
+  cursor: default;
+  filter: grayscale(0.9) brightness(0.5);
+}
+
+.hd-card-text {
+  position: absolute;
+  right: 12px;
+  bottom: 16px;
+  left: 14px;
+  z-index: 1;
+}
+
+.hd-card-header {
+  font-size: clamp(10px, 0.78vw, 12px);
+  letter-spacing: 0.18em;
+  color: var(--hd-dim);
+}
+
+.hd-card-name {
+  margin-top: 3px;
+  font-size: clamp(16px, 1.4vw, 22px);
+  letter-spacing: 0.06em;
+  color: #f4efe2;
+  text-shadow: 0 2px 8px #000;
+}
+
+.hd-card-progress {
+  margin-top: 6px;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--hd-gold);
+}
+
+/* The chapter view: keyart on the left, the chapter list panel on the right. */
+.hd-chapters {
+  position: absolute;
+  inset: clamp(74px, 11vh, 130px) clamp(28px, 4vw, 74px) clamp(56px, 8vh, 96px);
+  display: grid;
+  grid-template-columns: minmax(0, 1.06fr) minmax(340px, 0.94fr);
+  gap: clamp(20px, 2.6vw, 46px);
+  align-items: center;
+  z-index: 2;
+}
+
+/* The campaign keyart, framed by the two halves of the opened 3.0 door. */
+.hd-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: min(74vh, 100%);
+  min-height: 300px;
+}
+
+.hd-door-img {
+  height: 98%;
+  width: auto;
+  opacity: 0.96;
+  filter: drop-shadow(0 18px 40px rgba(0, 0, 0, 0.75));
+  flex: 0 0 auto;
+}
+.hd-door-img-left { margin-right: -3%; }
+.hd-door-img-right { margin-left: -3%; transform: scaleX(-1); }
+
+.hd-keyart {
+  position: relative;
+  z-index: 1;
+  height: 96%;
+  aspect-ratio: 998 / 1668;
+  max-width: 100%;
+  background-position: center top;
+  background-size: cover;
+  border: 1px solid rgba(0, 0, 0, 0.92);
+  box-shadow: 0 0 0 1px rgba(200, 163, 90, 0.22), 0 26px 70px rgba(0, 0, 0, 0.8);
+}
+
+.hd-panel-right {
+  display: flex;
+  flex-direction: column;
+  height: min(74vh, 100%);
+  min-height: 320px;
+  padding: clamp(20px, 2vh, 30px) clamp(22px, 2vw, 32px);
+  z-index: 2;
+}
+
+.hd-chapter-head {
+  flex: 0 0 auto;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--hd-line);
+}
+
+.hd-chapter-name {
+  margin: 0;
+  font-size: clamp(20px, 1.7vw, 27px);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  color: var(--hd-gold-hot);
+}
+
+.hd-chapter-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  color: var(--hd-dim);
+}
+
+.hd-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 10px 0 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(200, 163, 90, 0.5) transparent;
+}
+
+.hd-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(200, 163, 90, 0.12);
+  background: transparent;
+  color: var(--hd-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.hd-row:hover:not(:disabled),
+.hd-row.hd-hot {
+  background: linear-gradient(90deg, rgba(84, 62, 26, 0.5), rgba(20, 22, 28, 0.2));
+}
+
+.hd-row:hover:not(:disabled) .hd-row-name,
+.hd-row.hd-hot .hd-row-name {
+  color: #fff;
+}
+
+.hd-row:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.hd-row-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  opacity: 0.9;
+}
+
+.hd-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hd-row-overline {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--hd-dim);
+}
+
+.hd-row-name {
+  overflow: hidden;
+  font-size: clamp(13px, 1vw, 16px);
+  letter-spacing: 0.04em;
+  color: #ded6c4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hd-row-state {
+  width: 16px;
+  height: 16px;
+  justify-self: end;
+  object-fit: contain;
+  opacity: 0.8;
+}
+
+.hd-chapter-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hd-line);
+}
+
+.hd-foot-label {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--hd-dim);
+}
+
+.hd-seg {
+  display: flex;
+  border: 1px solid var(--hd-line);
+}
+
+.hd-seg button {
+  min-width: 84px;
+  padding: 7px 14px;
+  border: 0;
+  border-right: 1px solid var(--hd-line);
+  background: rgba(10, 12, 17, 0.72);
+  color: var(--hd-dim);
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+.hd-seg button:last-child { border-right: 0; }
+
+.hd-seg button:hover:not(.on) { color: var(--hd-gold-hot); }
+
+.hd-seg button.on {
+  background: linear-gradient(180deg, #d9b86a, #a47f36);
+  color: #171005;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.hd-back {
+  position: absolute;
+  bottom: clamp(24px, 4.4vh, 52px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 9px 34px;
+  border: 1px solid var(--hd-line);
+  background: rgba(8, 10, 14, 0.86);
+  color: var(--hd-ink);
+  font: inherit;
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  cursor: pointer;
+}
+
+.hd-back:hover {
+  color: var(--hd-gold-hot);
+  border-color: var(--hd-line-hot);
+  box-shadow: 0 0 20px rgba(200, 163, 90, 0.18);
+}
+
+/* --- the options screen ------------------------------------------------------------ */
+
+.hd-options-body {
+  position: absolute;
+  inset: clamp(84px, 12vh, 140px) clamp(36px, 6vw, 120px) clamp(92px, 14vh, 150px);
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(170px, 232px) minmax(0, 1fr);
+  gap: clamp(18px, 2.4vw, 42px);
+}
+
+.hd-options-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.hd-opt-tab {
+  padding: clamp(11px, 1.4vh, 16px) 18px;
+  border: 1px solid var(--hd-line);
+  border-left: 3px solid rgba(200, 163, 90, 0.5);
+  background: linear-gradient(90deg, rgba(10, 12, 17, 0.9), rgba(10, 12, 17, 0.4));
+  color: var(--hd-ink);
+  font: inherit;
+  font-size: clamp(14px, 1.1vw, 17px);
+  letter-spacing: 0.2em;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.hd-opt-tab:hover:not(.on) {
+  color: var(--hd-gold-hot);
+  border-color: var(--hd-line-hot);
+}
+
+.hd-opt-tab.on {
+  border-color: var(--hd-line-hot);
+  border-left-color: var(--hd-gold-hot);
+  background: linear-gradient(90deg, rgba(84, 62, 26, 0.92), rgba(18, 20, 26, 0.5));
+  color: var(--hd-gold-hot);
+  box-shadow: 0 0 22px rgba(200, 163, 90, 0.14);
+}
+
+.hd-options-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: clamp(18px, 2.4vh, 30px) clamp(22px, 2.6vw, 42px);
+}
+
+.hd-options-head {
+  flex: 0 0 auto;
+}
+
+.hd-panel-title {
+  margin: 0;
+  font-size: clamp(19px, 1.7vw, 27px);
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  color: var(--hd-gold-hot);
+}
+
+.hd-options-rule {
+  height: 1px;
+  margin-top: 10px;
+  background: linear-gradient(90deg, var(--hd-line-hot), rgba(200, 163, 90, 0) 85%);
+}
+
+.hd-options-stack {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 4px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(200, 163, 90, 0.5) transparent;
+}
+
+.hd-options-rows[hidden] {
+  display: none;
+}
+
+.hd-opt-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(16px, 2vw, 32px);
+  padding: clamp(8px, 1.15vh, 14px) 4px;
+  border-bottom: 1px solid rgba(200, 163, 90, 0.12);
+}
+
+.hd-opt-label {
+  overflow: hidden;
+  font-size: clamp(19px, 1.75vw, 23px);
+  letter-spacing: 0.05em;
+  color: #ded6c4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hd-opt-control {
+  display: flex;
+  min-width: 180px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.hd-check {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(200, 163, 90, 0.55);
+  background: linear-gradient(180deg, #14171d, #0a0c11);
+  color: #1a1204;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hd-check.on {
+  border-color: #f2d79a;
+  background: linear-gradient(180deg, #e8c87a, #b3893c);
+  color: #171005;
+}
+
+.hd-check:hover:not(:disabled):not(.on) {
+  border-color: var(--hd-line-hot);
+}
+
+.hd-check:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.hd-slider {
+  display: flex;
+  width: min(280px, 32vw);
+  align-items: center;
+  gap: 12px;
+}
+
+.hd-range {
+  flex: 1 1 auto;
+  height: 18px;
+  accent-color: #c8a35a;
+  cursor: pointer;
+}
+
+.hd-slider-value {
+  width: 44px;
+  color: var(--hd-gold);
+  font-size: 17px;
+  letter-spacing: 0.06em;
+  text-align: right;
+}
+
+.hd-opt-select {
+  width: min(240px, 28vw);
+}
+
+.hd-opt-select:disabled {
+  opacity: 0.5;
+}
+
+.hd-options-foot {
+  position: absolute;
+  right: clamp(36px, 6vw, 120px);
+  bottom: clamp(26px, 5vh, 60px);
+  z-index: 3;
+  display: flex;
+  gap: 12px;
+}
+
+.hd-foot-btn {
+  padding: 10px 30px;
+  border: 1px solid var(--hd-line);
+  background: rgba(8, 10, 14, 0.86);
+  color: var(--hd-ink);
+  font: inherit;
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+}
+
+.hd-foot-btn:hover {
+  color: var(--hd-gold-hot);
+  border-color: var(--hd-line-hot);
+  box-shadow: 0 0 20px rgba(200, 163, 90, 0.16);
+}
+
+.hd-foot-primary {
+  border-color: #f2d79a;
+  background: linear-gradient(180deg, #d9b86a, #a47f36);
+  color: #171005;
+}
+
+.hd-modal-text {
+  margin: 0;
+  color: var(--hd-dim);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* --- the custom game screen -------------------------------------------------------- */
+
+.hd-skim-body {
+  position: absolute;
+  inset: clamp(84px, 12vh, 140px) clamp(36px, 6vw, 120px) clamp(92px, 14vh, 150px);
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.6fr);
+  gap: clamp(18px, 2.4vw, 38px);
+}
+
+.hd-skim-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: clamp(16px, 2vh, 26px) clamp(14px, 1.4vw, 22px);
+}
+
+.hd-file-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(200, 163, 90, 0.5) transparent;
+}
+
+.hd-file-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(200, 163, 90, 0.1);
+  border-left: 2px solid transparent;
+  background: none;
+  color: var(--hd-ink);
+  font: inherit;
+  font-size: clamp(13px, 1vw, 15px);
+  text-align: left;
+  cursor: pointer;
+}
+
+.hd-file-row:hover {
+  color: var(--hd-gold-hot);
+  background: rgba(200, 163, 90, 0.06);
+}
+
+.hd-file-row.on {
+  border-left-color: var(--hd-gold-hot);
+  background: linear-gradient(90deg, rgba(84, 62, 26, 0.72), rgba(84, 62, 26, 0.05));
+  color: var(--hd-gold-hot);
+}
+
+.hd-file-icon {
+  flex: 0 0 14px;
+  color: var(--hd-gold);
+  font-size: 12px;
+  text-align: center;
+}
+
+.hd-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hd-skim-info {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: clamp(10px, 1.5vh, 18px);
+  padding: clamp(18px, 2.4vh, 30px) clamp(20px, 2.4vw, 38px);
+}
+
+.hd-skim-top {
+  display: grid;
+  grid-template-columns: minmax(140px, 210px) minmax(0, 1fr);
+  gap: clamp(16px, 2vw, 30px);
+  align-items: start;
+}
+
+.hd-skim-thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--hd-line);
+  background: #05070a center / cover no-repeat;
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8);
+}
+
+.hd-skim-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.hd-skim-name {
+  margin: 0;
+  overflow: hidden;
+  font-size: clamp(20px, 1.8vw, 28px);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  color: var(--hd-gold-hot);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hd-skim-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.hd-skim-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(200, 163, 90, 0.1);
+  font-size: clamp(12px, 0.95vw, 14px);
+}
+
+.hd-skim-stat-label {
+  color: var(--hd-dim);
+}
+
+.hd-skim-stat-value {
+  color: var(--hd-ink);
+  text-align: right;
+}
+
+.hd-skim-desc {
+  max-height: 5.6em;
+  margin: 0;
+  overflow-y: auto;
+  color: #c6bda9;
+  font-size: clamp(12px, 0.95vw, 14px);
+  line-height: 1.55;
+  scrollbar-width: thin;
+}
+
+.hd-slots {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(200, 163, 90, 0.5) transparent;
+}
+
+.hd-slot {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 0.7fr);
+  align-items: center;
+  gap: clamp(8px, 0.9vw, 14px);
+  padding: 7px 6px;
+  border-bottom: 1px solid rgba(200, 163, 90, 0.1);
+}
+
+.hd-slot-color {
+  width: 12px;
+  height: 24px;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
+}
+
+.hd-slot .hd-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.hd-skim-empty {
+  margin: 14px 4px;
+  color: var(--hd-dim);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.hd-campaign-difficulty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hd-line);
+}
+
+.hd-replay-crest {
+  background-image: none;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(200, 163, 90, 0.16), transparent 62%),
+    #05070a;
+}
+
+.hd-replay-seat {
+  grid-template-columns: 12px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.7fr);
+}
+
+.hd-slot-race,
+.hd-slot-team {
+  overflow: hidden;
+  color: var(--hd-dim);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- the single-player screen ------------------------------------------------------ */
+
+.hd-single-art {
+  background-position: center 32%;
+}
+
+/* The profile page's empty state, in the row area of the official list. */
+.hd-profile-empty {
+  padding: 12px 0;
+  font-size: 13px;
+  color: var(--hd-dim);
+}
+
+.hd-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(200, 163, 90, 0.35);
+  background: rgba(14, 17, 23, 0.95);
+  color: var(--hd-ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.hd-mini {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border: 1px solid rgba(200, 163, 90, 0.45);
+  background: rgba(20, 24, 31, 0.9);
+  color: var(--hd-gold);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.hd-mini:hover {
+  color: var(--hd-gold-hot);
+  border-color: var(--hd-line-hot);
+}
+
+/* --- our own small modal (the profile prompt) -------------------------------------- */
+
+.hd-modal-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.hd-modal {
+  width: min(460px, 82vw);
+  padding: 26px 28px 22px;
+}
+
+.hd-modal h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0.18em;
+  color: var(--hd-gold-hot);
+}
+
+.hd-input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid rgba(200, 163, 90, 0.4);
+  background: rgba(6, 8, 12, 0.9);
+  color: var(--hd-ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.hd-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.hd-modal-actions button {
+  padding: 7px 20px;
+  border: 1px solid var(--hd-line);
+  background: rgba(14, 17, 23, 0.9);
+  color: var(--hd-ink);
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+}
+
+.hd-modal-actions button.primary {
+  background: linear-gradient(180deg, #d9b86a, #a47f36);
+  color: #171005;
+}
+
+.hd-modal-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.hd-error {
+  min-height: 18px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #d98c7a;
+}
+
+/* Portrait screens (a phone held up) stack the two campaign columns instead of squeezing
+   them, and the rail takes the whole width. */
+@media (max-aspect-ratio: 4/5) {
+  .hd-rail {
+    width: 100%;
+    min-width: 0;
+    background: linear-gradient(180deg, rgba(3, 4, 7, 0.9), rgba(3, 4, 7, 0.55) 70%, rgba(3, 4, 7, 0.9));
+  }
+  .hd-chapters {
+    grid-template-columns: 1fr;
+    inset: 70px 20px 70px;
+  }
+  .hd-keyart { display: none; }
+  .hd-camp-grid { flex-wrap: wrap; width: min(94vw, 720px); }
+  .hd-card { flex: 0 0 40%; max-width: 42%; }
+}
+
+/* 3.0's interface-theme wipe (`Webms/transition_to_*.webm`): a full-bleed film over the menu
+   for its three seconds. It must not take the clicks that change the theme again. */
+.hd-theme-transition {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 40;
+  pointer-events: none;
+}

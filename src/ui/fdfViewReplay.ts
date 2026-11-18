@@ -11,8 +11,11 @@ import { widescreen } from "./widescreen";
 import { showGlueDialog } from "./glueDialog";
 import { isRoc } from "../data/edition";
 import { replayWindowOptions } from "../data/options";
-import { blpToCanvas } from "../render/blputil";
-import { readReplayHeader, REPLAY_EXT, type ReplayHeader } from "../game/replay";
+import { vfsImage } from "../render/blputil";
+import { readReplayHeader, replayLine, replayMismatch, REPLAY_EXT, type ReplayHeader } from "../game/replay";
+import { flavor } from "../data/flavor";
+import { gameVersion } from "../data/gameVersion";
+import { t } from "../i18n";
 import type { ReplayFileInfo, ReplaySink } from "../game/replaySink";
 import { OW3_STRINGS, VIEW_REPLAY_OVERRIDE } from "../overrides";
 import { PLAYER_COLORS } from "./hud";
@@ -112,8 +115,7 @@ export function mountViewReplayScreen(
 ): Promise<FdfScreen> {
   const minimapIcons = loadMinimapIcons(vfs);
   const icon = (path: string): HTMLCanvasElement | null => {
-    const bytes = vfs.rawBytes(path);
-    return bytes ? blpToCanvas(bytes) : null;
+    return vfsImage(vfs, path);
   };
   const folderIcon = icon(ICON_FOLDER);
   const upIcon = icon(ICON_FOLDER_UP);
@@ -205,6 +207,18 @@ export function mountViewReplayScreen(
     }
     // The two games read different object tables (data/edition.ts); a replay is a match on one.
     if ((header.edition === "roc") !== isRoc()) return `This replay was recorded on ${header.edition === "roc" ? "Reign of Chaos" : "The Frozen Throne"}.|n|nSwitch editions on the main menu to watch it.`;
+    // …and SD / HD are two data / asset lines, not an edition. An HD replay also needs the exact
+    // Reforged build it was played on (SD-HD双版本方案.md §7.3).
+    const mismatch = replayMismatch(header, flavor(), gameVersion());
+    if (mismatch === "flavor") {
+      return t("replay.otherFlavor", {
+        map: t(replayLine(header) === "hd" ? "flavor.hd" : "flavor.sd"),
+        client: t(flavor() === "hd" ? "flavor.hd" : "flavor.sd"),
+      });
+    }
+    if (mismatch === "version") {
+      return t("replay.hdVersion", { required: header.gameVersion ?? "?", local: gameVersion() ?? "?" });
+    }
     return null;
   }
 

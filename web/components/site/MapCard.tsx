@@ -2,6 +2,14 @@ import Link from "next/link";
 import type { MapWithText } from "@/lib/db/schema";
 import type { Messages } from "@/i18n/dictionaries/zh";
 import { formatBytes } from "@/lib/format";
+import { parseFlavors } from "@/lib/mapFlavors";
+
+/** 支持版本的展示文案：两个都支持时说「双版本通用」，只支持一个时点名那一个。 */
+export function flavorLabel(value: unknown, dict: Messages): string {
+  const flavors = parseFlavors(value);
+  if (flavors.length === 2) return dict.maps.flavors.both;
+  return flavors[0] === "hd" ? dict.maps.flavors.hd : dict.maps.flavors.sd;
+}
 
 /** 地图卡片：封面 + 名称 + 关键信息 + 详情/下载入口。 */
 export function MapCard({ map, locale, dict }: { map: MapWithText; locale: string; dict: Messages }) {
@@ -26,6 +34,7 @@ export function MapCard({ map, locale, dict }: { map: MapWithText; locale: strin
           <Link href={href}>{name}</Link>
         </h3>
         <ul className="map-card__meta">
+          <li className="map-card__flavor">{flavorLabel(map.flavors, dict)}</li>
           {map.players ? <li>{dict.maps.players} · {map.players}</li> : null}
           {map.version ? <li>{dict.maps.version} · {map.version}</li> : null}
           {map.file_size ? <li>{formatBytes(map.file_size)}</li> : null}

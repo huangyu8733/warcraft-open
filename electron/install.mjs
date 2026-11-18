@@ -23,6 +23,9 @@ import { Readable } from "node:stream";
 
 const MPQ = /\.mpq$/i;
 const MAP = /\.(w3m|w3x)$/i;
+// A downloadable campaign: a whole campaign in one archive (src/data/campaignArchive.ts),
+// fetched for the Campaign screen and kept out of the map list.
+const CAMPAIGN = /\.w3n$/i;
 // What may be written into `Maps\Download\`: a map, or its own language sidecar beside it.
 const DOWNLOADED_NAME = /^[^\\/:*?"<>|\u0000-\u001f]+\.(w3m|w3x)(\.[A-Za-z]{2,8}(?:[-_][A-Za-z0-9]{2,8})?\.json)?$/i;
 // A map's own sidecars beside it: its dictionary (src/i18n/mapLanguage.ts) and its voice pack
@@ -61,11 +64,12 @@ export function safeJoin(root, rel) {
   return full === root || full.startsWith(root + sep) ? full : null;
 }
 
-async function collectMaps(dir, prefix, into, language) {
+async function collectMaps(dir, prefix, into, language, campaigns) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const rel = `${prefix}\\${entry.name}`;
-    if (entry.isDirectory()) await collectMaps(join(dir, entry.name), rel, into, language);
+    if (entry.isDirectory()) await collectMaps(join(dir, entry.name), rel, into, language, campaigns);
     else if (MAP.test(entry.name)) into.push(rel);
+    else if (campaigns && CAMPAIGN.test(entry.name)) campaigns.push(rel);
     else if (language && LANGUAGE_FILE.test(entry.name)) language.push(rel);
   }
 }
@@ -87,7 +91,17 @@ async function collectCasc(root) {
       else if (CONFIG_HASH.test(entry.name)) out.config.push(rel);
     }
   };
-  await walk(join(root, "Data"), "Data", 0);
+  // Only the LIVE store (`Data\data`, which also holds the `.idx` buckets) and the build configs
+  // under `Data\config`. `Data\ecache` is the EXTERNAL DOWNLOAD CACHE: its `.idx` files are
+  // bucket versions 0–7 and its `data.NNN` are partial downloads that need not exist. Walking
+  // all of `Data` used to fold it into the same map — `readdir` hands back `ecache` after
+  // `data`, so a 42 KB cache file replaced the real multi-gigabyte archive and every read past
+  // its end came back 416 (a real 3.0 install, not a broken one). Same rule as
+  // tools/vite-plugin-dev-install.ts, which is the door the `?dev` harness goes through.
+  for (const [sub, prefix] of [["data", "Data\\data"], ["config", "Data\\config"]]) {
+    const dir = join(root, "Data", sub);
+    if (existsSync(dir)) await walk(dir, prefix, 0);
+  }
   return out;
 }
 
@@ -97,15 +111,16 @@ export async function enumerateInstall(root) {
   const archives = entries.filter((e) => e.isFile() && MPQ.test(e.name)).map((e) => e.name);
   const maps = [];
   const languageFiles = [];
+  const campaigns = [];
   const mapsDir = entries.find((e) => e.isDirectory() && e.name.toLowerCase() === "maps");
-  if (mapsDir) await collectMaps(join(root, mapsDir.name), mapsDir.name, maps, languageFiles);
+  if (mapsDir) await collectMaps(join(root, mapsDir.name), mapsDir.name, maps, languageFiles, campaigns);
   const casc = await collectCasc(root);
   // The player's own hotkeys/tooltips, a loose file in the folder (issue #142) — named here
   // rather than assumed, because most folders have none. See src/data/customKeys.ts.
   const customKeys = entries.some((e) => e.isFile() && e.name.toLowerCase() === "customkeys.txt")
     ? "CustomKeys.txt"
     : null;
-  return { archives, maps, languageFiles, casc, customKeys };
+  return { archives, maps, languageFiles, campaigns, casc, customKeys };
 }
 
 /**
@@ -239,14 +254,14 @@ export async function downloadedMapExists(root, name) {
  *  message the game shows; it is no longer the only version the picker accepts. */
 export const REQUIRED_VERSION = "1.30.4";
 
-/** Major versions the folder picker accepts: every 1.x client (the current engine) and every
- *  2.x build (the remastered line). The exact patch is not part of the selection rule. */
-export const ACCEPTED_MAJOR_VERSIONS = ["1", "2"];
+/** Version prefixes the folder picker accepts: `1.3` (the classic line this engine reads) and
+ *  `3.` (the Reforged line). Prefixes, not exact builds — MUST equal `ACCEPTED_VERSION_PREFIXES`
+ *  in src/vfs/version.ts, which is what the game itself checks on every launch. */
+export const ACCEPTED_VERSION_PREFIXES = ["1.3", "3."];
 
-/** Does a version string name a supported major line? */
+/** Does a version string name a supported line? */
 export function isAcceptedInstallVersion(version) {
-  const major = version?.split(".")[0];
-  return !!major && ACCEPTED_MAJOR_VERSIONS.includes(major);
+  return !!version && ACCEPTED_VERSION_PREFIXES.some((prefix) => version.startsWith(prefix));
 }
 
 /** The builds the game's mount turns back into REQUIRED_VERSION (src/vfs/version.ts, which says
@@ -279,14 +294,42 @@ export function installVersion(root) {
  * never SAVED as the remembered one. The game checks again every launch (src/vfs/version.ts);
  * this is the same rule asked earlier, not a second one.
  *
- * The rule is the MAJOR version: 1.x is the pre-Reforged client line, 2.x the remastered line.
- * A pre-1.30 (MPQ) folder has no `.build.info` at all and so cannot pass, which is correct: it
+ * The rule is the version PREFIX: `1.3` is the classic line, `3.` the remastered line. A
+ * pre-1.30 (MPQ) folder has no `.build.info` at all and so cannot pass, which is correct: it
  * predates the content-store layout this engine reads.
  */
 export function looksLikeInstall(root) {
   if (!root || !existsSync(root)) return false;
   if (!existsSync(join(root, "Data"))) return false;
   return isAcceptedInstallVersion(installVersion(root));
+}
+
+/** The two data / asset lines the launcher can boot (src/data/flavor.ts). */
+export const FLAVORS = ["sd", "hd"];
+
+/** Only `"hd"` is HD; anything else — a stale setting, a missing argument — is classic SD. */
+export function normalizeFlavor(value) {
+  return value === "hd" ? "hd" : "sd";
+}
+
+/**
+ * Which settings key remembers a flavor's folder. `installPath` is the SD key from before flavors
+ * existed, so an app upgraded from an older build keeps its install with no migration; HD gets its
+ * own key, so choosing one line's folder can never overwrite the other's.
+ */
+export function installPathKey(flavor) {
+  return normalizeFlavor(flavor) === "hd" ? "installPathHd" : "installPath";
+}
+
+/** The remembered folder for a flavor, or null. HD deliberately does NOT fall back to SD. */
+export function installPathFromSettings(settings, flavor = "sd") {
+  const path = settings?.[installPathKey(flavor)];
+  return typeof path === "string" && path ? path : null;
+}
+
+/** The `writeSettings` patch that remembers — or, with `null`, forgets — one flavor's folder. */
+export function installPathPatch(flavor, path) {
+  return { [installPathKey(flavor)]: path };
 }
 
 /**

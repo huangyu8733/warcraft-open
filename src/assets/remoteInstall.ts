@@ -20,6 +20,10 @@ export interface InstallManifest {
    *  i18n/mapLanguage.ts) or its voice pack (`<map>.w3x.voice.json`, voice/mapVoice.ts).
    *  Optional because a shell older than this field serves none. */
   languageFiles?: string[];
+  /** The install's downloadable campaigns — every `Maps\Download\*.w3n` (data/campaigns.ts).
+   *  Optional because an older shell serves none; they are listed apart from `maps` because a
+   *  `.w3n` is a whole campaign, never a skirmish map. */
+  campaigns?: string[];
   /** Present when the install is 1.30+ (issue #102); null for an MPQ-era one. */
   casc: CascManifest | null;
   /** The folder's own `CustomKeys.txt`, as an install-relative path — or null when it has

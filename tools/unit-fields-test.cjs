@@ -35,6 +35,8 @@ const W3u = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist", "cjs", "
 const ModifiedObject = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist", "cjs", "parsers", "w3x", "w3u", "modifiedobject")).default;
 const Modification = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist", "cjs", "parsers", "w3x", "w3u", "modification")).default;
 const { MappedData } = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist", "cjs", "utils", "mappeddata"));
+const { normalize } = require(join(REPO, ".sim-build", "src", "patches", "index.js"));
+const { patchTable } = require(join(REPO, ".sim-build", "src", "patches", "tables.js"));
 
 let failed = 0;
 /** Round every real in a value to 4 places. The .w3u stores a `real`/`unreal` field as a
@@ -305,11 +307,34 @@ const UNIT_CODES = {
 };
 
 /** The install's own meta table when it is unpacked, so a patch that adds a field is caught
- *  on the developer's machine rather than only when the snapshot above is next refreshed. */
+ *  on the developer's machine rather than only when the snapshot above is next refreshed.
+ *
+ *  Read the way the game MOUNTS it: a 1.31.1 store is put back to 1.30.4 before anything reads
+ *  it (src/vfs/downgrade.ts), and that downgrade deletes the `usit`/`isit` rows 1.31 added. Read
+ *  raw, every one of those would look like drift from the 1.30.4 snapshot AND like a field code
+ *  this engine silently drops — on a machine that is simply running a newer SD install. */
+function downgraded(path, bytes) {
+  let version = null;
+  try {
+    const text = readFileSync(join(REPO, "Warcraft III", ".build.info"), "latin1");
+    const [head, ...rows] = text.split(/\r?\n/).filter(Boolean);
+    const col = head.split("|").findIndex((c) => c.split("!")[0] === "Version");
+    const active = rows.find((r) => r.split("|")[1] === "1") ?? rows[0];
+    version = active && col >= 0 ? active.split("|")[col] : null;
+  } catch {
+    /* no install beside the extraction: the snapshot is the only baseline anyway */
+  }
+  if (!version || !version.startsWith("1.31.1")) return bytes;
+  const files = require(join(REPO, "src", "patches", "downgrade", "1.31.1.json")).files;
+  // The JSON spells its paths the game's way (`Units\…`) and every lookup here is normalized.
+  const edits = Object.entries(files).find(([p]) => normalize(p) === normalize(path))?.[1];
+  return edits ? patchTable(path, bytes, edits) : bytes;
+}
+
 function liveCodes() {
   const p = join(REPO, "Warcraft III", "ExtractedData", "merged", "Units", "UnitMetaData.slk");
   if (!existsSync(p)) return null;
-  const md = new MappedData(readFileSync(p, "latin1"));
+  const md = new MappedData(new TextDecoder("latin1").decode(downgraded("Units\\UnitMetaData.slk", readFileSync(p))));
   const out = {};
   for (const id of Object.keys(md.map)) {
     const r = md.getRow(id);

@@ -1,6 +1,7 @@
 ; OpenWar3's Windows installer — electron-builder's ASSISTED NSIS installer (package.json
-; `build.nsis`), bent in one direction: the folder it asks for is the player's Warcraft III 1.30.4
-; folder, and the app is installed into an `OpenWar3` folder INSIDE it.
+; `build.nsis`), bent in one direction: the folder it asks for is the player's Warcraft III folder
+; (a `1.3x` classic install or a `3.x` Reforged one), and the app is installed into an `OpenWar3`
+; folder INSIDE it.
 ;
 ; Why inside: the desktop app then finds the game without asking (electron/locate.mjs reads its
 ; own executable's grandparent), and the two travel together — move or delete the Warcraft III
@@ -9,7 +10,8 @@
 ;
 ; The rule for what counts as the folder is the SAME one the app asks at the picker and at every
 ; launch (electron/install.mjs `looksLikeInstall`, src/vfs/version.ts): a `Data` folder and a
-; `.build.info` whose version is 1.30.4. `pnpm app:test` checks the version below against both.
+; `.build.info` whose version starts with `1.3` or `3.`. `pnpm app:test` checks the version below
+; against both files; the prefix rule is mirrored here by hand because NSIS cannot import them.
 ;
 ; How this file is wired in, since none of it is visible from here (app-builder-lib
 ; templates/nsis/assistedInstaller.nsh):
@@ -33,17 +35,19 @@
 Var ow3Folder   ; in:  the folder to ask about
 Var ow3Verdict  ; out: "ok", "missing" (not Warcraft III at all) or "version" (the wrong one)
 
-; Is $ow3Folder a supported Warcraft III folder? The rule is the MAJOR version: the version row
-; of `.build.info` ends `|<version>|<complete>`, so "|1." (the pre-Reforged line) and "|2." (the
-; remastered line) are accepted. A line longer than NSIS's string limit arrives in pieces (read
-; 1000 characters at a time, so the glued string still fits), and each piece is searched with the
-; last 2 characters of the one before it in front.
+; Is $ow3Folder a supported Warcraft III folder? The rule is the version PREFIX: the version row
+; of `.build.info` ends `|<version>|<complete>`, so "|1.3" (the classic line this engine reads)
+; and "|3." (the Reforged line) are accepted. A line longer than NSIS's string limit arrives in
+; pieces (read 1000 characters at a time, so the glued string still fits), and each piece is
+; searched with the last 3 characters of the one before it in front, so a token straddling the
+; cut is still seen (the longest token is 4 characters).
 Function ow3AskFolder
   Push $0
   Push $1
   Push $2
   Push $3
   Push $4
+  Push $5
   StrCpy $ow3Verdict "missing"
   ${If} ${FileExists} "$ow3Folder\.build.info"
   ${AndIf} ${FileExists} "$ow3Folder\Data\*.*"
@@ -59,13 +63,15 @@ Function ow3AskFolder
           ${Break}
         ${EndIf}
         StrCpy $1 "$2$1"
-        ; substring search: slide a 3-character window along the line
+        ; substring search: slide a 4-character window along the line ("|1.3"), and the first
+        ; three characters of it name the Reforged line ("|3.")
         StrLen $3 $1
         StrCpy $4 0
         ${DoWhile} $4 < $3
-          StrCpy $2 $1 3 $4
-          ${If} $2 == "|1."
-          ${OrIf} $2 == "|2."
+          StrCpy $2 $1 4 $4
+          StrCpy $5 $2 3
+          ${If} $2 == "|1.3"
+          ${OrIf} $5 == "|3."
             StrCpy $ow3Verdict "ok"
             ${Break}
           ${EndIf}
@@ -74,11 +80,12 @@ Function ow3AskFolder
         ${If} $ow3Verdict == "ok"
           ${Break}
         ${EndIf}
-        StrCpy $2 $1 "" -2
+        StrCpy $2 $1 "" -3
       ${Loop}
       FileClose $0
     ${EndIf}
   ${EndIf}
+  Pop $5
   Pop $4
   Pop $3
   Pop $2
@@ -119,8 +126,9 @@ Function ow3FindWarcraft
   Pop $0
 FunctionEnd
 
-; Leaving the directory page: refuse anything that is not a 1.30.4 folder, with the reason. The
-; app's own folder inside one is accepted too, which is what a reinstall over itself shows.
+; Leaving the directory page: refuse anything that is not a 1.3x classic or 3.x Reforged folder,
+; with the reason. The app's own folder inside one is accepted too, which is what a reinstall over
+; itself shows.
 Function ow3DirectoryLeave
   StrCpy $ow3Folder $INSTDIR
   Call ow3AskFolder

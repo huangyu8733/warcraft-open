@@ -1,3 +1,5 @@
+import { isHd } from "./flavor";
+
 // Which game the client is: Reign of Chaos or The Frozen Throne (docs/editions.md).
 //
 // 1.30.4 is ONE client that plays both. The main menu carries the switch —
@@ -29,7 +31,8 @@ function stored(): Edition {
   }
 }
 
-let current: Edition = typeof localStorage === "undefined" ? "tft" : stored();
+// HD（Reforged）固定 TFT：它只有一套数据，没有 `_V0` 孪生，也没有 RoC 分支。
+let current: Edition = typeof localStorage === "undefined" || isHd() ? "tft" : stored();
 const listeners = new Set<(e: Edition) => void>();
 
 /** The edition the client is on right now. */
@@ -43,6 +46,7 @@ export function isRoc(): boolean {
 
 /** Switch editions, remember it, and tell everything that caches something versioned. */
 export function setEdition(next: Edition): void {
+  if (isHd() && next === "roc") return; // HD 没有 RoC 数据线
   if (next === current) return;
   current = next;
   try {

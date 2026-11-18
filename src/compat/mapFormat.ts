@@ -54,6 +54,25 @@ export const UNKNOWN_FORMAT: MapFormatProfile = {
   blzIndexBase: 1,
 };
 
+/** Which of the two game lines this map belongs to (SD-HD双版本方案.md, P4). */
+export type MapFlavor = "sd" | "hd";
+
+/**
+ * Which line a map was built for — conservative on purpose.
+ *
+ * Only two markers are unambiguous evidence of Reforged: a w3i version of 31+ (1.32 and
+ * later) and an editor build of 132+. Everything else a Reforged editor also writes — object
+ * data v3, terrain v12, a Lua script — existed on the classic line too, so none of them is
+ * allowed to move a map to HD.
+ *
+ * The direction of the doubt matters: an uncertain map is SD, and an SD map in an HD pool is
+ * then REFUSED with a reason instead of being loaded with the base module's classic art.
+ * Refusing is recoverable; silently substituting is not (P4's exit criterion).
+ */
+export function mapFlavor(profile: MapFormatProfile): MapFlavor {
+  return profile.w3iVersion >= 31 || profile.editorBuild >= 132 ? "hd" : "sd";
+}
+
 /** The seven object files, in the order the engine reads them. */
 const OBJECT_FILES = [
   "war3map.w3u", "war3map.w3t", "war3map.w3b", "war3map.w3h",

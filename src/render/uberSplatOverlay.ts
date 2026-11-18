@@ -319,7 +319,11 @@ export class UberSplatOverlay {
     for (const e of this.entries.values()) {
       if (e.hidden || e.alpha <= 0) continue; // fog-withheld, or fully faded out
       const tex = this.resolveTexture(e.texture);
-      if (!tex) continue; // texture missing/undecodable — skip
+      // A mask ring is drawn from the UV alone (the fragment shader never samples uTex), so
+      // missing art must not drop it: an HD install carries the SelectionCircle as .dds, and
+      // requiring the .blp to decode silently removed every selection ring. Only a TEXTURED
+      // splat needs its art to exist.
+      if (!tex && !e.mask) continue; // texture missing/undecodable — skip
       // Per-entry blend: additive for glowing selection rings, alpha for foundation
       // decals. SRC_ALPHA on both so the texture's alpha still shapes the mark.
       if (e.additive) gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
@@ -328,7 +332,7 @@ export class UberSplatOverlay {
       gl.uniform1f(this.uAlpha, e.alpha);
       gl.uniform1f(this.uMask, e.mask ? 1 : 0);
       gl.uniform1f(this.uHalf, e.half);
-      gl.bindTexture(gl.TEXTURE_2D, tex);
+      if (tex) gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.bindBuffer(gl.ARRAY_BUFFER, e.posBuf);
       gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, e.uvBuf);

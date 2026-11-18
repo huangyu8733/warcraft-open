@@ -16,6 +16,7 @@ import { applyVideoOptions, LOW_PERF_FORCED } from "../render/videoQuality";
 import { applyHealthBarOptions } from "../render/worldOverlays";
 import { applyHotkeyOptions } from "../data/hotkeys";
 import { applyScrollOptions } from "../render/scrollOptions";
+import { uiThemeChoices } from "../data/uiTheme";
 import { applyVoiceOptions } from "../voice/control";
 import { nativeVsync, relaunchNative, setNativeVsync } from "../assets/nativeInstall";
 import { showGlueDialog } from "./glueDialog";
@@ -317,13 +318,15 @@ export async function mountOptions(
     } else if (d.kind === "choice") {
       const c = s.popup(d.frame);
       if (!c) return;
-      const choices = d.choices ?? [];
+      // The theme list is the INSTALL's own: `[Main] Skins` in its war3skins names the sections
+      // this copy ships (3.0 lists five, a classic install four). Everything else is static.
+      const choices = d.key === "uiTheme" ? uiThemeChoices(vfs) : d.choices ?? [];
       if (choices.length) {
         c.setOptions(choices.map((ch) => ({ value: ch.value, label: lib?.string(ch.label) ?? ch.label })));
         c.value = str(working[d.key], String(d.def));
         c.onChange = (v) => commit(v);
       } else {
-        // A dropdown the game fills at runtime (resolution list, sound provider): nothing to
+        // A dropdown the game fills at runtime (the resolution list): nothing to
         // offer here, so it's shown empty and inert rather than pretending to choices.
         c.setEnabled(false);
       }

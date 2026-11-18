@@ -94,6 +94,22 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // pass-through to `sim.removeUnit`. Only `createUnit` is genuinely entangled, because
     // spawning has to load a model.
     killUnit: (id) => sim.killUnit(id),
+    // SetUnitUseFood — the unit's own `foodFree`, which `Authority.foodFor` and
+    // `AiPlayer.foodOf` read (and the snapshot carries to a LAN client's food bar).
+    setUnitUseFood: (id, useFood) => {
+      const u = sim.units.get(id);
+      if (u) u.foodFree = !useFood;
+    },
+    getUnitUsesFood: (id) => {
+      const u = sim.units.get(id);
+      return u ? !u.foodFree : undefined;
+    },
+    // The creep sleep natives — the same two fields tickCreep reads, written through the sim so
+    // that taking sleep away and waking a sleeper keep its rules (SimWorld.setCanSleep/wakeUnit).
+    setUnitCanSleep: (id, canSleep) => sim.setCanSleep(id, canSleep),
+    getUnitCanSleep: (id) => sim.units.get(id)?.canSleep,
+    getUnitSleeping: (id) => sim.units.get(id)?.asleep,
+    wakeUnit: (id) => sim.wakeUnit(id),
     // A gold mine is a record in `mines`, not a sim unit, so RemoveUnit on its handle goes to
     // the mine table: the mine leaves the map (SimWorld.removeMine). It used to be a no-op on
     // the theory that the only caller was the Undead start's swap — but a MAP may clear a mine
@@ -172,6 +188,7 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     getUnitFlyHeight: (id) => sim.getUnitFlyHeight(id),
     setUnitMoveSpeed: (id, speed) => sim.setUnitMoveSpeed(id, speed),
     setUnitAcquireRange: (id, range) => sim.setUnitAcquireRange(id, range),
+    setUnitSkin: (id, skinId) => sim.setUnitSkin(id, skinId),
     getUnitAcquireRange: (id) => sim.getUnitAcquireRange(id),
     getUnitMoveSpeed: (id) => sim.getUnitMoveSpeed(id),
     setUnitTurnSpeed: (id, turn) => sim.setUnitTurnSpeed(id, turn),
@@ -287,6 +304,8 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     isUnitInRange: (id, otherId, distance) => sim.unitInRange(id, otherId, distance),
     isUnitInRangeXY: (id, x, y, distance) => sim.unitInRangeXY(id, x, y, distance),
     isUnitIllusion: (id) => sim.units.get(id)?.isIllusion ?? false,
+    unitTransport: (id) => sim.units.get(id)?.garrisonHost ?? 0,
+    isHeroXpSuspended: (id) => sim.units.get(id)?.xpSuspended ?? false,
     unitRace: (id) => sim.units.get(id)?.race ?? "",
     // `IsTerrainPathable` — and remember its polarity: TRUE means NOT pathable, which the
     // install states outright (natives/predicates.ts quotes `UI\TriggerStrings.txt`). So each
@@ -313,16 +332,8 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     // upgrade at a building's queue head (the "-fastbuild" cheat in DotA v6.83d and its kin).
     setConstructionProgress: (id, percent) => sim.setConstructionProgress(id, percent),
     setUpgradeProgress: (id, percent) => sim.setUpgradeProgress(id, percent),
-    // SetUnitUseFood — whether the body eats supply. It is the flag a charmed/possessed unit
-    // already wears, so nothing new has to be modelled: false just sets it.
-    setUnitUseFood: (id, useFood) => sim.setUnitUseFood(id, useFood),
-    // UnitIsSleeping / UnitWakeUp — a night-asleep creep. Waking it is the same one-field change
-    // the sim's own damage/proximity wake makes; nothing else is armed while it sleeps.
+    // UnitIsSleeping — a night-asleep creep (`UnitWakeUp`'s counterpart is above).
     isUnitSleeping: (id) => sim.units.get(id)?.asleep ?? false,
-    wakeUnit: (id) => {
-      const u = sim.units.get(id);
-      if (u) u.asleep = false;
-    },
     // `ShowUnit` / `IsUnitHidden` — a WORLD flag, not a model one: a hidden unit is off the field
     // for every seat (untargetable, no collision, no minimap dot), and the renderer only follows.
     hideUnit: (id, hidden) => sim.setHidden(id, hidden),
@@ -340,6 +351,8 @@ export function simHooks(sim: SimWorld, teamOf: (player: number) => number): Par
     itemInfo: (id) => sim.itemSnapshot(id),
     setItemCharges: (id, charges) => void sim.setItemCharges(id, charges),
     setItemDroppable: (id, flag) => void sim.setItemDroppable(id, flag),
+    setItemPawnable: (id, flag) => void sim.setItemPawnable(id, flag),
+    setItemDropOnDeath: (id, flag) => void sim.setItemDropOnDeath(id, flag),
     setItemInvulnerable: (id, flag) => sim.setItemInvulnerable(id, flag),
     setItemLife: (id, life) => sim.setItemLife(id, life),
     // StoreUnit — what a chapter writes into the game cache for the next one (docs/campaigns.md).
@@ -405,6 +418,8 @@ export function authorityHooks(authority: {
     targetId: number,
   ): boolean;
   issueNeutralOrder(player: number, shopId: number, orderId: number, kind: "immediate" | "point" | "target"): boolean;
+  issueItemOrder(unitId: number, orderId: number, order: string, itemId: number): boolean;
+  issueTreeOrder(unitId: number, orderId: number, order: string, x: number, y: number): boolean;
   /** `entangleinstant` — see the interception in `issueUnitOrder` below. `mineHandle` is a
    *  script-side unit handle (so it goes through MINE_ID_BASE), 0 for the no-target form. */
   entangleInstant(unitId: number, mineHandle: number): boolean;
@@ -434,6 +449,8 @@ export function authorityHooks(authority: {
       order === "entangleinstant" || order === "autoentangleinstant"
         ? authority.entangleInstant(id, targetId)
         : authority.issueUnitOrder(id, orderId, order, kind, x, y, targetId),
+    issueItemOrder: (id, orderId, order, itemId) => authority.issueItemOrder(id, orderId, order, itemId),
+    issueTreeOrder: (id, orderId, order, x, y) => authority.issueTreeOrder(id, orderId, order, x, y),
     // IssueNeutralImmediateOrderById — "order this unit to use the neutral unit of that TYPE".
     // A neutral shop belongs to nobody, so the ordinary order path cannot express it; the
     // authority resolves the type to a shop that serves the player and sends the buyer there.
@@ -692,6 +709,8 @@ export function rosterHooks(
         case "flyHeight": return def.moveHeight;
         case "acquireRange": return def.acquireRange;
         case "pointValue": return def.points;
+        case "foodUsed": return def.foodUsed; // UnitBalance `fused`
+        case "foodMade": return def.foodMade; // UnitBalance `fmade`
       }
     },
     // THIS unit's value where it has one of its own (a script's BlzSetUnit…Field, or the per-unit
@@ -705,7 +724,7 @@ export function rosterHooks(
     },
     /** IsUnitType (7.16) — answer a unittype classification from the sim unit's flags. `t` is the
      *  common.j ConvertUnitType index. The classifications we hold no data for (ATTACKS_FLYING,
-     *  GIANT, SAPPER, RESISTANT, …) read false rather than guess. Melee/ranged come from the
+     *  ATTACKS_GROUND, PLAGUED, SNARED, POISONED) read false rather than guess. Melee/ranged come from the
      *  weapon's `ranged` flag (UnitWeapons weapType: a missile weapon = a ranged attacker). */
     isUnitType: (id, t, typeId) => {
       // A gold mine is a live Neutral Passive STRUCTURE, and it matters: MeleeClearExcessUnit
@@ -738,7 +757,15 @@ export function rosterHooks(
         case 18: return !!cls?.includes("townhall");
         case 19: return u.ancient;
         case 20: return !!cls?.includes("tauren");
+        // The four the sim derives for itself (common.j 22, 24–26): Hex/Polymorph's `hex` buff,
+        // Resistant Skin (`Arsk`/`ACrk`), Banish or the Spirit Walker's ethereal form, and Magic
+        // Immunity (`Amim`) or the Anti-magic Potion. Map spell filters ask these constantly —
+        // `not IsUnitType(t, UNIT_TYPE_MAGIC_IMMUNE)` is the standard "may this spell touch it".
+        case 22: return u.hexed;
         case 23: return u.asleep;
+        case 24: return u.resistant;
+        case 25: return u.ethereal;
+        case 26: return u.magicImmune;
         default: return false;
       }
     },

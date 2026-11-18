@@ -6,7 +6,7 @@ import type { FdfLibrary } from "./fdf/library";
 import type { ListItem } from "./fdf/widgets";
 import { adopt, setProp } from "./mapBrowser";
 import { HOTKEY_EDITOR_OVERRIDE, OW3_STRINGS } from "../overrides";
-import { blpToCanvas } from "../render/blputil";
+import { vfsImage } from "../render/blputil";
 import { showGlueDialog } from "./glueDialog";
 import { keyName } from "../data/commandStrings";
 import { canSaveCustomKeys, customKeysText, saveCustomKeys } from "../data/customKeys";
@@ -99,14 +99,13 @@ export async function showHotkeyEditor(opts: HotkeyEditorOptions): Promise<void>
   const iconUrl = (path: string): string | null => {
     if (!path) return null;
     if (!icons.has(path)) {
-      const bytes = opts.vfs.rawBytes(path.replace(/\.tga$/i, ".blp"));
-      icons.set(path, bytes ? blpToCanvas(bytes)?.toDataURL() ?? null : null);
+      const canvas = vfsImage(opts.vfs, path);
+      icons.set(path, canvas?.toDataURL() ?? null);
     }
     return icons.get(path) ?? null;
   };
   const iconCanvas = (path: string): HTMLCanvasElement | null => {
-    const bytes = path ? opts.vfs.rawBytes(path) : null;
-    return bytes ? blpToCanvas(bytes) : null;
+    return path ? vfsImage(opts.vfs, path) : null;
   };
 
   // --- values -------------------------------------------------------------------------------

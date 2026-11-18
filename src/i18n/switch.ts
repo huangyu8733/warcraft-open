@@ -28,15 +28,18 @@ export function createLanguageSwitch(): HTMLButtonElement {
 }
 
 /**
- * The launcher's language CHOICE: every language listed by name, the one in use already
- * selected — rather than the corner's "switch to the other one", because the load screen is
- * where a player arrives before they can read anything, and picking from a list is the one
- * answer that works for more than two languages later on.
+ * The launcher's language CHOICE: the languages the launcher itself ships, the one in use already
+ * selected.
+ *
+ * The launcher's own strings exist in Chinese and English only; the other ten Reforged languages
+ * are the GAME's (Options → 语言 inside the game, ui/hd/options.ts) and would leave the launcher
+ * half-translated, so they are not offered here.
  *
  * Same reload as the toggle, and for the same reason: an FDF screen layers its strings once at
  * mount. `?lang=` is carried into the URL so the pick outranks the stored one.
  */
 export function createLanguagePicker(): HTMLElement {
+  const offered = LOCALES.filter(({ id }) => id === "zhCN" || id === "enUS");
   // A menu this file draws itself rather than a <select>: two native quirks made the picker look
   // dead. A <label> wrapping a <select> is forwarded a click that OPENS and CLOSES the popup in
   // one tap on WebKit, and Chrome focuses the control without opening it — so a tap on the
@@ -71,7 +74,7 @@ export function createLanguagePicker(): HTMLElement {
   menu.setAttribute("role", "listbox");
   menu.hidden = true;
   const options: HTMLLIElement[] = [];
-  for (const { id, label } of LOCALES) {
+  for (const { id, label } of offered) {
     const option = document.createElement("li");
     option.className = "language-picker__option";
     option.setAttribute("role", "option");

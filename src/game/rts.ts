@@ -37,6 +37,7 @@ import { MatchLink, SNAPSHOT_INTERVAL, type DialogMessage, type MatchLinkSetup, 
 import { PoseInterpolator, type PoseOut } from "./poseInterp";
 import type { ChatLine } from "./chat";
 import { applyWorldSnapshot } from "./snapshotApply";
+import { captureWorld } from "./saveState";
 import { perfLog } from "../dev/perfLog";
 import type { WorldSnapshot, UnitSnapshot, GroundItemSnapshot, ProjectileSnapshot, FxSnapshot, WatchedPlayer } from "./snapshot";
 import { CommandRouter, accepted } from "../net/commandLink";
@@ -72,6 +73,7 @@ import { type TechRegistry } from "../data/techtree";
 import { type UpgradeRegistry } from "../data/upgrades";
 import type { SoundBoard, SoundCategory } from "../audio/sounds";
 import { WorldOverlays, healthBarsAlways, type HoverLine, type BarAbility, type BarSpec, type CrewLabelSpec, type VoiceLabelSpec } from "../render/worldOverlays";
+import { formationMovement } from "../render/gameplayOptions";
 import type { VoiceLabels } from "./voiceLabels";
 import { INSANE_HARVEST_FACTOR, MELEE_INSANE, MELEE_NORMAL } from "../ai/ids";
 
@@ -427,6 +429,10 @@ interface Entry {
    *  playWorkAnimOnce), which is set to ModelDefined and held by this all the same.
    *  Cleared when castAnimT runs out. */
   castAnimHeld: boolean;
+  /** Clips a script QUEUED behind the one this body is holding (`QueueUnitAnimation`), oldest
+   *  first; each plays when the hold before it runs out. The picture's alone — the sim never
+   *  hears of it (docs/replays.md). See RtsController.queueUnitAnimation. */
+  animQueue?: string[];
   /** The TARGET tier's Birth clip while this building is upgrading into it (Scout Tower →
    *  Guard Tower). Resolved once per target and cached here because it costs a sequence-name
    *  pass; `seq` -1 means "this pair has no upgrade clip to play". See upgradeBirthFor. */
@@ -560,6 +566,10 @@ const WHITE_TINT = new Float32Array([1, 1, 1, 1]);
 const DEATH_CLIP_FALLBACK = 1.6; // seconds to hold a Death clip of unknown length
 const DECAY_CLIP_FALLBACK = 3; // seconds to hold a Decay Flesh clip of unknown length
 const CAST_ANIM_HOLD = 0.8; // seconds a cast animation is held from the picker
+/** A script's LOOPING clip (SetUnitAnimation "stand work") is held until the unit stops
+ *  being idle rather than for a time — this is "no deadline" written as a finite clock, so the
+ *  hold test can tell it from a timed gesture by size alone (setUnitAnimation). */
+const SCRIPT_LOOP_HOLD = 1e9;
 /** Tokens in an `Animnames` list that name no clip: they say how the picked one PLAYS
  *  ("looping") rather than which one it is. Kept out of the name match, so `spell,looping`
  *  (Healing Spray, Stampede, Earthquake, Starfall) resolves to "Spell" and not to nothing. */
@@ -1270,6 +1280,10 @@ export class RtsController {
   }
 
   startMeleeAIFor(player: number, script: string): void {
+    // Every seat a script asks for is written down IN ORDER: a saved game (docs/save-games.md)
+    // seats the same computers on the same scripts before it writes their brains back over them,
+    // so each one gets the wiring it would have had (its host, its JASS VM's engine table).
+    this.aiSeatLog.push([player, script]);
     const seat = this.meleeSeats.get(player) ?? this.unseatedComputer(player);
     if (!this.meleeAi || !seat) return;
     // The file is named by its BASENAME for the four melee races (`Scripts\human.ai` and
@@ -1439,6 +1453,83 @@ export class RtsController {
   /** The creeps' spellcasting, made on the first authority tick of a seeded match and kept
    *  for the match — see src/ai/creeps.ts. */
   private creepCaster: CreepCaster | null = null;
+
+  // --- saved games (issue #159, docs/save-games.md) -----------------------------------------------
+
+  /** Every `StartMeleeAI`/`StartCampaignAI` the map's script made, in order (startMeleeAIFor). */
+  readonly aiSeatLog: Array<[number, string]> = [];
+  /** The ability rows a SCRIPT rewrote mid-match (`BlzSetAbilityTooltip`, `BlzSetAbilityIcon`) —
+   *  the per-map overlay the map's own object data does not put back on a load. */
+  private readonly abilityEdits = new Map<string, AbilityDef>();
+
+  /**
+   * The objects a match makes LAZILY, made now — before a saved game is written over this
+   * controller. The codec writes a saved object INTO the one already standing at its place, which
+   * is how it keeps that object's wiring; one that does not exist yet would come back without it.
+   */
+  prepareForLoad(): void {
+    this.creepCaster ??= new CreepCaster(this.sim, this.abilities);
+  }
+
+  /**
+   * A saved game has just been written over the world (docs/save-games.md). The ENTRIES — the
+   * models standing for units — are still the ones the map's own start adopted, so they are
+   * reconciled with the world as it now is: an entry whose unit the save does not have is
+   * retired, an entry whose unit is now another type is reported for a new model, and every unit
+   * that has no entry is reported for a body. The caller (the scene, which owns model loading)
+   * does the loading; nothing here touches the sim.
+   */
+  /**
+   * The LOOKS a script gave units (`SetUnitScale`, `SetUnitVertexColor`, `SetUnitTimeScale`,
+   * `SetUnitColor`): render state, kept on the entries rather than in the world, so a saved game
+   * takes them off the entries here and `restoreLooks` puts them back on the bodies of the load.
+   */
+  captureLooks(): Array<[number, { scale?: number; vertex?: [number, number, number, number]; timeScale?: number; color?: number }]> {
+    const out: Array<[number, { scale?: number; vertex?: [number, number, number, number]; timeScale?: number; color?: number }]> = [];
+    for (const e of this.entries) {
+      const look: { scale?: number; vertex?: [number, number, number, number]; timeScale?: number; color?: number } = {};
+      const def = this.registry.get(e.typeId);
+      if (e.baseScale !== (def?.modelScale || 1)) look.scale = e.baseScale;
+      if (e.baseColor) look.vertex = [e.baseColor[0], e.baseColor[1], e.baseColor[2], e.baseColor[3]];
+      if (e.timeScale !== 1) look.timeScale = e.timeScale;
+      if (e.colorOverride !== undefined) look.color = e.colorOverride;
+      if (Object.keys(look).length) out.push([e.simId, look]);
+    }
+    // …and a look still waiting for its body is the same thing a step earlier.
+    for (const [id, p] of this.pendingLook) if (!this.byId.has(id)) out.push([id, { ...p }]);
+    return out;
+  }
+
+  restoreLooks(looks: ReadonlyArray<[number, { scale?: number; vertex?: [number, number, number, number]; timeScale?: number; color?: number }]>): void {
+    for (const [id, look] of looks) {
+      if (!this.sim.units.has(id)) continue;
+      if (look.scale !== undefined) this.setUnitScale(id, look.scale);
+      if (look.vertex) this.setUnitVertexColor(id, ...look.vertex);
+      if (look.timeScale !== undefined) this.setUnitTimeScale(id, look.timeScale);
+      if (look.color !== undefined) this.setUnitTeamColor(id, look.color);
+    }
+  }
+
+  reconcileAfterLoad(): { needBody: SimUnit[]; retyped: Array<{ id: number; to: string }> } {
+    for (const [id, def] of this.abilityEdits) this.abilities.setCustom(id, def);
+    const retyped: Array<{ id: number; to: string }> = [];
+    for (const e of [...this.entries]) {
+      const u = this.sim.units.get(e.simId);
+      if (!u) {
+        this.dropEntry(e);
+        continue;
+      }
+      if (e.typeId !== u.typeId) retyped.push({ id: e.simId, to: u.typeId });
+    }
+    const needBody = [...this.sim.units.values()].filter((u) => !this.byId.has(u.id));
+    // Who is selected, grouped and hovered is the save's, and may name a unit that is gone.
+    for (const id of [...this.selected]) if (!this.sim.units.has(id)) this.selected.delete(id);
+    this.hovered = null;
+    this.creepCampView.reset();
+    this.lastSeenUnitCount = -1;
+    this.retintUnits();
+    return { needBody, retyped };
+  }
 
   /**
    * A player has LEFT the game — raised for a Computer+ seat that has conceded.
@@ -2390,6 +2481,7 @@ export class RtsController {
       }
     }
     if (!hide && !e.borrowedBody) this.applyFogTint(e, u, dt); // borrowed: mapViewer's doodad pass tints it
+
   }
 
   /**
@@ -3708,13 +3800,26 @@ export class RtsController {
   }
 
   /** Ctrl+N: bind the current own selection to control group N (overwrite). An
-   *  empty selection leaves the existing group untouched (WC3). */
+   *  empty selection leaves the existing group untouched (WC3) — and says so, in the two
+   *  lines commandstrings.txt [Errors] keeps for it (issue #299): `Emptycontrolgroup` =
+   *  "Unable to form an empty control group." with nothing selected, `Invalidcontrolgroup` =
+   *  "Unable to form a control group with units you do not control." with a selection that
+   *  holds nothing of yours (an enemy hero, a creep, a gold mine). */
   assignGroup(key: string): void {
     const { ids } = this.ownSelectionByKind();
-    if (ids.length) {
-      this.groups.set(key, ids);
-      this.onGroup?.("set", key, ids);
+    if (!ids.length) {
+      this.refuseGroup();
+      return;
     }
+    this.groups.set(key, ids);
+    this.onGroup?.("set", key, ids);
+  }
+
+  /** The control-group refusal for the selection as it stands — see assignGroup. A selected
+   *  gold mine or ground item is a selection too, and not one you control. */
+  private refuseGroup(): void {
+    const empty = this.selected.size === 0 && this.selectedMine === null && this.selectedItem === null;
+    this.refuseOrder(empty ? "Emptycontrolgroup" : "Invalidcontrolgroup");
   }
 
   /** A control group was set, added to or recalled — the replay's input track
@@ -3734,6 +3839,9 @@ export class RtsController {
     const existing = this.livingGroup(key);
     const sel = this.ownSelectionByKind();
     const kind = existing.length ? (this.sim.units.get(existing[0])?.building ? "building" : "unit") : sel.kind;
+    // Nothing of ours to add is the same refusal Ctrl+N gives (assignGroup); a selection of
+    // the group's OTHER kind is merely skipped, as it always was.
+    if (!sel.ids.length) this.refuseGroup();
     if (!kind) return;
     const merged = [...existing];
     const seen = new Set(existing);
@@ -4013,6 +4121,11 @@ export class RtsController {
     if (!to || to.hp <= 0 || !to.inventory.length) return false;
     this.armedItem = null; // whichever way it was aimed, the gesture is spent
     this.orderMode = null;
+    const stays = this.sim.itemLeaveError(from, armed); // undroppable: "Item must remain in your inventory."
+    if (stays !== null) {
+      this.refuseOrder(stays);
+      return true; // the click was the gesture, and it has been answered
+    }
     return this.execute(this.localPlayer, { c: "giveitem", unitId: from, slot: armed, targetId });
   }
 
@@ -4168,6 +4281,17 @@ export class RtsController {
         this.clearExcessInstance(unit.instance);
         continue;
       }
+      // A START LOCATION is not a unit. war3mapUnits.doo lists each player's as an `sloc`
+      // record and the viewer draws it as the World Editor does (StartLocation.mdx, the flag
+      // in a ring of stones), with no row because no table has one. It is hidden by the scene
+      // and must never be seeded — and the branches below find a body by POSITION, so a
+      // marker standing exactly where the map put a neutral building was adopted as that
+      // building's twin: Prologue02 has a Circle of Power on a start location, and the
+      // editor's flag stood in it, selectable, with a life bar.
+      if (!unit.row) {
+        unit.instance.hide();
+        continue;
+      }
       const def = this.registry.get(unit.row?.string("unitid") ?? "");
       // Pre-placed PLAYER unit (custom map, owner 0–11): adopt it as an OWNED,
       // simulated unit (issue #33) — this is what gives the local player vision of
@@ -4192,8 +4316,9 @@ export class RtsController {
         this.seedNeutral(unit, def, loc);
         continue;
       }
-      const movetp = unit.row?.string("movetp");
-      if (!movetp || movetp === "_" || movetp === "none") continue; // buildings/immovable
+      // Buildings/immovable: the def's parsed MoveType (toMoveType folds "_"/"none"/blank to
+      // None) — and it carries a map's `umvt` override, which the raw row does not.
+      if (!def || def.moveType === MoveType.None) continue;
       const seqs = unit.instance.model.sequences;
       if (!seqs.some((s) => /walk/i.test(s.name))) continue; // no walk → treat as static
       // Neutral Hostile creep sitting on a USED start location: removed so the
@@ -4236,6 +4361,7 @@ export class RtsController {
           worker: null,
           depotGold: false,
           depotLumber: false,
+          skinId: 0,
         },
         null,
         // …WITH ITS CARD. A map-placed creep was seeded with no abilities at all — every other
@@ -4408,6 +4534,7 @@ export class RtsController {
         worker: null,
         depotGold: false,
         depotLumber: false,
+        skinId: 0,
       },
       building,
       {
@@ -4677,6 +4804,7 @@ export class RtsController {
         worker,
         depotGold: depot.gold,
         depotLumber: depot.lumber,
+        skinId: 0,
       },
       building,
       // "Invulnerable (Neutral)" (Avul): neutral buildings — goblin merchant, goblin
@@ -4861,10 +4989,11 @@ export class RtsController {
     // model whose ONLY clip is "Death", told `SetUnitAnimation(u, "death")` on the line after
     // its CreateUnit: dropped, it had nothing to play and was never seen at all.
     const anim = this.pendingAnim.get(simId);
-    if (anim !== undefined) {
-      this.pendingAnim.delete(simId);
-      this.setUnitAnimation(simId, anim);
-    }
+    const queued = this.pendingAnimQueue.get(simId); // read first: setUnitAnimation empties it
+    this.pendingAnim.delete(simId);
+    this.pendingAnimQueue.delete(simId);
+    if (anim !== undefined) this.setUnitAnimation(simId, anim);
+    if (queued) for (const q of queued) this.queueUnitAnimation(simId, q);
   }
 
   /**
@@ -5031,6 +5160,8 @@ export class RtsController {
   /** The clip half of `pendingLook`: a `SetUnitAnimation` waiting for its body. Kept apart
    *  because it is worn last, after attachInstance has put the spawn stand on. */
   private pendingAnim = new Map<number, string>();
+  /** …and the `QueueUnitAnimation`s that followed it, in order (queueUnitAnimation). */
+  private pendingAnimQueue = new Map<number, string[]>();
   /** Wear (and forget) whatever `pendingLook` holds for this body — attachInstance's call. */
   private applyPendingLook(e: Entry): void {
     const p = this.pendingLook.get(e.simId);
@@ -5146,8 +5277,67 @@ export class RtsController {
     const e = this.byId.get(simId);
     if (!e) {
       if (this.sim.units.has(simId)) this.pendingAnim.set(simId, animation); // body still loading (see pendingLook)
+      this.pendingAnimQueue.delete(simId);
       return;
     }
+    e.animQueue = undefined; // Set and Reset both start over: what was queued behind the old clip goes with it
+    this.playScriptClip(e, animation);
+  }
+
+  /**
+   * JASS QueueUnitAnimation (common.j `native QueueUnitAnimation takes unit whichUnit, string
+   * whichAnimation`; Blizzard.j `QueueUnitAnimationBJ`) — play this clip AFTER the one the unit
+   * is showing, not instead of it. The idiom is `SetUnitAnimation(u, "spell")` then
+   * `QueueUnitAnimation(u, "stand")`: answered as a second Set, only "stand" was ever seen
+   * (issue #297).
+   *
+   * The queue is the PICTURE's: nothing in the sim may wait on a clip ending (docs/replays.md),
+   * so it lives on the render Entry and is advanced where the hold runs out (tick). With
+   * nothing held there is nothing to wait for and the clip plays at once. Behind a LOOPING
+   * script clip — which by itself never ends — the loop is let finish the pass it is on; no
+   * source states that case, so that reading is OURS.
+   */
+  queueUnitAnimation(simId: number, animation: string): void {
+    if (!animation) return;
+    const e = this.byId.get(simId);
+    if (!e) {
+      if (!this.sim.units.has(simId)) return;
+      const q = this.pendingAnimQueue.get(simId); // body still loading (see pendingLook)
+      if (q) q.push(animation);
+      else this.pendingAnimQueue.set(simId, [animation]);
+      return;
+    }
+    if (e.castAnimT <= 0) {
+      this.playScriptClip(e, animation);
+      return;
+    }
+    (e.animQueue ??= []).push(animation);
+    if (e.castAnimT > SCRIPT_LOOP_HOLD / 2) {
+      const inst = e.unit.instance;
+      const iv = inst.model?.sequences?.[e.curSeq]?.interval;
+      const left = iv && iv.length >= 2 ? (iv[1] - inst.frame) / 1000 : 0;
+      e.castAnimT = left > 0 ? left : seqDuration(inst, e.curSeq, CAST_ANIM_HOLD);
+    }
+  }
+
+  /** The hold on this body has run out: play the next clip a script queued behind it, skipping
+   *  names the model has no clip for. False when the queue is empty (the picker takes over). */
+  private playQueuedAnim(e: Entry): boolean {
+    while (e.animQueue?.length) {
+      if (!this.playScriptClip(e, e.animQueue.shift()!)) continue;
+      // A looping clip with more queued behind it plays ONE pass, as one queued behind a loop does.
+      if (e.animQueue.length && e.castAnimT > SCRIPT_LOOP_HOLD / 2) {
+        e.castAnimT = seqDuration(e.unit.instance, e.curSeq, CAST_ANIM_HOLD);
+      }
+      if (!e.animQueue.length) e.animQueue = undefined;
+      return true;
+    }
+    e.animQueue = undefined;
+    return false;
+  }
+
+  /** setUnitAnimation's body, on an entry that exists. True when a clip was put on. */
+  private playScriptClip(e: Entry, animation: string): boolean {
     if (!animation) {
       // Reset: back to the idle stand, released to the normal animation picker.
       e.castAnimT = 0;
@@ -5159,12 +5349,12 @@ export class RtsController {
         e.unit.instance.setSequenceLoopMode(SequenceLoopMode.Loop);
         e.curSeq = e.anims.stand;
       }
-      return;
+      return false;
     }
     // A named clip may exist several times (Stand, Stand - 2): take the first match.
     const want = animation.toLowerCase();
     const seq = e.anims.seqNames.findIndex((n) => n.toLowerCase().startsWith(want));
-    if (seq < 0) return; // this model has no such clip — leave it alone (WC3 no-ops too)
+    if (seq < 0) return false; // this model has no such clip — leave it alone (WC3 no-ops too)
     e.unit.instance.setSequence(seq);
     e.unit.instance.setSequenceLoopMode(SequenceLoopMode.ModelDefined);
     e.curSeq = seq;
@@ -5176,7 +5366,14 @@ export class RtsController {
     // only clip is "Death" (Bleach vs One Piece's Hyorinmaru dragon) fell straight to no
     // sequence at all and was never drawn.
     e.castAnimHeld = true;
-    e.castAnimT = seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
+    // …and a LOOPING clip is held until the unit leaves idle, not for one pass of it. WC3 keeps a
+    // script's looping clip going for as long as the unit stands there: Prologue02's bridge
+    // cinematic sets its two Peasants to "stand work" (Peasant.mdx: 0.6 s, nonLooping = 0) and
+    // they hammer for the whole scene. Timed to the clip's length, ours hammered ONCE and the
+    // idle picker stood them back up. A one-shot clip ("attack", "spell") still ends with itself.
+    const looping = (e.unit.instance.model?.sequences?.[seq] as { nonLooping?: number } | undefined)?.nonLooping === 0;
+    e.castAnimT = looping ? SCRIPT_LOOP_HOLD : seqDuration(e.unit.instance, seq, CAST_ANIM_HOLD);
+    return true;
   }
 
   /** Record a building's footprint half-extents (WORLD units) so the render loop seats
@@ -5542,6 +5739,9 @@ export class RtsController {
         // …and fog still STOPS it: a Fountain of Life in explored fog does not pour. The
         // viewer's own clock drives this instance, so this is the one place it is stopped.
         if (u.building && !e.borrowedBody) this.applyFogFreeze(e);
+        // Nothing below runs for this body, so a script's QUEUED clip is advanced here: the
+        // hold's clock is run only while something waits behind it (queueUnitAnimation).
+        if (e.animQueue && (e.castAnimT -= dt) <= 0) this.playQueuedAnim(e);
         continue;
       }
       this.loc[0] = u.x;
@@ -5671,10 +5871,19 @@ export class RtsController {
         // than to the cast (Healing Spray keeps spraying after the order is done), so
         // answering only to `order === "cast"` cut it off at the backswing — and an Acolyte's
         // summon is not a cast at all, so it has no other way to be held.
-        if (e.castAnimSticky || ((u.order === "cast" || e.castAnimHeld) && !u.moving)) {
+        // A script's looping clip has no clock of its own, so it lasts exactly as long as the
+        // unit stays IDLE: any order (a cast in place, a harvest, an attack), a fight or a chop
+        // ends it as surely as a walk — a unit told to "stand work" and then attacked swings back.
+        const scriptLoop = e.castAnimT > SCRIPT_LOOP_HOLD / 2;
+        const leftIdle = scriptLoop && ((u.order !== "idle" && u.order !== "hold") || u.inCombat || u.working);
+        if (e.castAnimSticky || ((u.order === "cast" || e.castAnimHeld) && !u.moving && !leftIdle)) {
           setAnimRate(e, 1); // a cast gesture plays at its authored rate, unhasted
+          // The clip played out with the unit still standing there: what a script queued
+          // behind it (QueueUnitAnimation) goes on now, in the frame the hold ends.
+          if (e.castAnimT <= 0 && e.animQueue) this.playQueuedAnim(e);
           continue;
         }
+        e.animQueue = undefined; // interrupted — the queue was behind a clip that is gone
         e.castAnimT = 0;
       }
       // Attacking is swing-driven: play a (random) attack clip ONCE per swing so
@@ -5927,6 +6136,7 @@ export class RtsController {
   private onDeath(simId: number): void {
     this.pendingLook.delete(simId); // a look still waiting for a body that never came
     this.pendingAnim.delete(simId);
+    this.pendingAnimQueue.delete(simId);
     const e = this.byId.get(simId);
     // An EXPLODED death (SetUnitExploded) leaves nothing to animate: the sim has already put the
     // unit's "Art - Special" burst where it stood, and the body simply goes.
@@ -7044,6 +7254,10 @@ export class RtsController {
    *  (render/mapViewer.ts) turns it into the gold line above the console and the error
    *  sound. Set by the host; the sim itself has no UI. */
   onRefuse?: (errorKey: string) => void;
+  /** The player's own string table (`GlobalStrings.fdf` + `InfoPanelStrings.fdf`), the lookup
+   *  the HUD's driver answers `uiString` with — the world hover slab words its "Level N" and
+   *  "Gold: N" lines from it, so a localized install hovers in its own language (issue #300). */
+  uiString?: (key: string, fallback: string) => string;
 
   /** Execute the armed order at a screen point. Returns true when consumed
    *  (the caller should then clear the HUD's armed state); false leaves it armed —
@@ -7308,6 +7522,7 @@ export class RtsController {
         // A TRANSPORT's Load: the Zeppelin sets off for the unit and the unit for the
         // Zeppelin (SimWorld.issueLoad). "Unable to load target." — [Errors] Canttransport —
         // for a building, a flier, a foe, or nobody at all.
+        if (p && picked !== null && this.controls(picked) && this.sim.holdRoom(host) < p.cargoSize) return this.refuseOrder("Noroom");
         if (!p || picked === null || !this.controls(picked) || !this.execute(this.localPlayer, { c: "load", transportId: hostId, unitId: picked })) return this.refuseOrder("Canttransport");
         this.orderMode = null;
         this.armedLoad = null;
@@ -7520,6 +7735,14 @@ export class RtsController {
       // Vault / Marketplace), an allied hero is handed it, and bare ground gets it dropped.
       const picked = this.pickAt(cssX, cssY);
       const to = picked !== null ? this.sim.units.get(picked) : undefined;
+      // An UNDROPPABLE item goes nowhere by this gesture — not to a shop, not to another hero,
+      // not onto the grass (docs/items.md) — and the sim refuses all three; this is the line
+      // that says so: [Errors] `Cantdrop` "Item must remain in your inventory." (issue #299).
+      const stays = this.sim.itemLeaveError(id, armed.slot);
+      if (stays !== null) {
+        this.refuseOrder(stays);
+        return true;
+      }
       // …and a shop that will not TRADE with you is not a shop for this gesture: an enemy's
       // Vault deals in items but takes none of yours (SimWorld.canUseShop), so the click
       // falls through to the ordinary drop rather than sending a sale that must be refused.
@@ -8110,12 +8333,12 @@ export class RtsController {
         // `ipaw` — whether a shop will buy it back. Drives the tooltip's grey ITEM_PAWN_TOOLTIP
         // hint, which is the only place the game ever tells you that dropping an item onto a
         // shop sells it (SimWorld.pawnItem is the thing it is talking about).
-        pawnable: def?.pawnable ?? false,
+        pawnable: this.sim.itemPawnable(held.itemId, held.id),
         // …and what that sale PAYS, which the game prints on the tooltip's cost row above the
         // hint. The sim's own price (SimWorld.pawnPrice), so the line cannot quote a number the
         // shop will not pay.
         ...(() => {
-          const p = this.sim.pawnPrice(held.itemId, held.charges);
+          const p = this.sim.pawnPrice(held.itemId, held.charges, held.id);
           return { sellGold: p.gold, sellLumber: p.lumber };
         })(),
       };
@@ -8637,7 +8860,7 @@ export class RtsController {
       agilityBonus: u.isHero ? u.bonusAgi : 0,
       intelligenceBonus: u.isHero ? u.bonusInt : 0,
       primaryAttr: def?.primaryAttr ?? PrimaryAttribute.None,
-      model: e?.modelPath ?? "", // no body, no bust
+      model: e?.modelPath || def?.model || "", // no body, no bust
       altModel: u.altModel,
       isWorker: !!u.worker,
       isBuilding: !!b,
@@ -9461,6 +9684,36 @@ export class RtsController {
     return this.matchLink !== null && !this.matchLinkIsHost;
   }
 
+  /**
+   * The SAVE GAME's world half (game/saveFile.ts, game/saveState.ts): one all-seeing
+   * `snapshotFor` taken for this seat, so the stash, the research and the fallen-hero roster —
+   * which a payload carries for its recipient alone — are this player's.
+   */
+  captureSaveWorld(): WorldSnapshot {
+    return captureWorld(this.sim, this.localPlayer, this.sim.elapsed);
+  }
+
+  /**
+   * Put a saved world back. This is NOT the client path: the world has just been built by the
+   * map's own initialization and the save describes that same world later, so initialization's
+   * units are cleared first and the save's are created in their place. (Ids line up by
+   * construction — initialization hands out the same ones every run — but the ones it made and
+   * the save no longer has are exactly the units a script killed, and merging would stand them
+   * back up.) `reserveUnitId` then holds the counter above the highest loaded id.
+   */
+  restoreSaveWorld(snap: WorldSnapshot): void {
+    this.sim.units.clear();
+    for (const s of snap.units) this.placed.reserveUnitId(s.id);
+    applyWorldSnapshot(this.sim, snap, (s) => {
+      const def = this.registry.get(s.typeId);
+      if (!def) return null;
+      this.addSimUnit(def, s.x, s.y, s.facing, s.owner, s.team, 0, s.id);
+      return this.sim.units.get(s.id) ?? null;
+    });
+    this.poses.arrive(snap.time);
+    this.lastApplied = snap;
+  }
+
   /** The payload object last written into the records, so a payload is applied exactly once
    *  (`MatchLink.latest()` hands back the same object until a new one lands). */
   private lastApplied: WorldSnapshot | null = null;
@@ -9959,6 +10212,17 @@ export class RtsController {
     return this.matchLink ? this.matchLink.pingMs() : undefined;
   }
 
+  /** This player's actions per minute, for the HUD's "Display APM" row. `undefined` while
+   *  watching (there is no "my" player) or before a match exists — the strip prints "—". */
+  localApm(): number | undefined {
+    if (this.observing) return undefined;
+    try {
+      return this.authority.actions.apm(this.localPlayer, this.sim.elapsed);
+    } catch {
+      return undefined;
+    }
+  }
+
   /** The one-time notice that the drift comparison has ended (item F5) has been printed. */
   private saidComparisonStopped = false;
   private hbAccum = 0;
@@ -10040,6 +10304,8 @@ export class RtsController {
         givesBounty: (p) => this.sim.givesBounty(p, teamOf(p)),
         currentOrderId: (id) => this.authority.currentOrderId(id),
         issueUnitOrder: (id, oid, o, k, x, y, t) => this.authority.issueUnitOrder(id, oid, o, k, x, y, t),
+        issueItemOrder: (id, oid, o, itemId) => this.authority.issueItemOrder(id, oid, o, itemId),
+        issueTreeOrder: (id, oid, o, x, y) => this.authority.issueTreeOrder(id, oid, o, x, y),
         // A neutral shop is nobody's, so this errand cannot go through the order funnel; the
         // authority maps the TYPE to the shop that serves the player (see its method).
         issueNeutralImmediateOrder: (p, u, t) => this.authority.issueNeutralImmediateOrder(p, u, t),
@@ -10089,6 +10355,7 @@ export class RtsController {
         const clone = { ...def, tips: [...def.tips], uberTips: [...def.uberTips] };
         (extended ? clone.uberTips : clone.tips)[rank] = text;
         this.abilities.setCustom(abilId, clone);
+        this.abilityEdits.set(abilId, clone); // …and kept for a saved game (abilityEdits)
       },
       // Any object with an Art field answers, not only an ability: Test of Balance fills its
       // scoreboard's hero column with `BlzGetAbilityIcon(GetUnitTypeId(u))` (AddHero), and a
@@ -10096,7 +10363,11 @@ export class RtsController {
       abilityIcon: (id) => this.abilities.get(id)?.icon || this.registry.get(id)?.icon || this.items.get(id)?.icon || "",
       setAbilityIcon: (abilId, path) => {
         const def = this.abilities.get(abilId);
-        if (def) this.abilities.setCustom(abilId, { ...def, icon: path });
+        if (def) {
+          const clone = { ...def, icon: path };
+          this.abilities.setCustom(abilId, clone);
+          this.abilityEdits.set(abilId, clone);
+        }
       },
       // …and ONE item's long description, which is not the type's: two Claws of Attack can say
       // different things. Keyed on the item's entity id, like `SetItemDroppable`'s override.
@@ -10508,6 +10779,14 @@ export class RtsController {
     {
       const g = this.groundPoint(cssX, cssY);
       const gitem = g ? this.itemAt(g[0], g[1], ITEM_PICK_RADIUS) : null;
+      // A Mirror Image's six slots are a picture (docs/illusions.md): it picks up nothing,
+      // and the game has the line for it — [Errors] `Illusionscantpickup` "Illusions cannot
+      // pick up items." Answered at the click, so the copy does not walk over to the item
+      // and stand on it saying nothing (issue #299).
+      if (gitem && prim && this.controls(prim.id) && prim.inventory.length && prim.isIllusion) {
+        this.refuseOrder("Illusionscantpickup");
+        return;
+      }
       if (gitem && this.pickUpGroundItem(gitem.id)) return;
     }
     // Acknowledge the order with the focused unit's voice — attack quote if it
@@ -11062,10 +11341,20 @@ export class RtsController {
     return any;
   }
 
+  /** The destinations a ground order hands the selection. With "Enable Formation Movement" on
+   *  (the default) each unit gets its own slot around the point; off, everyone is sent to the
+   *  clicked point itself and the group crowds in, which is what the row's OFF means. */
+  private moveTargets(tx: number, ty: number): Map<number, [number, number]> {
+    if (!formationMovement()) {
+      return new Map([...this.orderees].map((id) => [id, [tx, ty] as [number, number]]));
+    }
+    return groupTargets(this.sim, [...this.orderees], tx, ty);
+  }
+
   /** Issue a formation move for the whole selection to a ground point (or queue
    *  each unit's slot move when Shift is held). */
   private groupMove(tx: number, ty: number, queued = false): boolean {
-    const targets = groupTargets(this.sim, [...this.orderees], tx, ty);
+    const targets = this.moveTargets(tx, ty);
     let any = false;
     for (const [id, [x, y]] of targets) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "move", x, y }, queued: queued })) any = true;
     return any; // …did anyone actually take it? The ground arrow hangs off this
@@ -11091,7 +11380,7 @@ export class RtsController {
    *  spread out there instead of cramming on one tile — but issued as attack-move, so
    *  each unit fights the nearest enemy in its path and resumes to its slot afterwards. */
   private groupAttackMove(tx: number, ty: number, queued = false): boolean {
-    const targets = groupTargets(this.sim, [...this.orderees], tx, ty);
+    const targets = this.moveTargets(tx, ty);
     let any = false;
     for (const [id, [x, y]] of targets) if (this.execute(this.localPlayer, { c: "order", unitId: id, order: { kind: "attackmove", x, y }, queued: queued })) any = true;
     return any;
@@ -11633,6 +11922,10 @@ export class RtsController {
    *    • a neutral-passive prop (shop, critter, neutral building) → its name only.
    *    • a gold mine → "Gold Mine" + "Gold: N"; a ground item → its name. */
   private computeHoverTip(): { x: number; y: number; z: number; radius: number; lines: HoverLine[] } | null {
+    // Read, never retyped (docs/tooltips.md): `GlobalStrings.fdf` INFOPANEL_LEVEL "Level %u" and
+    // `InfoPanelStrings.fdf` COLON_GOLD "Gold:" — the info panel's own two strings (hud.ts).
+    const levelLine = (n: number): string => (this.uiString?.("INFOPANEL_LEVEL", "Level %u") ?? "Level %u").replace("%u", String(n));
+    const goldLine = (n: number): string => `${this.uiString?.("COLON_GOLD", "Gold:") ?? "Gold:"} ${n}`;
     if (this.hovered !== null) {
       // The slab floats over the unit, so it reads the same record the model does.
       const u = this.frameUnit(this.hovered);
@@ -11648,24 +11941,24 @@ export class RtsController {
         lines.push({ text: e.name, color: HOVER_TEXT });
         if (!u.neutralPassive && !guised) {
           const lvl = u.isHero ? u.level : (this.registry.get(e.typeId)?.level ?? 0);
-          if (lvl > 0) lines.push({ text: `Level ${lvl}`, color: HOVER_TEXT });
+          if (lvl > 0) lines.push({ text: levelLine(lvl), color: HOVER_TEXT });
         }
       } else if (u.owner === this.localPlayer) {
         // Your own units wear no owner line; only a hero (name + level) and a covered gold
         // mine (name + gold) are worth a slab.
         if (!u.isHero && gold === null) return null;
         lines.push({ text: displayHeroName(u.properName, e.name), color: HOVER_TEXT });
-        if (u.isHero) lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
+        if (u.isHero) lines.push({ text: levelLine(u.level), color: HOVER_TEXT });
       } else {
         // Another player's unit: the owner's name, coloured by diplomacy to us.
         const ally = this.localAlly(u.owner);
         lines.push({ text: this.playerLabel(u.owner), color: ally ? HOVER_OWNER_ALLY : HOVER_OWNER_ENEMY });
         if (u.isHero) {
           lines.push({ text: displayHeroName(u.properName, e.name), color: HOVER_TEXT });
-          lines.push({ text: `Level ${u.level}`, color: HOVER_TEXT });
+          lines.push({ text: levelLine(u.level), color: HOVER_TEXT });
         }
       }
-      if (gold !== null) lines.push({ text: `Gold: ${gold}`, color: HOVER_TEXT });
+      if (gold !== null) lines.push({ text: goldLine(gold), color: HOVER_TEXT });
       return { x: u.x, y: u.y, z: this.standZ(e, u.x, u.y) + e.moveHeight, radius: e.selRadius, lines };
     }
     if (this.hoveredMine !== null) {
@@ -11674,7 +11967,7 @@ export class RtsController {
       const name = this.registry.get("ngol")?.name || "Gold Mine";
       return {
         x: m.x, y: m.y, z: this.heightAt(m.x, m.y), radius: 64,
-        lines: [{ text: name, color: HOVER_TEXT }, { text: `Gold: ${m.gold}`, color: HOVER_TEXT }],
+        lines: [{ text: name, color: HOVER_TEXT }, { text: goldLine(m.gold), color: HOVER_TEXT }],
       };
     }
     if (this.hoveredItem !== null) {

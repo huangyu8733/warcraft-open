@@ -14,6 +14,15 @@ export interface DataSource {
   /** Known file paths. Requires a listfile for MPQ sources (WC3's MPQs ship one). */
   list(): string[];
   /**
+   * The bytes the LOW-priority base archive (`War3.mpq`) had for a path an art module
+   * (`War3HD.mpq` / `War3DE.mpq`) overrode, or null when nothing was overridden. Only the CASC
+   * source implements this: 3.0's HD/DE modules replace a number of SD missile/spell models
+   * with particle-only shells (no GEOS chunk), and the renderer falls back to the base copy so
+   * those effects stay visible (render/assetSolver.ts). MPQ sources layer on their own and have
+   * no such base to offer.
+   */
+  baseBytes?(path: string): Promise<Uint8Array | null>;
+  /**
    * Open a nested archive this source keeps EXPLODED rather than as a blob, or null when it
    * has no such thing. Only CASC does: 1.30 flattened every campaign map into the content
    * store, so `Maps\…\OrcX01.w3x` is a set of entries rather than a file (vfs/casc.ts).

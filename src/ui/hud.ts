@@ -27,10 +27,12 @@ import { gamepadPaired, isHovered } from "./gamepad";
 import { setGameTip } from "./gameTip";
 import { HERO_LEVEL_FX_OVERHANG, HeroLevelFx } from "./heroLevelFx";
 import { MODAL_FX_OVERHANG, ModalButtonFx } from "./modalButtonFx";
+import { QuestButtonFx } from "./questButtonFx";
 import { anyModalOpen } from "./modal";
 import { ObserverHud, OBS, clock as matchClockText, type ObserverSeat } from "./observerHud";
 import { REPLAY_SPEEDS } from "./replayPanel";
 import { gridCommandKey, gridCommandSlot, gridHotkeys, gridInventoryKey, gridInventorySlot, hotkeyMode, hotkeysOnButtons } from "../data/hotkeys";
+import { hudScale, showCooldownNumbers, showTimeElapsed } from "../render/gameplayOptions";
 
 /** Which upkeep band a food count falls in: 0 none, 1 low, 2 high — at the bands of this match
  *  (gameplayConstants `upkeepBands`: the edition's, or the map's war3mapMisc.txt). Shared with
@@ -813,19 +815,17 @@ const STATBAR_FILL = "UI\\Feedback\\HPBarConsole\\human-healthbar-fill.blp";
  * The one number NOT in that shot is the gap between two buttons — it holds a single hero.
  * The stack gap below is eyeballed to keep the stack reading as separate buttons.
  *
- * **One slot, one number.** The icon and the bars under it are the SAME width — they share
- * the slot, so their edges line up — and every other length in the widget (bar heights, the
- * frame bevel, the stack pitch) is a fraction of that one width, written out in `style.css`
- * against the measured 72 px. So `HERO_BAR.slot` is the only knob: change it and the whole
- * hero bar scales as a piece. The reference bars are 72 px wide and its button 68; we draw
- * the slot at 76 so the portrait reads a little bigger than the real client's (a deliberate,
- * developer-asked deviation — the one place this widget departs from the shot).
+ * **One slot, one number.** `HERO_BAR.slot` is the icon width — 69 px at 1080p, the reference
+ * shot's own button. The HP/mana block under it is 72 px, the sliver wider the real client
+ * draws, and every other length in the widget (bar heights, the frame bevel, the stack pitch)
+ * is a fraction of the slot, written out in `style.css` against the same 69 px. So
+ * `HERO_BAR.slot` is the only knob: change it and the whole hero bar scales as a piece.
  */
 const HERO_PX = UI_HEIGHT / 1080; // one screen pixel of the reference capture, in world units
 const HERO_BAR = {
   left: 3 * HERO_PX,
   top: 0.032 + 2 * HERO_PX, // clear of the upper button bar's strip (ConsoleUI.fdf: 0.032 tall)
-  slot: 76 * HERO_PX, // icon width = bars width = the slot; everything else scales off it
+  slot: 69 * HERO_PX, // icon width; the bars under it are 72/69 of this (see style.css)
   max: 7, // the most buttons the real bar holds
 } as const;
 
@@ -1453,6 +1453,7 @@ export class GameHud {
   private agiLine!: HTMLDivElement;
   private intLine!: HTMLDivElement;
   private selStatus!: HTMLDivElement; // buff/aura/debuff status icons row
+  private selStatusLabel!: HTMLDivElement; // its "Status:" lead (COLON_STATUS)
   private selStatusSlots: HTMLDivElement[] = [];
   private selHpText!: HTMLDivElement;
   private selMpText!: HTMLDivElement;
@@ -1584,7 +1585,9 @@ export class GameHud {
   private chatPromptEl!: HTMLSpanElement;
   private chatInput!: HTMLInputElement;
   private chatTarget: ChatTarget = { scope: "all" };
-  private questsBtn?: HTMLButtonElement; // glows on FlashQuestDialogButton until pressed
+  /** The sparks round the console's Quests button (ui/questButtonFx.ts). The canvas is ours;
+   *  the console strip parks it on its button (`questGlow`). */
+  private questFx!: QuestButtonFx;
   /** Who plain Enter talks to, once somebody has SAID so — the F12 dialog (ui/chatDialog.ts),
    *  whose whole job is choosing this, or a Tab in the entry line. Null until then, which is
    *  not the same as "all": with nothing chosen the audience follows the alliances, and a
@@ -1608,6 +1611,7 @@ export class GameHud {
     // skill point waiting. Built before the console and the hero bar because both hang their
     // overlays off it, and told once where its texture is.
     this.modalFx = new ModalButtonFx(driver.blpCanvas(MODAL_SPARK));
+    this.questFx = new QuestButtonFx(driver.blpCanvas(MODAL_SPARK)); // the same spark texture
     // …and how far past a button's edge that effect reaches, so the stylesheet can inset the
     // overlay by the model's own geometry instead of a number typed twice.
     this.root.style.setProperty("--modal-fx-overhang", `${(MODAL_FX_OVERHANG * 100).toFixed(3)}%`);
@@ -1837,7 +1841,17 @@ export class GameHud {
     this.setArmed(false);
   }
 
+  /** The last interface scale written, so the style is only touched when the slider moves. */
+  private hudScaleSeen = 0;
+
   frame(dtMs: number): void {
+    // "HUD Scale" — one transform on the whole interface; the world layer (bars, crew counts)
+    // is a sibling and deliberately unscaled.
+    const scale = hudScale();
+    if (this.hudScaleSeen !== scale) {
+      this.hudScaleSeen = scale;
+      this.root.style.setProperty("--hud-scale", String(scale));
+    }
     if (this.root.hidden) return;
     this.syncCheatPanel();
     this.dotsT += dtMs;
@@ -1872,7 +1886,9 @@ export class GameHud {
     this.refreshAutoCameraBox();
     this.observerHud?.frame(dtMs);
     if (this.matchClock) {
-      const off = this.driver.isCampaign();
+      // "Show Time Elapsed" — the match clock under the medallion. A campaign chapter never
+      // shows it: a mission is not a match against the clock.
+      const off = this.driver.isCampaign() || !showTimeElapsed();
       if (this.matchClock.hidden !== off) this.matchClock.hidden = off;
       const time = off ? "" : matchClockText(this.driver.matchSeconds());
       if (this.matchClock.textContent !== time) this.matchClock.textContent = time;
@@ -1882,6 +1898,7 @@ export class GameHud {
     // simulated once for all of them (see ModalButtonFx).
     this.modalFx.tick(dtMs);
     this.heroLevelFx.tick(dtMs);
+    this.questFx.tick(dtMs);
   }
 
   /** Redraw the selection-dependent panels right now rather than on the next
@@ -2476,7 +2493,12 @@ export class GameHud {
   /** The Quests button's flash (FlashQuestDialogButton): on when the script announced
    *  something, off the moment the log is opened — as in the game. */
   flashQuests(on: boolean): void {
-    this.questsBtn?.classList.toggle("hud-quests-flash", on);
+    this.questFx.set(on);
+  }
+
+  /** The glow's canvas, for the console strip to hang on its Quests button at every build. */
+  questGlow(): HTMLElement {
+    return this.questFx.element;
   }
 
   /** Point plain Enter at a different audience — what the F12 dialog's OK commits. */
@@ -3447,8 +3469,8 @@ export class GameHud {
     this.selStats.className = "hud-sel-stats";
     // Left column: Damage + Armor blocks (icon + "Label:" over the value). Right
     // column: ONE primary-attribute icon beside the three attribute value lines.
-    this.attackStat = makeStatBlock(t("hud.damage"));
-    this.armorStat = makeStatBlock(t("hud.armor"));
+    this.attackStat = makeStatBlock();
+    this.armorStat = makeStatBlock();
     const leftCol = document.createElement("div");
     leftCol.className = "hud-stat-col";
     leftCol.append(this.attackStat.row, this.armorStat.row);
@@ -3481,6 +3503,7 @@ export class GameHud {
     const statusLabel = document.createElement("div");
     statusLabel.className = "hud-buff-label";
     statusLabel.textContent = t("hud.status");
+    this.selStatusLabel = statusLabel;
     const statusIcons = document.createElement("div");
     statusIcons.className = "hud-buff-icons";
     for (let i = 0; i < 8; i++) {
@@ -3686,7 +3709,10 @@ export class GameHud {
       const word = this.driver.uiString("INVENTORY", "Inventory");
       if (this.invTitle.textContent !== word) this.invTitle.textContent = word;
     }
-    // Cooldown sweep every frame (cheap; the diff key ignores cooldown).
+    // Cooldown sweep every frame (cheap; the diff key ignores cooldown). The seconds count is
+    // its own Gameplay switch — the sweep still says "not yet", the number is what some players
+    // find noisy — so only the text is gated, never the wedge.
+    const cdNumbers = showCooldownNumbers();
     for (let i = 0; i < this.invSlots.length; i++) {
       const s = inv[i] ?? null;
       const cd = this.invCdOverlay[i];
@@ -3694,7 +3720,7 @@ export class GameHud {
         cd.hidden = false;
         const elapsedDeg = (1 - s.cooldownFrac) * 360;
         cd.style.background = `conic-gradient(transparent 0deg ${elapsedDeg}deg, rgba(0,0,0,0.62) ${elapsedDeg}deg 360deg)`;
-        this.invCdText[i].textContent = cdSeconds(s.cooldownLeft);
+        this.invCdText[i].textContent = cdNumbers ? cdSeconds(s.cooldownLeft) : "";
       } else {
         cd.hidden = true;
       }
@@ -4091,6 +4117,7 @@ export class GameHud {
   /** Per-frame: draw a clockwise dark radial sweep + a seconds count over any
    *  ability button that's on cooldown (WC3-style). */
   private updateCooldownOverlays(cmds: CommandButton[]): void {
+    const cdNumbers = showCooldownNumbers();
     for (const cd of this.cmdCdOverlay) cd.hidden = true;
     for (const c of cmds) {
       if (!c.cooldownLeft || c.cooldownLeft <= 0) continue;
@@ -4102,7 +4129,7 @@ export class GameHud {
       // is what's still on cooldown.
       const elapsedDeg = (1 - (c.cooldownFrac ?? 0)) * 360;
       cd.style.background = `conic-gradient(transparent 0deg ${elapsedDeg}deg, rgba(0,0,0,0.62) ${elapsedDeg}deg 360deg)`;
-      this.cmdCdText[idx].textContent = cdSeconds(c.cooldownLeft);
+      this.cmdCdText[idx].textContent = cdNumbers ? cdSeconds(c.cooldownLeft) : "";
     }
   }
 
@@ -4128,6 +4155,20 @@ export class GameHud {
 
   // --- per-frame updates ----------------------------------------------------
 
+  /** The info panel's fixed labels, read out of `UI\FrameDef\InfoPanelStrings.fdf` (each key
+   *  carries its own colon) rather than typed here, so a locale or a map's `war3mapSkin.txt`
+   *  rewords them. Asked every frame because the string table loads after the HUD is built;
+   *  the DOM is only touched when a word changed. */
+  private refreshPanelLabels(): void {
+    const put = (el: HTMLElement, key: string, fallback: string): void => {
+      const word = this.driver.uiString(key, fallback);
+      if (el.textContent !== word) el.textContent = word;
+    };
+    put(this.attackStat.label, "COLON_DAMAGE", "Damage:");
+    put(this.armorStat.label, "COLON_ARMOR", "Armor:");
+    put(this.selStatusLabel, "COLON_STATUS", "Status:");
+  }
+
   private updateTexts(): void {
     const r = this.driver.resources();
     // WC3 upkeep brackets: 0–50 none, 51–80 low, 81+ high (upkeepBand).
@@ -4141,6 +4182,7 @@ export class GameHud {
       supply: r.foodUsed > r.foodMax ? `|cffff0000${r.foodUsed}/${r.foodMax}|r` : `${r.foodUsed}/${r.foodMax}`,
       upkeep: this.driver.uiString(UPKEEP_KEY[band], UPKEEP_FALLBACK[band]),
     });
+    this.refreshPanelLabels();
 
     const sel = this.driver.selection();
     // …and so is a unit with no MODEL: there is no bust to draw (an invisible dummy).
@@ -5165,10 +5207,11 @@ export class GameHud {
   }
 }
 
-interface StatBlock { row: HTMLDivElement; icon: HTMLDivElement; level: HTMLDivElement; value: HTMLDivElement; }
+interface StatBlock { row: HTMLDivElement; icon: HTMLDivElement; level: HTMLDivElement; label: HTMLDivElement; value: HTMLDivElement; }
 
-/** A stat block: [icon] then "Label:" over the value line (WC3 info panel). */
-function makeStatBlock(label: string): StatBlock {
+/** A stat block: [icon] then "Label:" over the value line (WC3 info panel). The label is
+ *  worded by the HUD's refreshPanelLabels, off the game's own string table. */
+function makeStatBlock(): StatBlock {
   const row = document.createElement("div");
   row.className = "hud-stat-block";
   const icon = document.createElement("div");
@@ -5184,12 +5227,11 @@ function makeStatBlock(label: string): StatBlock {
   text.className = "hud-stat-text";
   const lab = document.createElement("div");
   lab.className = "hud-stat-label";
-  lab.textContent = label;
   const value = document.createElement("div");
   value.className = "hud-stat-value";
   text.append(lab, value);
   row.append(icon, text);
-  return { row, icon, level, value };
+  return { row, icon, level, label: lab, value };
 }
 type StatTip = "attack" | "armor" | "attributes";
 

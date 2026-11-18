@@ -13,6 +13,7 @@ import { orderIdOf, orderIdToString, orderStringToId } from "../orders";
 import type { BuffFilter, EngineHooks, JassPlayer, JassUnit, NativeCtx, Runtime, UnitTypeDefault } from "../runtime";
 import { dbg } from "../../dev/dbg";
 import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
+import { issueTargetOrder } from "./orderTarget";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -20,7 +21,7 @@ const unit = (ctx: NativeCtx, v: JassValue): JassUnit | undefined => ctx.rt.data
 
 /** Create a unit and hand back a `unit` handle. player is a handle, typeId an int
  *  rawcode; we convert it to the 4-char string the engine bridge expects. */
-function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: number, y: number, facing: number): JassValue {
+function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: number, y: number, facing: number, skinId = 0): JassValue {
   const rt = ctx.rt;
   const playerIdx = rt.data<JassPlayer>(playerV)?.index ?? asInt(playerV);
   const typeId = intToRawcode(typeInt);
@@ -42,6 +43,9 @@ function createUnit(ctx: NativeCtx, playerV: JassValue, typeInt: number, x: numb
   const simId = rt.spawnSuppressed
     ? rt.hooks?.findPlacedUnit?.(typeId, x, y) ?? -1
     : rt.hooks?.createUnit?.(playerIdx, typeId, x, y, facing) ?? -1;
+  // A Reforged SKIN is a render-only fact: the sim keeps it on the unit for the renderer to pick
+  // a model with, and the authoritative state and replay hash never see it.
+  if (simId >= 0 && skinId) rt.hooks?.setUnitSkin?.(simId, skinId);
   return mintUnitHandle(rt, playerIdx, typeId, x, y, facing, simId);
 }
 
@@ -74,10 +78,15 @@ export function registerWorldNatives(rt: Runtime): void {
     return createUnit(c, a[0], asInt(a[1]), asNum(a[2]), asNum(a[3]), asNum(a[4]));
   });
   // 1.31's CreateUnit with a Reforged HD SKIN id on the end (declared in our own compat
-  // prelude — src/compat/prelude.ts). We draw SD out of an SD install, so the skin is read
-  // and dropped: the unit is created exactly as CreateUnit would, which is what the map
-  // wanted the call for. Every later-format map in the corpus uses it in place of CreateUnit.
-  def(rt, "BlzCreateUnitWithSkin", (c, a) => createUnit(c, a[0], asInt(a[1]), asNum(a[2]), asNum(a[3]), asNum(a[4])));
+  // prelude — src/compat/prelude.ts). The skin is a RENDER-only fact (P5): the renderer picks
+  // its model with it in HD, and SD ignores it, which is what the map wanted the call for.
+  def(rt, "BlzCreateUnitWithSkin", (c, a) => createUnit(c, a[0], asInt(a[1]), asNum(a[2]), asNum(a[3]), asNum(a[4]), asInt(a[5])));
+  // …and the same skin on a unit that already exists (1.31).
+  def(rt, "BlzSetUnitSkin", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitSkin?.(u.simId, asInt(a[1]));
+    return JNULL;
+  });
   // CreateUnitAtLoc takes a location handle {x,y}; degrade gracefully if unresolved.
   def(rt, "CreateUnitAtLoc", (c, a) => {
     const loc = c.rt.data<{ x: number; y: number }>(a[2]);
@@ -142,6 +151,12 @@ export function registerWorldNatives(rt: Runtime): void {
   def(rt, "UnitCountBuffsEx", (c, a) => {
     const u = unit(c, a[0]);
     return jInt(u && u.simId >= 0 ? c.rt.hooks?.countBuffs?.(u.simId, buffFilter(a, 1)) ?? 0 : 0);
+  });
+  // UnitHasBuffsEx — the same filter, asked as a yes/no: common.j declares it argument for
+  // argument beside UnitCountBuffsEx, and it is that count > 0 (issue #236).
+  def(rt, "UnitHasBuffsEx", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(!!u && u.simId >= 0 && (c.rt.hooks?.countBuffs?.(u.simId, buffFilter(a, 1)) ?? 0) > 0);
   });
   // CreateCorpse(player, unitid, x, y, facing) → the body's `unit` — a DEAD one (simId -1, so
   // IsUnitType(…, UNIT_TYPE_DEAD) answers true off its type), or null when the type leaves no
@@ -317,8 +332,10 @@ export function registerWorldNatives(rt: Runtime): void {
   const issue = (c: NativeCtx, unitV: JassValue, order: string, orderId: number, kind: "immediate" | "point" | "target", x: number, y: number, targetV: JassValue): JassValue => {
     const u = unit(c, unitV);
     if (!u || u.simId < 0) return jBool(false);
-    const t = kind === "target" ? unit(c, targetV) : undefined;
-    const ok = c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, t?.simId ?? 0) ?? false;
+    // A target is a WIDGET — a unit, an item or a destructable (natives/orderTarget.ts).
+    const ok = kind === "target"
+      ? issueTargetOrder(c, u.simId, orderId, order, targetV)
+      : c.rt.hooks?.issueUnitOrder?.(u.simId, orderId, order, kind, x, y, 0) ?? false;
     if (/^(stomp|charm|slow|thunderclap|fanofknives|roar|channel|creepthunderbolt)$/i.test(order) || /^(h07Z|e00E|h07U|o02D|h07P|e00H|h046)$/i.test(u.typeId)) dbg("order", u.typeId, kind, order, ok);
     return jBool(ok);
   };
@@ -405,6 +422,53 @@ export function registerWorldNatives(rt: Runtime): void {
   });
   def(rt, "GetUnitPointValueByType", (c, a) =>
     jInt(c.rt.hooks?.unitTypeDefault?.(intToRawcode(asInt(a[0])), "pointValue") ?? 0));
+  // Food (common.j 1649–1653). The TYPE's UnitBalance `fused`/`fmade`, by type id or off the
+  // handle's type — so, like the defaults above, a unit that has died still answers. Per unit,
+  // the one thing a unit can change about it is whether it EATS ("Enable/Disable Supply Usage",
+  // UI\TriggerStrings.txt — SetUnitUseFood), so a unit turned off (or charmed, possessed,
+  // reborn: SimUnit.foodFree) uses 0 and still makes what its type makes.
+  const typeFood = (c: NativeCtx, typeId: string, field: "foodUsed" | "foodMade"): number =>
+    c.rt.hooks?.unitTypeDefault?.(typeId, field) ?? 0;
+  def(rt, "GetUnitFoodUsed", (c, a) => {
+    const u = unit(c, a[0]);
+    if (!u) return jInt(0);
+    if (u.simId >= 0 && c.rt.hooks?.getUnitUsesFood?.(u.simId) === false) return jInt(0);
+    return jInt(typeFood(c, u.typeId, "foodUsed"));
+  });
+  def(rt, "GetUnitFoodMade", (c, a) => {
+    const u = unit(c, a[0]);
+    return jInt(u ? typeFood(c, u.typeId, "foodMade") : 0);
+  });
+  def(rt, "GetFoodUsed", (c, a) => jInt(typeFood(c, intToRawcode(asInt(a[0])), "foodUsed")));
+  def(rt, "GetFoodMade", (c, a) => jInt(typeFood(c, intToRawcode(asInt(a[0])), "foodMade")));
+  def(rt, "SetUnitUseFood", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitUseFood?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  // Nocturnal sleep (common.j 1697–1702; blizzard.j's UnitSetCanSleepBJ/UnitCanSleepBJ/
+  // UnitIsSleepingBJ/UnitWakeUpBJ wrap them one for one). "This affects nocturnal sleep, not
+  // magical sleep" (UI\TriggerStrings.txt [UnitWakeUpBJHint]) — a Sleep spell's victim is a buff,
+  // and `UnitIsSleeping` is the same `SimUnit.asleep` that IsUnitType(u, UNIT_TYPE_SLEEPING) reads.
+  // The …Perm pair (sleep by DAY too, "when unprovoked") has no sim rule behind it yet.
+  def(rt, "UnitAddSleep", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.setUnitCanSleep?.(u.simId, a[1]?.k === "bool" && a[1].b);
+    return JNULL;
+  });
+  def(rt, "UnitCanSleep", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(!!u && u.simId >= 0 && c.rt.hooks?.getUnitCanSleep?.(u.simId) === true);
+  });
+  def(rt, "UnitIsSleeping", (c, a) => {
+    const u = unit(c, a[0]);
+    return jBool(!!u && u.simId >= 0 && c.rt.hooks?.getUnitSleeping?.(u.simId) === true);
+  });
+  def(rt, "UnitWakeUp", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.wakeUnit?.(u.simId);
+    return JNULL;
+  });
   def(rt, "GetUnitTypeId", (c, a) => jInt(unit(c, a[0]) ? rawcodeToInt(unit(c, a[0])!.typeId) : 0));
   def(rt, "GetOwningPlayer", (c, a) => c.rt.playerHandle(unit(c, a[0])?.player ?? neutralSlot(PlayerSlot.NeutralPassive)));
   // Position/facing prefer the live sim value (a script-created unit's handle keeps its
@@ -507,15 +571,20 @@ export function registerWorldNatives(rt: Runtime): void {
     return JNULL;
   });
   // SetUnitAnimation plays a named clip ("attack", "stand victory", "birth"); the name
-  // is matched against the model's own sequence names. QueueUnitAnimation has no queue
-  // here — it plays the clip the same way; ResetUnitAnimation returns to the idle stand.
+  // is matched against the model's own sequence names. QueueUnitAnimation plays its clip
+  // AFTER the one showing (a queue the picture keeps — RtsController.queueUnitAnimation);
+  // ResetUnitAnimation returns to the idle stand.
   const anim = (c: NativeCtx, unitV: JassValue, name: string): JassValue => {
     const u = unit(c, unitV);
     if (u && u.simId >= 0) c.rt.hooks?.setUnitAnimation?.(u.simId, name);
     return JNULL;
   };
   def(rt, "SetUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
-  def(rt, "QueueUnitAnimation", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
+  def(rt, "QueueUnitAnimation", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u && u.simId >= 0) c.rt.hooks?.queueUnitAnimation?.(u.simId, a[1].k === "string" ? a[1].s : "");
+    return JNULL;
+  });
   def(rt, "ResetUnitAnimation", (c, a) => anim(c, a[0], ""));
   // SetUnitExploded (common.j 1608) — the unit bursts into its "Art - Special" when it dies and
   // leaves no corpse (SimWorld.kill). A world fact: nothing can raise what was not left.

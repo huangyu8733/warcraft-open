@@ -24,7 +24,7 @@
 // leaderboard/multiboard do) — a quest completing while the log is open repaints in place.
 
 import type { QuestObj } from "../jass/runtime";
-import { blpToCanvas } from "../render/blputil";
+import { vfsImage } from "../render/blputil";
 import type { DataSource } from "../vfs/types";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { cloneNamespaced, numProp, strProp, type FdfLibrary } from "./fdf/library";
@@ -432,8 +432,7 @@ export class QuestDialogOverlay {
     if (!plate) return;
     const path = q.discovered ? q.iconPath.replace(/\.tga$/i, ".blp") : this.undiscoveredIcon;
     if (!path) return;
-    const bytes = this.vfs.rawBytes(path);
-    const canvas = bytes ? blpToCanvas(bytes) : null;
+    const canvas = vfsImage(this.vfs, path);
     if (!canvas) return;
     const img = document.createElement("img");
     img.className = "quest-row-icon";

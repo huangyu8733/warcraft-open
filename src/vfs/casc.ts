@@ -1,5 +1,7 @@
-import { decodeBlte } from "./blte";
+import { decodeBlte, decodeBlteAsync, isBlte } from "./blte";
 import { type DataSource, type LoadProgress, normalizeMpqPath } from "./types";
+import { setGameLocale } from "./gameLocale";
+import { currentLocale } from "../i18n";
 
 /**
  * CASC — the storage a Warcraft III 1.30+ install uses in place of MPQ archives (issue #102).
@@ -219,6 +221,17 @@ const INDEX_KEY_HEX = 18;
  *  `%s` stands in for the install's locale. */
 const ARCHIVE_ORDER = ["Deprecated.mpq", "War3.mpq", "%s-War3Local.mpq"] as const;
 
+/** Which art set a store is mounted for. `sd` is 1.30.4 and every MPQ-era folder; `hd`/`de`
+ *  are Reforged 3.0's two parallel art sub-modules (see `data/flavor.ts` `hdArt`). */
+export type CascGraphics = "sd" | "hd" | "de";
+
+/** The archive names the two Reforged art sub-modules become (see `legacyRootName`). */
+const ART_ARCHIVE: Record<"hd" | "de", string> = { hd: "War3HD.mpq", de: "War3DE.mpq" };
+const ART_LOCAL_ARCHIVE: Record<"hd" | "de", string> = {
+  hd: "%s-War3HDLocal.mpq",
+  de: "%s-War3DELocal.mpq",
+};
+
 /** The locale archives a Warcraft III install can carry; a given install ships exactly one. */
 const LOCALES = ["enUS", "deDE", "esES", "frFR", "itIT", "koKR", "plPL", "ruRU", "zhCN", "zhTW"];
 
@@ -230,6 +243,32 @@ const LOCALES = ["enUS", "deDE", "esES", "frFR", "itIT", "koKR", "plPL", "ruRU",
  *  exploded and their entries end in `war3map.j` and the like. Everything else preloads; see
  *  `CascDataSource.preload`. */
 const STREAMED = /\.(wav|mp3|avi|flac|ogg|w3m|w3x)$/i;
+
+/** The Reforged art left on disk even when a mount preloads everything else (P3). 17.4 GB of
+ *  DDS/MDX is what makes a Reforged install un-preloadable; the solver reads each one through
+ *  the async path the first time a scene asks for it (render/assetSolver.ts). `.blp` and the
+ *  fonts stay IN — 3 MB of SD art the base module still names, and 69 MB of type. */
+const LAZY_ART = /\.(dds|mdx|mdl|png|jpg|jpeg|tga|webm|w3xd|pkb|bls)$/i;
+
+/** Art the DOM reads SYNCHRONOUSLY (`rawBytes`) or before the first frame, even on a lazy mount.
+ *  The FDF console, the map browser, cursors and the command-card icons all decode through
+ *  `rawBytes`, which cannot wait for `read()`; the building-foundation splats are built into
+ *  canvases at map load. Keeping only those trees costs ~230 MiB compressed on 3.0 (UI 95, the
+ *  command-card/team-colour/shadow icons 103, splats ~30) instead of holding 1.4 GB of scenery
+ *  and unit DDS that the asset solver reads asynchronously the first time a scene asks.
+ *
+ *  `PathTextures` is here for GAMEPLAY, not for the DOM: every doodad's and building's blocking
+ *  footprint is decoded from its `.tga` (sim/destructibles.ts), and the map's pathing grid is
+ *  stamped synchronously before the first sim tick. On a lazy mount `rawBytes` answered null for
+ *  those 209 files, so no tree, rock or map building got a footprint and units walked through
+ *  them — a Reforged-only divergence (SD mounts are never lazy). They are a few hundred KB. */
+const EAGER_ART = /^(?:ui|pathtextures|environment\\dnc|replaceabletextures\\(?:commandbuttons|commandbuttonsdisabled|passivebuttons|teamcolor|shadows|splats|selection))\\/i;
+
+/** A model, as opposed to the other lazy art: the only file `rawBytes` is asked for a second
+ *  time after `read()` has fetched it — by the sound board, for the SND events inside it. */
+const MODEL_FILE = /\.(mdx|mdl)$/i;
+/** ~a melee match's whole unit, building and effect set. FIFO, like the decoded table. */
+const MODEL_BYTES_BUDGET = 64 * 1024 * 1024;
 
 /** One root line: `<archive>:<path>|<ckey>|<locale>`, or an unprefixed installer file. */
 interface RootEntry {
@@ -271,18 +310,48 @@ const STORE_MAPS = "Maps";
  * chapter is filed under BOTH spellings (joined by CAMPAIGN_ALIAS), because 1.31's own
  * `UI\CampaignStrings_exp.txt` names the new one and that file is wording we leave alone.
  * Every other name passes through unchanged, so a 1.30.4 root is untouched.
+ *
+ * 3.0 (Reforged) keeps the 1.31 tree and adds two PARALLEL ART SUB-MODULES at the same paths
+ * the base module names:
+ *
+ *   War3.w3mod:_HD.w3mod:<p>                            → War3HD.mpq:<p>
+ *   War3.w3mod:_DE.w3mod:<p>                            → War3DE.mpq:<p>
+ *   War3.w3mod:_DE.w3mod:_Locales/zhCN.w3mod:<p>        → zhCN-War3DELocal.mpq:<p>
+ *   War3.w3mod:_DE.w3mod:_Tilesets/Z.w3mod:<p>          → War3DE.mpq:Z.mpq:<p>
+ *
+ * The base module still carries the SD art, so mounting ONE art module on top is what makes
+ * an HD match draw HD. `graphics` says which one — the other module, and both on an SD
+ * install, is null (never mounted). The tileset stays a `Z.mpq:`-prefixed path inside
+ * whichever module it came from, so the art module's tileset wins over the base's copy by
+ * mount order and `vfs/tileset.ts` goes on looking it up under one name.
  */
 /** Separates a campaign chapter's 1.30.4 path from its 1.31 one in what `legacyRootName`
  *  returns — `|` is the root's own field separator, so no path can contain it. */
 const CAMPAIGN_ALIAS = "|War3.mpq:";
 
-export function legacyRootName(name: string): string | null {
+export function legacyRootName(name: string, graphics: CascGraphics = "sd"): string | null {
   if (!/^war3\.w3mod:/i.test(name)) return name;
   const parts = name.split(":").slice(1);
   let archive = "War3.mpq";
+
+  // Reforged's parallel art module. `sd` never mounts one, and an HD client mounts only the
+  // set it was asked for — the other stays invisible even though the root lists it.
+  const art = /^_(hd|de)\.w3mod$/i.exec(parts[0] ?? "");
+  let layer: "hd" | "de" | null = null;
+  if (art) {
+    if (graphics === "sd") return null;
+    layer = art[1].toLowerCase() as "hd" | "de";
+    if (layer !== graphics) return null;
+    archive = ART_ARCHIVE[layer];
+    parts.shift();
+  }
+
   const locale = /^_locales\/(\w{4})\.w3mod$/i.exec(parts[0] ?? "");
   if (locale && parts.length > 1) {
-    archive = `${locale[1].slice(0, 2)}${locale[1].slice(2).toUpperCase()}-War3Local.mpq`;
+    const loc = `${locale[1].slice(0, 2)}${locale[1].slice(2).toUpperCase()}`;
+    archive = layer
+      ? ART_LOCAL_ARCHIVE[layer].replace("%s", loc)
+      : `${loc}-War3Local.mpq`;
     parts.shift();
   }
   if (parts.length > 1) {
@@ -298,6 +367,9 @@ export function legacyRootName(name: string): string | null {
     } else if (tileset) {
       parts[0] = `${tileset[1].toUpperCase()}.mpq`;
     } else if (W3MOD_NESTED[sub]) {
+      // The art modules carry a `_Teen` twin (`_HD.w3mod:_Teen.w3mod:…`): the censored
+      // alternate art. It is not a resolution variant of what we draw, so it stays out.
+      if (layer && sub === "_teen.w3mod") return null;
       parts[0] = W3MOD_NESTED[sub];
     } else if (sub.startsWith("_")) {
       return null; // a sub-mod 1.30.4 never had
@@ -311,13 +383,13 @@ export function legacyRootName(name: string): string | null {
   return [archive, ...parts].join(":");
 }
 
-export function parseRoot(text: string): Map<string, RootEntry[]> {
+export function parseRoot(text: string, graphics: CascGraphics = "sd"): Map<string, RootEntry[]> {
   const byArchive = new Map<string, RootEntry[]>();
   for (const line of text.split(/\r?\n/)) {
     if (!line) continue;
     const bar = line.indexOf("|");
     if (bar < 0) continue;
-    const renamed = legacyRootName(line.slice(0, bar));
+    const renamed = legacyRootName(line.slice(0, bar), graphics);
     if (renamed === null) continue;
     const [name, alias] = renamed.split(CAMPAIGN_ALIAS);
     const colon = name.indexOf(":");
@@ -353,14 +425,38 @@ interface Entry {
   raw: Uint8Array | null;
 }
 
+/** How a Reforged store is mounted (P3). A 1.30.4 / MPQ-era install passes nothing. */
+export interface CascOpenOptions {
+  /** Which art module to layer over the base: `de`/`hd` mount `_DE`/`_HD`; `sd` mounts neither. */
+  graphics?: CascGraphics;
+  /** Leave the heavyweight art (models, DDS, video, fonts' companions) on disk and read it
+   *  through the ASYNC `read()` — a Reforged install holds ~17 GB of it (see `LAZY_ART`). */
+  lazyArt?: boolean;
+}
+
 export class CascDataSource implements DataSource {
   readonly label: string;
   /** Lower-cased logical path → entry. Built lowest-archive-first so a later layer wins. */
   private entries = new Map<string, Entry>();
   /** Path as the root spells it, for `list()`. */
   private names: string[] = [];
+  /** What the base archives (`Deprecated` / `War3` / locale) had for a path an art module
+   *  (`War3HD` / `War3DE`) overrode. Kept because 3.0's modules replace some SD missile and
+   *  spell models with particle-only shells that this engine cannot draw — see `baseBytes`. */
+  private baseEntries = new Map<string, Entry>();
   private decoded = new Map<string, Uint8Array>();
   private decodedBytes = 0;
+  /** Lazy art (P3) that has been read ONCE, kept so a SYNCHRONOUS reader can still find it.
+   *
+   *  An HD mount leaves every `.mdx` on disk (LAZY_ART) and answers `rawBytes` with null until
+   *  `read()` has fetched it — but `rawBytes` is exactly how `resolveModelSounds` parses a
+   *  unit's model mid-combat, to find the SND events its attack and its building hammer are
+   *  written in. On 3.0 every one of those sounds was therefore silent: the Peasant's
+   *  `SNDXAREP` never resolved, the rifle's `SNDXKRIF` never resolved. The bytes are already in
+   *  hand by then — the scene read the same file to draw the unit — so keep the models a match
+   *  has loaded. Bounded, FIFO, models only (textures are never read synchronously). */
+  private modelBytes = new Map<string, Uint8Array>();
+  private modelBytesTotal = 0;
 
   private constructor(
     label: string,
@@ -371,6 +467,8 @@ export class CascDataSource implements DataSource {
 
   /** The archives that resolved, lowest priority first — what the gate reports as "mounted". */
   mounted: string[] = [];
+  /** The `<locale>-War3Local.mpq` this store carries (vfs/gameLocale.ts mirrors it for the UI). */
+  locale = "";
   /** What each of those archives contributes, in the same order. The merged view above keeps
    *  only the winner of each path, so this is the only record of who owns and who overrides —
    *  which is what the extractor's override report is (tools/extract-data.mjs). */
@@ -383,7 +481,9 @@ export class CascDataSource implements DataSource {
   static async open(
     files: CascFiles,
     onProgress?: LoadProgress,
+    opts: CascOpenOptions = {},
   ): Promise<CascDataSource> {
+    const graphics = opts.graphics ?? "sd";
     const info = parseBuildInfo(files.buildInfo);
     const buildKey = info.get("Build Key");
     if (!buildKey) throw new Error(".build.info: no Build Key");
@@ -415,9 +515,27 @@ export class CascDataSource implements DataSource {
       await source.readLocation(index.get(rootEKey.slice(0, INDEX_KEY_HEX)), "root"),
     );
 
-    const byArchive = parseRoot(rootText);
-    source.mount(byArchive, encoding, index, pickLocale(info, byArchive, encoding, index));
-    await source.preload(onProgress);
+    const byArchive = parseRoot(rootText, graphics);
+    if (graphics !== "sd") {
+      // Index the OTHER Reforged module's own archives too, so `mount` can use it as a gap
+      // filler (see there). parseRoot filters by graphics, which is why it is asked a second
+      // time — but only the art-module archives are merged, never a second copy of the base.
+      const sibling: "hd" | "de" = graphics === "de" ? "hd" : "de";
+      const localTail = ART_LOCAL_ARCHIVE[sibling].replace("%s", "");
+      for (const [name, list] of parseRoot(rootText, sibling)) {
+        if (name !== ART_ARCHIVE[sibling] && !name.endsWith(localTail)) continue;
+        const have = byArchive.get(name);
+        if (have) have.push(...list);
+        else byArchive.set(name, list);
+      }
+    }
+    const locale = pickLocale(info, byArchive, encoding, index);
+    // The front end dresses itself in this locale's art (the logo's zhCN/zhTW plate, the
+    // spacing rules) and its in-game strings come from the same module, so remember it once.
+    setGameLocale(locale);
+    source.locale = locale;
+    source.mount(byArchive, encoding, index, locale, graphics);
+    await source.preload(onProgress, opts.lazyArt === true);
     return source;
   }
 
@@ -427,11 +545,29 @@ export class CascDataSource implements DataSource {
     encoding: Map<string, string>,
     index: Map<string, Location>,
     locale: string,
+    graphics: CascGraphics,
   ): void {
-    for (const template of ARCHIVE_ORDER) {
-      const archive = template.replace("%s", locale);
+    const order: string[] = ARCHIVE_ORDER.map((template) => template.replace("%s", locale));
+    const baseCount = order.length;
+    // The art module sits ON TOP of the base and its locale: same paths, HD art. `sd` has no
+    // module to mount, which is why a 1.30.4 install's order is byte-for-byte what it was.
+    let fillFrom = order.length;
+    if (graphics === "hd" || graphics === "de") {
+      order.push(ART_ARCHIVE[graphics], ART_LOCAL_ARCHIVE[graphics].replace("%s", locale));
+      // The OTHER Reforged module is still Reforged art, and a few assets live in only one of
+      // the two: DE's Phoenix body maps (`Human_Phoenix_Main_*` / `Human_Phoenix_Egg_*`) are in
+      // War3HD.mpq, while HD has no model at all for DE-only campaign units. Mount it LAST, as a
+      // gap-filler — it may only supply paths the chosen module does not hold, so it can never
+      // repaint an asset the current one ships.
+      fillFrom = order.length;
+      const sibling: "hd" | "de" = graphics === "de" ? "hd" : "de";
+      order.push(ART_ARCHIVE[sibling], ART_LOCAL_ARCHIVE[sibling].replace("%s", locale));
+    }
+    for (let i = 0; i < order.length; i++) {
+      const archive = order[i];
       const list = byArchive.get(archive);
       if (!list) continue;
+      const fillOnly = i >= fillFrom;
       const paths: string[] = [];
       for (const { path, ckey } of list) {
         const ekey = encoding.get(ckey);
@@ -440,7 +576,15 @@ export class CascDataSource implements DataSource {
         // (another platform's, or an optional locale). It is not an error; it is absent.
         if (!location) continue;
         const key = path.toLowerCase();
+        if (fillOnly && this.entries.has(key)) continue;
         if (!this.entries.has(key)) this.names.push(path);
+        else if (i >= baseCount && !this.baseEntries.has(key)) {
+          // The art module is shadowing a base file. Remember the base entry: DE/HD overwrite
+          // some SD missile/teleport models with particle-only shells (`BloodElfMissile.mdx`
+          // is 5904 B with 2 geosets in War3.mpq and a 1956 B, GEOS-less stub in War3DE.mpq),
+          // and the renderer asks back for the base bytes when a model has no geosets.
+          this.baseEntries.set(key, this.entries.get(key)!);
+        }
         this.entries.set(key, { ckey, location, raw: null });
         paths.push(path);
       }
@@ -502,12 +646,15 @@ export class CascDataSource implements DataSource {
    * less than the ~1 GB the four MPQs already cost us; the 1.3 GB of audio and video is what
    * we leave on disk, because every one of those goes through the async path.
    */
-  private async preload(onProgress?: LoadProgress): Promise<void> {
+  private async preload(onProgress?: LoadProgress, lazyArt = false): Promise<void> {
     // Unique by location: the eleven locales share most of their content, and even inside one
     // locale `Units\MiscData.txt` and `Melee_V0\Units\MiscData.txt` are one stored file.
     const wanted = new Map<string, Location>();
     for (const [key, entry] of this.entries) {
       if (STREAMED.test(key)) continue;
+      // …and, on a Reforged mount, the art: `read()` fetches it on demand, one file at a time,
+      // and the solver caches the blob URL it minted so a shared model is fetched once.
+      if (lazyArt && LAZY_ART.test(key) && !EAGER_ART.test(key)) continue;
       wanted.set(`${entry.location.archive}:${entry.location.offset}`, entry.location);
     }
 
@@ -517,7 +664,7 @@ export class CascDataSource implements DataSource {
       let list = byArchive.get(location.archive);
       if (!list) byArchive.set(location.archive, (list = []));
       list.push(location);
-      total += location.size - RECORD_HEADER;
+      total += location.size;
     }
 
     const store = new Uint8Array(total);
@@ -541,11 +688,14 @@ export class CascDataSource implements DataSource {
         const runStart = list[i].offset;
         const run = await reader.slice(runStart, Math.min(end, reader.size));
         for (let k = i; k < j; k++) {
-          const from = list[k].offset - runStart + RECORD_HEADER;
-          const length = list[k].size - RECORD_HEADER;
-          store.set(run.subarray(from, from + length), written);
-          at.set(`${archive}:${list[k].offset}`, store.subarray(written, written + length));
-          written += length;
+          const record = run.subarray(list[k].offset - runStart, list[k].offset - runStart + list[k].size);
+          // Most records carry a 30-byte header before the BLTE stream; a few 3.0 assets
+          // (`.mrf` cinematic models, some locale strings) are stored with the BLTE at the
+          // record's first byte. The magic says which — see `readLocation`.
+          const payload = record.subarray(isBlte(record) ? 0 : RECORD_HEADER);
+          store.set(payload, written);
+          at.set(`${archive}:${list[k].offset}`, store.subarray(written, written + payload.length));
+          written += payload.length;
         }
         done += j - i;
         i = j;
@@ -564,7 +714,12 @@ export class CascDataSource implements DataSource {
     const reader = this.data.get(location.archive);
     if (!reader) throw new Error(`${this.label}: ${label} wants data.${location.archive}`);
     const raw = await reader.slice(location.offset, location.offset + location.size);
-    return decodeBlte(raw.subarray(RECORD_HEADER), label);
+    // A record normally starts with a 30-byte header, then `BLTE`; a handful of 3.0 assets put
+    // the `BLTE` stream at the record's first byte. The magic tells the two apart.
+    // The async decoder inflates off the main thread — see `decodeBlteAsync`. This is the path
+    // every Reforged model and texture takes, and the inflate is the largest block of main-thread
+    // work between two frames once the scene starts streaming art in.
+    return decodeBlteAsync(raw.subarray(isBlte(raw) ? 0 : RECORD_HEADER), label);
   }
 
   private remember(key: string, bytes: Uint8Array): Uint8Array {
@@ -582,13 +737,29 @@ export class CascDataSource implements DataSource {
     return bytes;
   }
 
+  /** Keep a model the async path fetched, for the synchronous reader that wants it later.
+   *  FIFO under MODEL_BYTES_BUDGET: a match loads each unit's model once, so the working set
+   *  is stable and eviction only reaches models that are not in play. */
+  private rememberModel(key: string, bytes: Uint8Array): void {
+    if (this.modelBytes.has(key)) return;
+    if (this.modelBytesTotal + bytes.length > MODEL_BYTES_BUDGET) {
+      for (const [k, v] of this.modelBytes) {
+        this.modelBytes.delete(k);
+        this.modelBytesTotal -= v.length;
+        if (this.modelBytesTotal + bytes.length <= MODEL_BYTES_BUDGET) break;
+      }
+    }
+    this.modelBytes.set(key, bytes);
+    this.modelBytesTotal += bytes.length;
+  }
+
   exists(path: string): boolean {
     return this.entries.has(normalizeMpqPath(path).toLowerCase());
   }
 
   rawBytes(path: string): Uint8Array | null {
     const key = normalizeMpqPath(path).toLowerCase();
-    const cached = this.decoded.get(key);
+    const cached = this.decoded.get(key) ?? this.modelBytes.get(key);
     if (cached) return cached;
     const entry = this.entries.get(key);
     // `raw` is null for the streamed files (audio, video). Those are read through `read()`,
@@ -603,9 +774,25 @@ export class CascDataSource implements DataSource {
     if (cached) return cached;
     const entry = this.entries.get(key);
     if (!entry) throw new Error(`${this.label}: file not found: ${path}`);
-    if (entry.raw) return this.remember(key, decodeBlte(entry.raw, path));
+    if (entry.raw) return this.remember(key, await decodeBlteAsync(entry.raw, path));
     // Streamed: a ranged read, and deliberately NOT cached — these are the megabyte files,
     // and their callers (audio/sounds.ts) keep their own decoded copies.
+    const bytes = await this.readLocation(entry.location, path);
+    // …except a MODEL: the synchronous reader (resolveModelSounds) needs it back (see modelBytes).
+    if (MODEL_FILE.test(key)) this.rememberModel(key, bytes);
+    return bytes;
+  }
+
+  /**
+   * The base archive's bytes for a path the mounted art module overrode, or null. A read of its
+   * own: the renderer only asks when the module's copy turned out to be a drawable nothing
+   * (zero geosets), so it is a handful of files per match and needs no cache of its own.
+   * Deliberately does NOT touch `decoded`/`modelBytes` — the caller keeps the bytes it mints.
+   */
+  async baseBytes(path: string): Promise<Uint8Array | null> {
+    const entry = this.baseEntries.get(normalizeMpqPath(path).toLowerCase());
+    if (!entry) return null;
+    if (entry.raw) return decodeBlteAsync(entry.raw, path);
     return this.readLocation(entry.location, path);
   }
 
@@ -664,10 +851,14 @@ class CascSubArchive implements DataSource {
 }
 
 /**
- * Which `<locale>-War3Local.mpq` this install actually carries. `.build.info`'s Tags column
- * names it ("Windows EU? enUS speech?"), but a tag is a claim about what was REQUESTED, so it
- * is only a tie-breaker: the answer that counts is which locale archive's files are in the
- * local index, because an install downloads exactly one.
+ * Which `<locale>-War3Local.mpq` (1.31) / `_Locales/<locale>.w3mod` (3.0) this mount reads.
+ *
+ * A Reforged store can carry SEVERAL locale modules — one install, every language, picked in
+ * the game's own options — so unlike a classic per-language install there is no "Chinese
+ * folder" or "English folder" to choose between. The engine's UI language (default zhCN, see
+ * i18n/index.ts) is the player's signal, so a module for it wins when the store has one; then
+ * the build's own Tags claim; then the module with the most files (an install may only have
+ * downloaded part of a locale); and zhCN last, because Reforged defaults to Chinese.
  */
 function pickLocale(
   info: Map<string, string>,
@@ -685,10 +876,12 @@ function pickLocale(
     }
     return n;
   };
+  const preferred = currentLocale();
+  if (present(preferred) > 0) return preferred;
   const tagged = LOCALES.find((l) => (info.get("Tags") ?? "").includes(l));
   if (tagged && present(tagged) > 0) return tagged;
-  let best = "enUS";
-  let bestCount = -1;
+  let best = "zhCN";
+  let bestCount = present(best);
   for (const locale of LOCALES) {
     const n = present(locale);
     if (n > bestCount) {

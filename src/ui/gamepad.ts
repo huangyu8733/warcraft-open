@@ -921,12 +921,24 @@ export function voicePointed(): HTMLElement | null {
 /** The Options panel on screen now, and the two labels its button wears. Replaced on every build
  *  (a screen rebuilds its whole tree on resize), so the countdown follows the rebuild. */
 let optionsScreen: { screen: FdfScreen; detect: string; unpair: string } | null = null;
+/** The Reforged options sheet's button, which is plain DOM rather than an FDF frame. */
+let detectWatcher: ((state: { paired: boolean; seconds: number }) => void) | null = null;
 
 /** Wire a screen's gamepad button. Called from each Options panel's bind, with the two labels
  *  resolved through that screen's GlobalStrings (`DETECT_GAMEPAD`, `UNPAIR_GAMEPAD`). */
 export function bindGamepadButton(screen: FdfScreen, labels: { detect: string; unpair: string }): void {
   optionsScreen = { screen, ...labels };
   paintDetect();
+}
+
+/** Watch the same state from a non-FDF screen (the Reforged input panel). Returns the unsubscribe
+ *  the screen calls when it closes. */
+export function watchGamepadButton(fn: (state: { paired: boolean; seconds: number }) => void): () => void {
+  detectWatcher = fn;
+  paintDetect();
+  return (): void => {
+    if (detectWatcher === fn) detectWatcher = null;
+  };
 }
 
 /** The button's click: with a pad paired, let it go; without one, listen for `DETECT_MS` for any
@@ -958,13 +970,14 @@ function unpairGamepad(): void {
 /** Dress the button for the state it is in: "Unpair Gamepad" while a pad is paired, "Detect
  *  Gamepad" otherwise — greyed, with the seconds counting down on it, while it listens. */
 function paintDetect(): void {
+  const left = detectUntil ? Math.max(0, Math.ceil((detectUntil - performance.now()) / 1000)) : 0;
+  detectWatcher?.({ paired: paired !== null, seconds: left });
   if (!optionsScreen) return;
   const { screen, detect, unpair: unpairLabel } = optionsScreen;
   if (!screen.element.isConnected) {
     optionsScreen = null;
     return;
   }
-  const left = detectUntil ? Math.max(0, Math.ceil((detectUntil - performance.now()) / 1000)) : 0;
   const text = paired !== null ? unpairLabel : left ? `${detect} (${left}s)` : detect;
   if (screen.frame("GamepadButtonText")?.textContent !== text) screen.setText("GamepadButtonText", text);
   screen.setEnabled("GamepadButton", !left);

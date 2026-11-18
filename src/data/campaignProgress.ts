@@ -9,7 +9,7 @@ import { profileKey } from "./profiles";
 // play and deleting that profile takes them with it (data/profiles.ts). The store is the one
 // the Options screen uses — localStorage, one JSON blob (data/options.ts).
 //
-// The rules are the game's own, and both come out of the campaign index itself:
+// The rules below are the game's own, and both come out of the campaign index itself:
 //   • a campaign with `DefaultOpen=1` is "initially open and selectable by a new user"; TFT
 //     opens Terror of the Tides and the Bonus campaign, and holds Curse of the Blood Elves
 //     and Legacy of the Damned back;
@@ -18,10 +18,11 @@ import { profileKey } from "./profiles";
 // Within a campaign, chapter N+1 opens when chapter N is completed; cinematics never gate
 // anything (you may watch the opening one, or not, and chapter one is open either way).
 //
-// What is LOCKED is not merely dead — it is not on the screen at all (`openCampaigns` /
-// `openRows` below, which is what the screen is built from). The reference lists a campaign
-// and a chapter only once the profile has reached it, so the screen never names what is
-// still ahead of the player.
+// This client does NOT enforce either rule: every campaign in the library and every chapter
+// in it is playable from the first visit, so a player can jump straight to any mission without
+// replaying the ones before it (see `isCampaignOpen` / `openRows` below). `completed()` still
+// tracks how far a profile has got — the screens show it, and finishing a mission still
+// advances the count — but it no longer hides or disables anything.
 
 // The BASE keys. Never read one directly — `profileKey` suffixes it with the profile in play,
 // and these two are listed in that module's PROFILE_OWNED so a deleted profile takes them with it.
@@ -85,14 +86,9 @@ function saveProgress(p: Progress): void {
   } catch { /* storage unavailable — progress is lost, the menus still work */ }
 }
 
-/** Is `campaign` selectable? DefaultOpen, or the previous campaign in the list is finished. */
-export function isCampaignOpen(campaigns: Campaign[], index: number, p = loadProgress()): boolean {
-  const c = campaigns[index];
-  if (!c) return false;
-  if (c.defaultOpen) return true;
-  const prev = campaigns[index - 1];
-  if (!prev) return true;
-  return completed(prev, p) >= prev.missions.length;
+/** Is `campaign` selectable? Always — this client does not gate campaigns on progress. */
+export function isCampaignOpen(campaigns: Campaign[], index: number, _p = loadProgress()): boolean {
+  return campaigns[index] !== undefined;
 }
 
 /** How many of a campaign's MISSIONS are done (cinematic rows don't count as progress). */
@@ -100,20 +96,15 @@ export function completed(c: Campaign, p = loadProgress()): number {
   return Math.min(p[c.key] ?? 0, c.missions.length);
 }
 
-/** Is mission `index` (an index into `campaign.missions`) playable yet? The first always is;
- *  the rest need the one before them finished. */
-export function isMissionOpen(c: Campaign, index: number, p = loadProgress()): boolean {
-  return index <= completed(c, p);
+/** Is mission `index` (an index into `campaign.missions`) playable? Always — the chapter list
+ *  offers every mission from the first visit, in order or not. */
+export function isMissionOpen(_c: Campaign, _index: number, _p = loadProgress()): boolean {
+  return true;
 }
 
 /**
  * The campaigns this profile may SEE, in list order, each with its index into `campaigns`.
- *
- * A campaign it has not opened yet is not drawn at all — not a greyed row, not a placeholder —
- * which is what the reference does: a fresh Frozen Throne profile's campaign screen lists the
- * Sentinels and the Bonus campaign and nothing else, and Curse of the Blood Elves APPEARS when
- * Terror of the Tides is finished. (A locked row that named the campaign would also spoil the
- * one thing the screen is holding back.)
+ * Every campaign in the library is listed (nothing is held back, see the rules at the top).
  */
 export function openCampaigns(campaigns: Campaign[], p = loadProgress()): Array<{ campaign: Campaign; index: number }> {
   return campaigns
@@ -130,22 +121,16 @@ export interface CampaignRow {
 }
 
 /**
- * The rows of `c`'s chapter list this profile may SEE, top to bottom — `campaignRows` order,
- * minus everything it has not reached.
- *
- * The list GROWS as the campaign is played, exactly as the reference's does: chapter N+1 is not
- * listed until chapter N is finished, so the screen never names a chapter ahead of the player.
- * The campaign's own cinematics are not chapters and are not gated the same way (see
- * `isCampaignOpen`'s note): the Intro and Open ones bracket the campaign from the front and are
- * there from the first visit, and the End one is the campaign's last word — it appears with the
- * last chapter done, and not before.
+ * The rows of `c`'s chapter list, top to bottom — `campaignRows` order. Nothing is held back:
+ * the Intro and Open cinematics, every chapter, and the End cinematic are all listed from the
+ * first visit, so the player can pick any mission in any order. Encrypted DLC chapters stay in
+ * the list too; the screen disables those itself (the archive is not in this install).
  */
-export function openRows(c: Campaign, p = loadProgress()): CampaignRow[] {
-  const done = completed(c, p);
+export function openRows(c: Campaign, _p = loadProgress()): CampaignRow[] {
   const out: CampaignRow[] = [];
   for (const cinematic of [c.intro, c.open]) if (cinematic) out.push({ entry: cinematic, mission: -1 });
-  c.missions.forEach((entry, mission) => { if (isMissionOpen(c, mission, p)) out.push({ entry, mission }); });
-  if (c.end && done >= c.missions.length) out.push({ entry: c.end, mission: -1 });
+  c.missions.forEach((entry, mission) => out.push({ entry, mission }));
+  if (c.end) out.push({ entry: c.end, mission: -1 });
   return out;
 }
 

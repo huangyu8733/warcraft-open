@@ -1,9 +1,12 @@
 import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
+import ddsHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/dds/handler";
 import type { DataSource } from "../vfs/types";
 import { CanvasSize } from "./canvasSize";
 import { applyAnimProps, portraitClips } from "./unitAnims";
+import { isHd } from "../data/flavor";
+import { hdTexturePaths } from "../vfs/tileset";
 
 // Phase 3: render real animated MDX (v800) models using mdx-m3-viewer's own
 // WebGL renderer (plan §1.1 — borrow the renderer behind a thin interface). The
@@ -65,7 +68,9 @@ interface MdxModel {
   addInstance(): MdxInstance;
 }
 
-const ViewerClass = ModelViewerCtor as unknown as { new (canvas: HTMLCanvasElement): Viewer };
+const ViewerClass = ModelViewerCtor as unknown as {
+  new (canvas: HTMLCanvasElement, resourcePaths?: Record<string, string>, isReforged?: boolean): Viewer;
+};
 
 // How far a portrait dollies the bust's own camera toward its target (<1 = closer). Matched
 // by eye against the real client's console (issue #180: Rexxar's bust, eyes about a third of
@@ -113,7 +118,11 @@ export class ModelViewerScene {
     // Canvas must have a nonzero size before addScene() (viewport/aspect read here).
     this.syncCanvasSize();
 
-    const viewer = new ViewerClass(canvas);
+    const hd = isHd();
+    // `isReforged` is not optional here: the DDS handler only supplies the textures — the
+    // Reforged shader is what gives the bust its skinning/team-colour uniforms. Without it an
+    // HD model loads, reports success, and draws black (the map viewer passes the same flag).
+    const viewer = new ViewerClass(canvas, undefined, hd);
     viewer.on("error", (e) => console.error("[modelviewer]", e));
 
     // pathSolver: bytes pass through; string (backslash WC3) paths resolve from
@@ -123,10 +132,19 @@ export class ModelViewerScene {
     // sixteen of Test of Balance's imported models name `Textures\Clouds8x8.blp`, which a
     // 1.30.4 install does not ship (it has the eight `Clouds8x8Fire`/`Mod`/`Fade`/… variants
     // and not the plain one).
-    this.solver = (src) => (typeof src === "string" ? (this.vfs.exists(src) ? this.vfs.read(src) : undefined) : src);
+    this.solver = (src) => {
+      if (typeof src !== "string") return src;
+      // HD: the model names `.blp`/`.tif`, the art module stores `.dds` (vfs/tileset.ts).
+      const candidates = hd ? hdTexturePaths(src, true) : [src];
+      for (const path of candidates) {
+        if (this.vfs.exists(path)) return this.vfs.read(path);
+      }
+      return undefined;
+    };
 
-    viewer.addHandler(mdxHandler, this.solver, false); // also loads team-color textures
+    viewer.addHandler(mdxHandler, this.solver, hd); // also loads team-color textures
     viewer.addHandler(blpHandler);
+    if (hd) viewer.addHandler(ddsHandler); // Reforged art (P3-4)
 
     const scene = viewer.addScene();
     // Black behind the bust, as the game's portrait is: the model is drawn over nothing.

@@ -1,4 +1,4 @@
-import { blpToCanvas } from "../render/blputil";
+import { vfsImage } from "../render/blputil";
 import type { DataSource } from "../vfs/types";
 
 // The WC3 human hand cursor for the menus (issue #54 follow-up). WC3's cursor is an
@@ -31,6 +31,17 @@ export function cursorPx(n: number): number {
 /** The largest custom cursor Chromium will draw wherever the pointer is — see `cursorValue`. */
 const MAX_UNCLIPPED_CURSOR = 32;
 
+/**
+ * The size a cursor cell is DRAWN at, whatever resolution the sheet is. The SD sheet's cell is
+ * 32 px; Reforged's is 1024×512 (128-px cells — the same art at 4× for high-DPI screens). Cutting
+ * by the cell's own size blew the pointer up to 160 px there, and the reticle and tinted hand
+ * that swap in on a click read as an enormous cursor. Drawing every cell at the SD size keeps
+ * one pointer across both stores; the hotspot is a fraction of the cell, so it scales with it.
+ */
+export function cursorDrawPx(cell: number): number {
+  return cursorPx(Math.min(cell, 32));
+}
+
 /** The sheet's cell at (`sx`, `sy`) drawn `size` px square, as a data URL. */
 function cellUrl(sheet: CanvasImageSource, sx: number, sy: number, cell: number, size: number): string {
   const c = document.createElement("canvas");
@@ -55,11 +66,13 @@ function cellUrl(sheet: CanvasImageSource, sx: number, sy: number, cell: number,
  * hand over a link. A 32 px image is never refused, so near an edge the gauntlet only draws at its
  * own size for a moment; `default` is just the last word the syntax requires.
  */
-export function cursorValue(sheet: CanvasImageSource, cell: number): string {
-  const big = cursorPx(cell);
-  const small = Math.min(cell, MAX_UNCLIPPED_CURSOR);
-  const hot = cursorPx(3);
-  const smallHot = Math.round((3 * small) / cell);
+export function cursorValue(sheet: CanvasImageSource, cell: number, size = cursorPx(cell)): string {
+  const big = size;
+  const small = Math.min(size, MAX_UNCLIPPED_CURSOR);
+  // The fingertip sits 3 texels into a 32-texel cell — a FRACTION of the cell, so the hotspot
+  // follows whatever the cell is drawn at (Reforged's cell is 4× as wide for the same art).
+  const hot = Math.round((size * 3) / 32);
+  const smallHot = Math.round((small * 3) / 32);
   return `url(${cellUrl(sheet, 0, 0, cell, big)}) ${hot} ${hot}, ` +
     `url(${cellUrl(sheet, 0, 0, cell, small)}) ${smallHot} ${smallHot}, default`;
 }
@@ -131,11 +144,14 @@ export function cursorImageValue(img: HTMLCanvasElement, hotX: number, hotY: num
 let styleEl: HTMLStyleElement | null = null;
 
 /** Apply a race's hand cursor across the (non-in-game) menu screens. Human everywhere except
- *  the Campaign screen, which wears the cursor its campaign names (`Cursor=3` → Night Elf —
- *  see data/campaigns.ts); the four sheets are the same 8-cell grid. */
-export function applyMenuCursor(vfs: DataSource, race: "Human" | "Orc" | "Undead" | "NightElf" = "Human"): void {
-  const bytes = vfs.rawBytes(`UI\\Cursor\\${race}Cursor.blp`) ?? vfs.rawBytes("UI\\Cursor\\HumanCursor.blp");
-  const sheet = bytes ? blpToCanvas(bytes) : null;
+ *  the Campaign screen, which wears the cursor its campaign names (`Cursor=3` → Night Elf,
+ *  `Cursor=4` → Forsaken on 3.0's DLC index — see data/campaigns.ts); the sheets are the same
+ *  8-cell grid. */
+export function applyMenuCursor(
+  vfs: DataSource,
+  race: "Human" | "Orc" | "Undead" | "NightElf" | "Forsaken" = "Human",
+): void {
+  const sheet = vfsImage(vfs, `UI\\Cursor\\${race}Cursor.blp`) ?? vfsImage(vfs, "UI\\Cursor\\HumanCursor.blp");
   if (!sheet) return;
   const cell = Math.round(sheet.width / 8); // 8 cells wide; top-left = idle pointer
   if (!styleEl) {
@@ -147,5 +163,5 @@ export function applyMenuCursor(vfs: DataSource, race: "Human" | "Orc" | "Undead
   // the hand shows in every state (buttons, hovers, LINKS) — the reference menu never changes
   // the cursor, and neither may an anchor or a line of text. The in-game race cursor is also
   // !important and scoped to body.in-game, so it still wins during a match.
-  styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: ${cursorValue(sheet, cell)} !important; }`;
+  styleEl.textContent = `body:not(.in-game), body:not(.in-game) * { cursor: ${cursorValue(sheet, cell, cursorDrawPx(cell))} !important; }`;
 }

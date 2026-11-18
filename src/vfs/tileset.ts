@@ -46,11 +46,133 @@ export interface TilesetFile {
   path: string;
 }
 
+/** The extensions a Reforged store renames art to. A model says `.tif` (DE/HD) or keeps the
+ *  SD-era `.blp` (glue models, effect textures); the store ships `.dds` for both. `.png` is in
+ *  the list because HeroAnya's emissive map still names one while the store holds `.dds`. */
+const TEXTURE_EXT = /^(.*)\.(tif|blp|dds|png)$/i;
+/** …and the model half of the same rename: 3.0's data still names effect models with the
+ *  SD-era `.mdl` (`Abilities\Spells\Items\AIhe\AIheTarget.mdl`, the town portal's caster and
+ *  target, every ability's `Targetart`), while the store ships `.mdx` only. Unmatched, the
+ *  solver hands the viewer a path nothing can load and the effect never appears. */
+const MODEL_EXT = /^(.*)\.(mdl|mdx)$/i;
+
+/**
+ * Some Reforged models name their art with the artist's own disk path — the Goldmine's
+ * emissive map literally reads
+ * `C:/Users/ksizemore/Box/Classic Games/Warcraft3/assets/Art/HD//Buildings/Other/Goldmine/Neutral_GoldMine_Emissive.tif`.
+ * Everything after the last `/HD/` (or `/SD/`) is the path the store actually uses; for any
+ * other absolute path, the basename is the only part that can be meant.
+ */
+export function storedTexturePath(path: string): string {
+  // A PopcornFX `.pkb` names its textures with the art MODULE prefix the bake was authored
+  // against — `_HD.w3mod/Textures/FX/Shockwave/ShockwaveSoft01_BW.tif` — while the store keeps
+  // the same file without that prefix and as `.dds`. Strip it before the extension rewrite
+  // (`hdTexturePaths`) runs.
+  const modulePrefix = /^_[a-z]{2}\.w3mod[\\/]+/i;
+  if (modulePrefix.test(path)) return path.replace(modulePrefix, "").replace(/\//g, "\\");
+  // An ABSOLUTE path is the artist's own disk path: everything after the art variant segment
+  // (`/HD/`, `/SD/`, `/DE/`) is what the store uses. DE also appears in model paths (P6:
+  // `…/art/de/buildings/undead/crypt/cryptbirth.mdx`, `h:/bz/de//buildings/undead/ubirth/ubirth.mdx`),
+  // so the variant list has three entries — but only for absolute paths, where `de` is an art
+  // root and not a directory a custom map might legitimately own.
+  const absolute = /^[a-z]:[\\/]/i.test(path) || path.startsWith("/");
+  const afterVariant = (absolute
+    ? /^[\s\S]*[\\/](?:hd|sd|de)[\\/]+([\s\S]*)$/i
+    : /^[\s\S]*[\\/](?:hd|sd)[\\/]+([\s\S]*)$/i).exec(path);
+  if (afterVariant) return afterVariant[1].replace(/\//g, "\\");
+  if (absolute) {
+    return path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+  }
+  return path;
+}
+
+/**
+ * Two critter models still name SD-era texture paths that the Reforged store files elsewhere.
+ *
+ * `Sheep.mdx` / `Sheep_portrait.mdx` ask for `Units\Critters\Sheep\Sheep_Corpse_*.tif`, but the
+ * DE and HD stores keep those maps at `Textures\Sheep_Corpse_*.dds`. `FlyingSheep.mdx` asks for
+ * `Units\Critters\FlyingSheep\Unit_FlyingSheep_main_*.tif`: HD has that name in the same folder,
+ * while DE's copy is the parallel `Sheep_*.dds` beside it. Without these two moves the viewer
+ * logs "Source has no matching handler" for six textures (P6, Booty Bay).
+ */
+function relocatedHdTexture(stored: string): string[] {
+  // Models usually spell their texture paths with forward slashes, and `storedTexturePath`
+  // leaves a relative path exactly as written — so the split has to accept both separators,
+  // or the basename checks below never see a basename.
+  const cut = Math.max(stored.lastIndexOf("\\"), stored.lastIndexOf("/"));
+  const file = cut >= 0 ? stored.slice(cut + 1) : stored;
+  const m = TEXTURE_EXT.exec(file);
+  if (!m) return [];
+  const base = m[1];
+  const dir = cut >= 0 ? stored.slice(0, cut + 1) : "";
+  const out: string[] = [];
+  // Corpses and gore: the models name them beside the body, the Reforged stores keep them in
+  // the shared `Textures\` folder (`MakruraPooldweller_Corpse_*`, `Undead_CryptFiend_Corpse_*`,
+  // `Gore_*` — nine DE models, all six basenames).
+  if (/^(?:MakruraPooldweller_Corpse_|Undead_CryptFiend_Corpse_|Gore_)/i.test(base)) out.push(`Textures\\${base}.dds`);
+  // `TornadoElemental(_Portrait)` still asks for `TornadoBound_Diffuse`, a name no module ships:
+  // the bound body's maps sit beside it as `TornadoMain_*` (the art rename never reached the
+  // model). Its other slots keep the SD names normal/ORM/Black32, so this is the only gap.
+  const bound = /^TornadoBound_(Diffuse|Normal|ORM|Emissive)$/i.exec(base);
+  if (bound) out.push(`${dir}TornadoMain_${bound[1]}.dds`);
+  if (/^Sheep_Corpse_/i.test(base)) out.push(`Textures\\${base}.dds`);
+  if (/^Unit_FlyingSheep_main_/i.test(base)) {
+    out.push(`Units\\Critters\\FlyingSheep\\${base}.dds`);
+    out.push(`Units\\Critters\\FlyingSheep\\${base.replace(/^Unit_FlyingSheep_main_/i, "Sheep_")}.dds`);
+  }
+  return out;
+}
+
+/**
+ * The paths one texture may actually be stored under, in the order to try.
+ *
+ * SD is always `[path]` — an SD install has no `.dds` at all, so nothing may change there.
+ * On HD the same asset is `.dds` whatever the caller named, and `.blp` is the last resort
+ * (a few base-module effect textures were never converted). This is the whole of P3-2.
+ */
+export function hdTexturePaths(path: string, hd: boolean): string[] {
+  if (!hd) return [path];
+  const stored = storedTexturePath(path);
+  const model = MODEL_EXT.exec(stored);
+  if (model) {
+    const base = model[1];
+    const out = model[2].toLowerCase() === "mdx" ? [stored, `${base}.mdl`] : [`${base}.mdx`, stored];
+    // Campaign maps add per-stage building models by appending a digit to the stock name
+    // (`buildings\orc\Beastiary\Beastiary2.mdx`, PigFarm0/1/2, WarMill0/1, …). The Reforged
+    // install ships only the unsuffixed model, so each of those loads failed and the building
+    // never drew. The base building is the same art at an earlier stage — fall back to it.
+    if (/\d$/.test(base)) out.push(`${base.replace(/\d+$/, "")}.mdx`);
+    return out;
+  }
+  const m = TEXTURE_EXT.exec(stored);
+  if (!m) return [stored];
+  const base = m[1];
+  const ext = m[2].toLowerCase();
+  // A texture the Reforged artists re-authored ships ONLY as the `_Diffuse` variant while the
+  // data still names the bare basename: every DE ground texture is
+  // `TerrainArt\LordaeronCapital\Lordc_SlabBricks_Diffuse.dds`, but `Terrain.slk` asks for
+  // `Lordc_SlabBricks.dds` (and `CliffTypes.slk` asks for `Misc\Alpha_Cliff0.dds`). Before the
+  // fallback, those paths missed in the DE module and the map drew the base module's SD BLP
+  // (wrong colours) or nothing at all (black/checkerboard ground). Try the diffuse spelling
+  // before the SD-era one — a basename that already names a map is left alone.
+  const diffuse = /_(diffuse|normal|orm|emissive)$/i.test(base) ? [] : [`${base}_Diffuse.dds`];
+  // The cliff MODELS (replaceable id 11) still name `ReplaceableTextures\Cliff\Cliff0.blp`,
+  // but DE ships those two only as `Cliff0Legacy_Diffuse.dds` / `Cliff0Legacy_Normal.dds`.
+  // Without this the model load failed and the map never left the loading screen. The map
+  // handler replaces the texture with the tileset's own cliff art afterwards, so this copy is
+  // only what lets the model resolve at all.
+  const legacyCliff = /^ReplaceableTextures[\\/]Cliff[\\/]Cliff[01]$/i.test(stored)
+    ? [`${base}Legacy_Diffuse.dds`, `${base}Legacy.dds`]
+    : [];
+  if (ext === "dds") return [stored, ...diffuse, ...legacyCliff, `${base}.blp`, ...relocatedHdTexture(stored)];
+  return [`${base}.dds`, ...diffuse, ...legacyCliff, stored, ...relocatedHdTexture(stored)];
+}
+
 /**
  * A resolver over one mounted install. Cheap to call: every answer is memoized per
  * (tileset, path), because the caller is an asset path solver on the hot load path.
  */
-export function tilesetOverlay(vfs: DataSource): (path: string, tileset?: string) => TilesetFile {
+export function tilesetOverlay(vfs: DataSource, hd = false): (path: string, tileset?: string) => TilesetFile {
   const memo = new Map<string, TilesetFile>();
   /** A nested `<letter>.mpq`, opened once, for an install that keeps them as real files. */
   const nested = new Map<string, DataSource | null>();
@@ -69,27 +191,45 @@ export function tilesetOverlay(vfs: DataSource): (path: string, tileset?: string
   return (path, tileset) => {
     const letter = tileset?.[0]?.toUpperCase() ?? "";
     if (letter < "A" || letter > "Z") return { key: path, source: vfs, path };
-    const memoKey = `${letter}|${path.toLowerCase()}`;
+    const memoKey = `${letter}|${hd ? "hd|" : ""}${path.toLowerCase()}`;
     let hit = memo.get(memoKey);
     if (hit) return hit;
 
-    const prefixed = `${letter}.mpq:${path}`;
-    if (vfs.exists(prefixed)) {
-      // 1.30.4: the tileset archives are flattened into the store under their own names.
-      hit = { key: prefixed, source: vfs, path: prefixed };
-    } else {
-      const own = archive(letter);
-      if (own?.exists(path)) {
-        // MPQ-era: the tileset archive is a real nested MoPaQ inside the mounted one.
-        hit = { key: prefixed, source: own, path };
-      } else {
-        // RoC-era: `<letter>_` beside the default, for the twelve tilesets that have it.
-        const deprecated = path.replace(/([^\\]+)$/, `${letter}_$1`);
-        hit = /\\cliff\\[^\\]+$/i.test(path) && vfs.exists(deprecated)
-          ? { key: deprecated, source: vfs, path: deprecated }
-          : { key: path, source: vfs, path };
+    const candidates = hdTexturePaths(path, hd);
+    for (const candidate of candidates) {
+      const prefixed = `${letter}.mpq:${candidate}`;
+      if (vfs.exists(prefixed)) {
+        // 1.30.4 / 3.0: the tileset archives are flattened into the store under their own names.
+        hit = { key: prefixed, source: vfs, path: prefixed };
+        memo.set(memoKey, hit);
+        return hit;
       }
     }
+    const own = archive(letter);
+    if (own) {
+      for (const candidate of candidates) {
+        if (own.exists(candidate)) {
+          // MPQ-era: the tileset archive is a real nested MoPaQ inside the mounted one.
+          hit = { key: `${letter}.mpq:${candidate}`, source: own, path: candidate };
+          memo.set(memoKey, hit);
+          return hit;
+        }
+      }
+    }
+    // RoC-era naming: `<letter>_` beside the default — and in Reforged's DE art this is the
+    // LIVE spelling (`ReplaceableTextures\Cliff\V_Cliff0.dds`), with the unprefixed name gone
+    // entirely. So try the HD extension spellings here too, not just the name as given.
+    if (/\\cliff\\[^\\]+$/i.test(path)) {
+      for (const candidate of candidates) {
+        const deprecated = candidate.replace(/([^\\]+)$/, `${letter}_$1`);
+        if (vfs.exists(deprecated)) {
+          hit = { key: deprecated, source: vfs, path: deprecated };
+          memo.set(memoKey, hit);
+          return hit;
+        }
+      }
+    }
+    hit = { key: path, source: vfs, path };
     memo.set(memoKey, hit);
     return hit;
   };

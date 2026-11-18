@@ -2,8 +2,11 @@ import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import { maxOmniLights, renderScale } from "./videoQuality";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
+import ddsHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/dds/handler";
 import type { DataSource } from "../vfs/types";
 import { isRoc } from "../data/edition";
+import { isHd } from "../data/flavor";
+import { hdTexturePaths } from "../vfs/tileset";
 import { makeFog, type DistFog } from "./fog";
 import { animTimeout, onAnimFrame, type AnimTimer } from "./animClock";
 import { widescreen } from "../ui/widescreen";
@@ -523,9 +526,20 @@ export class MenuScene {
     canvas.height = canvas.clientHeight || window.innerHeight;
     const viewer = new ViewerClass(canvas);
     viewer.on("error", (e) => console.error("[menuscene]", e));
-    this.solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
-    viewer.addHandler(mdxHandler, this.solver, false);
+    const hd = isHd();
+    this.solver = (src) => {
+      if (typeof src !== "string") return src;
+      // Reforged's glue models keep their SD `.blp` spellings while the store ships `.dds`
+      // (MainMenu3D_Exp.mdx names `…\Iceberg_New.blp`; the store has `.dds`). P3-6's whole
+      // asset difference is that fallback — the menu model paths themselves are unchanged.
+      for (const path of hd ? hdTexturePaths(src, true) : [src]) {
+        if (this.vfs.exists(path)) return this.vfs.read(path);
+      }
+      return hd ? undefined : this.vfs.read(src);
+    };
+    viewer.addHandler(mdxHandler, this.solver, hd);
     viewer.addHandler(blpHandler);
+    if (hd) viewer.addHandler(ddsHandler); // Reforged art (P3-4)
 
     // Every one of the four goes through `neverCull` — see there; a glue model that stops
     // being drawn also stops ANIMATING, and one of them is driving the camera.

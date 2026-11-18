@@ -1719,6 +1719,9 @@ function pawned(units, opts = {}) {
     // The `Apit` question, which is what makes a Marketplace or a Goblin Merchant a place you
     // may sell to and a Tavern not one.
     canPawnAt: () => opts.dealsInItems ?? true,
+    // The item row's own pawnable column — what sparePermanent asks before it sells a duplicate
+    // (unstated = pawnable, as SimWorld.itemPawnable reads it).
+    itemPawnable: (itemId) => ITEMS[itemId]?.pawnable !== false,
   };
   const items = new PlusItems({
     world, player: 0, def: (id) => ABILS[id], hostile: (u) => u.owner !== 0 && u.owner !== 12,

@@ -15,6 +15,7 @@ const REPO = join(__dirname, "..");
 const BUILD = join(REPO, ".sim-build");
 fs.writeFileSync(join(BUILD, "package.json"), '{"type":"commonjs"}');
 const { PatchDataSource } = require(join(BUILD, "src", "vfs", "patch.js"));
+const { DowngradeDataSource, downgradeEdits } = require(join(BUILD, "src", "vfs", "downgrade.js"));
 const { EditionDataSource } = require(join(BUILD, "src", "vfs", "edition.js"));
 const { setMapDataSet, setEdition } = require(join(BUILD, "src", "data", "edition.js"));
 const { setPatchLevel, BASE_PATCH, LATEST_PATCH } = require(join(BUILD, "src", "patches", "index.js"));
@@ -28,7 +29,7 @@ const { BlpImage } = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist",
 
 const EXTRACT = join(REPO, "Warcraft III", "ExtractedData", "merged");
 if (!fs.existsSync(join(EXTRACT, "Units", "UnitBalance.slk"))) {
-  console.log("skip  no extracted install (run `pnpm data:extract` on a 1.30.4 install)");
+  console.log("skip  no extracted install (run `pnpm data:extract`)");
   process.exit(0);
 }
 const onDisk = (p) => {
@@ -49,7 +50,26 @@ const base = {
   read: async (p) => base.rawBytes(p),
   list: () => [],
 };
-const vfs = new EditionDataSource(new PatchDataSource(base));
+// The extraction is whatever install was unpacked, and a 1.31.1 one is played as the 1.30.4 it
+// came from: the mount puts its cells back BEFORE the patches go over them (vfs/loader.ts →
+// vfs/downgrade.ts). Without that the chain lands on tables that already ship 1.31's rows — the
+// Ritual Dagger's row is there, so its `$base` cannot seed it and this test reads a game the
+// player will never see.
+function extractedVersion() {
+  try {
+    const text = fs.readFileSync(join(REPO, "Warcraft III", ".build.info"), "latin1");
+    const [head, ...rows] = text.split(/\r?\n/).filter(Boolean);
+    const col = head.split("|").findIndex((c) => c.split("!")[0] === "Version");
+    const active = rows.find((r) => r.split("|")[1] === "1") ?? rows[0];
+    return active && col >= 0 ? active.split("|")[col] : null;
+  } catch {
+    return null;
+  }
+}
+const version = extractedVersion();
+const edits = downgradeEdits(version);
+const install = edits ? new DowngradeDataSource(base, edits, version) : base;
+const vfs = new EditionDataSource(new PatchDataSource(install));
 
 let failed = 0;
 function check(what, got, want) {

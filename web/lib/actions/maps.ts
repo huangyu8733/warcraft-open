@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/auth/admin";
 import { getDb, nowIso } from "@/lib/db";
 import { getMapById } from "@/lib/db/queries/maps";
 import { normalizeCategory } from "@/lib/mapCategories";
+import { MAP_FLAVORS, flavorsText } from "@/lib/mapFlavors";
 import { deleteObject, headObject, ossConfigured } from "@/lib/oss";
 import { checkbox, integer, isHttpUrl, text } from "./util";
 
@@ -33,10 +34,13 @@ export async function saveMapAction(formData: FormData): Promise<void> {
   const version = text(formData, "version", 40) || null;
   const author = text(formData, "author", 80) || null;
   const players = text(formData, "players", 40) || null;
+  // 支持的数据线：勾选框各自独立，至少要选一个——一张谁都不能玩的地图不该被发布。
+  const flavors = flavorsText(MAP_FLAVORS.filter((flavor) => checkbox(formData, `flavor_${flavor}`)));
   const category = normalizeCategory(text(formData, "category", 40));
   const sort = integer(formData, "sort");
 
   if (!SLUG.test(slug)) back("error", "slug");
+  if (!flavors) back("error", "flavors");
   if (fileKey && ossConfigured()) {
     const head = await headObject(fileKey);
     if (!head) back("error", "file-missing");
@@ -51,16 +55,16 @@ export async function saveMapAction(formData: FormData): Promise<void> {
     if (id > 0) {
       db.prepare(
         `UPDATE maps SET slug=?, status=?, cover_url=?, cover_key=?, file_url=?, file_key=?, file_size=?,
-                         version=?, author=?, players=?, category=?, sort=?, updated_at=? WHERE id=?`,
-      ).run(slug, status, coverUrl, coverKey, fileUrl, fileKey, fileSize, version, author, players, category, sort, stamp, id);
+                         version=?, author=?, players=?, flavors=?, category=?, sort=?, updated_at=? WHERE id=?`,
+      ).run(slug, status, coverUrl, coverKey, fileUrl, fileKey, fileSize, version, author, players, flavors, category, sort, stamp, id);
     } else {
       const result = db
         .prepare(
           `INSERT INTO maps (slug, status, cover_url, cover_key, file_url, file_key, file_size,
-                             version, author, players, category, sort, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                             version, author, players, flavors, category, sort, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(slug, status, coverUrl, coverKey, fileUrl, fileKey, fileSize, version, author, players, category, sort, stamp, stamp);
+        .run(slug, status, coverUrl, coverKey, fileUrl, fileKey, fileSize, version, author, players, flavors, category, sort, stamp, stamp);
       mapId = Number(result.lastInsertRowid);
     }
   } catch {

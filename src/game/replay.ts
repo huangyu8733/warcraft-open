@@ -37,6 +37,7 @@ import type { MeleeConfig } from "../ui/lobby";
 import type { ChatTarget } from "./chat";
 import type { StateSample } from "./replayState";
 import { MAX_TRACK_SAMPLES, type InputSample, type InputTrack } from "./inputTrack";
+import { readSectionFile, writeSectionFile } from "./sectionFile";
 
 /** The format of the FILE, not of Warcraft Open — bumped when a reader of the old one could not read
  *  the new one. A new SECTION is not a bump; that is what the tags are for. */
@@ -77,6 +78,13 @@ export interface ReplayHeader {
    *  1.31 store put back to 1.30.4's values, src/vfs/downgrade.ts), or `mpq` for an MPQ-era
    *  folder. The same map on different data is a different match. */
   install?: string;
+  /** Which data / asset line the match ran on (src/data/flavor.ts). Absent on a replay recorded
+   *  before P5, which is read as SD — the only line that existed then. */
+  flavor?: "sd" | "hd";
+  /** The EXACT Reforged build the match ran on, for an HD replay. Reforged patches carry balance
+   *  changes, so a replay is a match on one build (SD leaves it undefined: the version gate pins
+   *  its data). */
+  gameVersion?: string;
   /** When it was recorded (ISO). */
   recordedAt: string;
   /** The map: where it was found, what it is called, and a hash of its bytes — the same NAME is
@@ -202,26 +210,6 @@ export const CHECK_EVERY = 600;
 
 // --- the file -----------------------------------------------------------------------------
 
-/** gzip, through the platform's own stream (the page and Node 18+ both have it). */
-async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new CompressionStream("gzip"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-/** JSON that survives a non-finite number (an aura's `Infinity` would arrive as `null`). */
-function toJson(value: unknown): string {
-  return JSON.stringify(value, (_k, v) => (typeof v === "number" && !Number.isFinite(v) ? { $n: String(v) } : v));
-}
-
-function fromJson(text: string): unknown {
-  return JSON.parse(text, (_k, v) => (v && typeof v === "object" && typeof (v as { $n?: unknown }).$n === "string" && Object.keys(v).length === 1 ? Number((v as { $n: string }).$n) : v));
-}
-
 /** Write a replay file. */
 export async function encodeReplay(r: Replay): Promise<Uint8Array> {
   const sections: Array<[string, unknown]> = [
@@ -233,43 +221,13 @@ export async function encodeReplay(r: Replay): Promise<Uint8Array> {
   ];
   if (r.ending) sections.push(["ENDS", r.ending]);
   if (r.dumps) sections.push(["DUMP", r.dumps]);
-  const parts: Uint8Array[] = [new Uint8Array([...MAGIC, REPLAY_FORMAT & 0xff, REPLAY_FORMAT >> 8])];
-  const enc = new TextEncoder();
-  for (const [tag, value] of sections) {
-    const body = await gzip(enc.encode(toJson(value)));
-    const head = new Uint8Array(8);
-    for (let i = 0; i < 4; i++) head[i] = tag.charCodeAt(i);
-    new DataView(head.buffer).setUint32(4, body.length, true);
-    parts.push(head, body);
-  }
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
+  return writeSectionFile(MAGIC, REPLAY_FORMAT, sections);
 }
 
 /** The sections of a file, by tag, inflated — all of them, or only those `want` names. A
  *  section this reader does not know is skipped, not refused: that is the point of tags. */
-async function readSections(bytes: Uint8Array, want?: readonly string[]): Promise<Map<string, unknown>> {
-  if (bytes.length < 6 || MAGIC.some((b, i) => bytes[i] !== b)) throw new Error("not an Warcraft Open replay");
-  const format = bytes[4] | (bytes[5] << 8);
-  if (format > REPLAY_FORMAT) throw new Error(`replay format ${format} is newer than this build reads (${REPLAY_FORMAT})`);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const dec = new TextDecoder();
-  const found = new Map<string, unknown>();
-  let at = 6;
-  while (at + 8 <= bytes.length) {
-    const tag = String.fromCharCode(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]);
-    const len = view.getUint32(at + 4, true);
-    const body = bytes.subarray(at + 8, at + 8 + len);
-    at += 8 + len;
-    if (!(want ?? SECTIONS).includes(tag)) continue;
-    found.set(tag, fromJson(dec.decode(await gunzip(body))));
-  }
-  return found;
+function readSections(bytes: Uint8Array, want?: readonly string[]): Promise<Map<string, unknown>> {
+  return readSectionFile(bytes, MAGIC, REPLAY_FORMAT, want ?? SECTIONS, "replay");
 }
 const SECTIONS = ["HEAD", "EVTS", "CHKS", "INPT", "STAT", "ENDS", "DUMP"];
 
@@ -296,6 +254,35 @@ export async function readReplayHeader(bytes: Uint8Array): Promise<{ header: Rep
   const header = found.get("HEAD") as ReplayHeader | undefined;
   if (!header) throw new Error("replay has no header");
   return { header, ending: (found.get("ENDS") as ReplayEnding | undefined) ?? null };
+}
+
+/** Which line a replay belongs to. Absent = SD: the only line that existed when it was recorded. */
+export function replayLine(header: ReplayHeader): "sd" | "hd" {
+  return header.flavor === "hd" ? "hd" : "sd";
+}
+
+/**
+ * Why a replay cannot be played on a client on `line` at `version` — null when it can.
+ *
+ * "flavor" is a replay from the other data / asset line, which is not a preference: the two
+ * read different object tables (SD-HD双版本方案.md §7.3). "version" is an HD replay from another
+ * Reforged build, whose balance can differ; SD has no such check (its data is pinned by the
+ * version gate).
+ */
+export function replayMismatch(header: ReplayHeader, line: "sd" | "hd", version: string | null): "flavor" | "version" | null {
+  if (replayLine(header) !== line) return "flavor";
+  if (line === "hd" && header.gameVersion && header.gameVersion !== version) return "version";
+  return null;
+}
+
+/** The same answer as a sentence, for the doors with no menu to word it (main.ts `watchReplay`,
+ *  the replay window, a `?replay=` link). Null when the replay can be played. */
+export function replayRefusalText(header: ReplayHeader, line: "sd" | "hd", version: string | null): string | null {
+  const why = replayMismatch(header, line, version);
+  if (!why) return null;
+  return why === "flavor"
+    ? "This replay was recorded on the other version line (SD/HD)."
+    : `This replay was recorded on Reforged ${header.gameVersion ?? "?"}; this client is ${version ?? "?"}.`;
 }
 
 /** A short content hash (FNV-1a, 64-bit as two 32-bit halves) — for a map's bytes and for the

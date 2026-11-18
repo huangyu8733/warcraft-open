@@ -57,9 +57,25 @@ StringList {
     HOTKEYS_LEGACY              "Legacy",
     HOTKEYS_GRID                "Grid",
     HOTKEYS_CUSTOM              "Custom",
+
+    // The narrow button beside the "Hotkeys:" pulldown on the in-game Gameplay panel: the
+    // keyboard editor (src/ui/hotkeyEditor.ts), which the glue Options screen used to reach
+    // from its own Hotkeys tab.
+    HOTKEY_EDITOR               "Edit",
     // ...and the checkbox under it: whether that key is printed in the corner of every button
     // that takes a press. The game prints a key only inside the tooltip, so it has no string.
     SHOW_HOTKEYS_ON_BUTTONS     "Show hotkeys on command buttons",
+    // ...and, under the checkbox, which war3skins section the interface is decorated from
+    // (src/data/uiTheme.ts). The game skins by the player's race and offers no control, so the
+    // row and its wording are ours. Entries are the sections the install's `[Main] Skins` line
+    // names -- these are the labels for the five 3.0 ships; an unknown skin is shown by name.
+    COLON_UI_THEME              "UI Theme:",
+    UI_THEME_AUTO               "Follow Your Race",
+    UI_THEME_HUMAN              "Human",
+    UI_THEME_ORC                "Orc",
+    UI_THEME_NIGHTELF           "Night Elf",
+    UI_THEME_UNDEAD             "Undead",
+    UI_THEME_FORSAKEN           "Forsaken",
     // ...and the button under that (issue #162): it listens for a gamepad to pair, and once one
     // is paired it wears the second string and lets it go. The game never knew a controller, so
     // it has no word for one.

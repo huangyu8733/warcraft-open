@@ -156,6 +156,17 @@ export class CinematicPanelOverlay {
     if (!this.live) this.filterEl.hidden = true;
   }
 
+  /** The fade on screen and how far into it — a saved game's (docs/save-games.md). */
+  liveFilter(): { filter: CineFilter; t: number } | null {
+    return this.live ? { filter: this.live.filter, t: this.live.t } : null;
+  }
+
+  /** …and put back where it was. */
+  restoreFilter(filter: CineFilter, t: number): void {
+    this.setFilter(filter);
+    if (this.live) this.live.t = t;
+  }
+
   /** Whether the map's filter is still on its way DOWN to a darker picture — a fade-out in
    *  flight. The skip cover asks this before it lifts (`MapViewerScene.tickCinematicSkip`). */
   get filterDarkening(): boolean {
@@ -327,13 +338,27 @@ export class CinematicPanelOverlay {
     // while the bottom bar hung off the left and left the bottom-right corner bare.
     const stage = stageSize();
     const worldW = fitBox(stage.w, stage.h).worldW;
-    const children = base.children.flatMap((c) => {
-      if (c.name === "CinematicTopBorder" || c.name === "CinematicBottomBorder") {
-        return letterbox ? [letterboxBar(c, worldW)] : [];
+    // The classic file lays the bars and the scene panel out as DIRECT children of
+    // CinematicPanel; Reforged's wraps them in `CinematicPanelControlFrame` (and adds
+    // `HDCinematicBackground`). Walking the whole tree — rather than one level — is what
+    // keeps the HD panel full-width: a 0.8-wide bar anchored by its right corner sat 25% of
+    // an ultrawide stage in from the left edge, leaving the speaker's line on bare black.
+    const classic = base.children.some((c) => c.name === "CinematicScenePanel");
+    const adapt = (f: FdfFrame): FdfFrame[] => {
+      if (f.name === "CinematicTopBorder" || f.name === "CinematicBottomBorder") {
+        return letterbox ? [letterboxBar(f, worldW)] : [];
       }
-      if (c.name === "CinematicScenePanel") return scene ? [sizeSceneText(c)] : [];
-      return [c];
-    });
+      if (f.name === "HDCinematicBackground") {
+        // Reforged's own backdrop behind the bottom bar: the same 0.8-width stop-short, but
+        // it is one blended texture (no edge file to lose), so only the width changes.
+        return letterbox
+          ? [{ ...f, props: [...f.props.filter((p) => p.key !== "Width"), { key: "Width", args: [num(worldW)] }] }]
+          : [];
+      }
+      if (f.name === "CinematicScenePanel") return scene ? [classic ? sizeSceneText(f) : f] : [];
+      return [{ ...f, children: f.children.flatMap(adapt) }];
+    };
+    const children = base.children.flatMap(adapt);
     return { ...base, children };
   }
 

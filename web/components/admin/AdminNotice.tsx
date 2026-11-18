@@ -12,6 +12,7 @@ const ERROR: Record<string, string> = {
   name: "名称不能为空。",
   "duplicate-slug": "Slug 已被其他地图使用。",
   "file-missing": "没有找到上传的文件，请重新上传。",
+  flavors: "至少选择一种支持版本（经典版或重制版）。",
 };
 
 export function AdminNotice({ ok, error }: { ok?: string | string[]; error?: string | string[] }) {

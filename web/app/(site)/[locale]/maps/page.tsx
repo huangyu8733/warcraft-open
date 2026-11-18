@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { format, getDictionary, isLocale } from "@/i18n/config";
 import { listPublishedMaps } from "@/lib/db/queries/maps";
 import { MAP_CATEGORIES, isMapCategory } from "@/lib/mapCategories";
+import { isMapFlavor } from "@/lib/mapFlavors";
 import { MapCard } from "@/components/site/MapCard";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
 interface MapsQuery {
   q?: string;
   category?: string;
+  flavor?: string;
 }
 
 export default async function MapsPage({
@@ -25,10 +27,12 @@ export default async function MapsPage({
   const q = query.q?.trim() ?? "";
   // An unknown category is no filter at all, never an empty shelf.
   const category = isMapCategory(query.category) ? query.category : "";
+  // Same rule for the data line: an unknown value means "no filter".
+  const flavor = isMapFlavor(query.flavor) ? query.flavor : "";
 
   const dict = await getDictionary(locale);
-  const maps = listPublishedMaps(locale, { q, category: category || undefined });
-  const filtered = Boolean(q || category);
+  const maps = listPublishedMaps(locale, { q, category: category || undefined, flavor: flavor || undefined });
+  const filtered = Boolean(q || category || flavor);
 
   return (
     <section className="section section--page">
@@ -60,6 +64,20 @@ export default async function MapsPage({
               <span>{dict.maps.categories[key]}</span>
             </label>
           ))}
+        </div>
+        <div className="map-filters__chips" role="group" aria-label={dict.maps.flavor}>
+          <label className="map-chip">
+            <input type="radio" name="flavor" value="" defaultChecked={!flavor} />
+            <span>{dict.maps.allFlavors}</span>
+          </label>
+          <label className="map-chip">
+            <input type="radio" name="flavor" value="sd" defaultChecked={flavor === "sd"} />
+            <span>{dict.maps.flavors.sd}</span>
+          </label>
+          <label className="map-chip">
+            <input type="radio" name="flavor" value="hd" defaultChecked={flavor === "hd"} />
+            <span>{dict.maps.flavors.hd}</span>
+          </label>
         </div>
       </form>
 

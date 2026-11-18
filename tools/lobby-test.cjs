@@ -18,6 +18,11 @@ const {
 } = require(join(REPO, ".sim-build", "src", "net", "lobbySetup.js"));
 const { DEFAULT_ADVANCED, isDefaultAdvanced } = require(join(REPO, ".sim-build", "src", "net", "advancedOptions.js"));
 const { OFFICIAL_SERVERS, officialServerName } = require(join(REPO, ".sim-build", "src", "net", "officialServer.js"));
+const { setLocale } = require(join(REPO, ".sim-build", "src", "i18n", "index.js"));
+// This build opens in Chinese (i18n's default). The expectations below are the English ones —
+// pin the locale the way voice-parser-test does, or every sentence this test reads back is
+// compared against the other catalogue.
+setLocale("enUS");
 
 let failed = 0;
 function check(what, got, want) {
@@ -546,7 +551,7 @@ const ME = { id: 2, name: "Joiner", host: false };
     check("reachable: the address to type, not a warning", [one.warn, one.text], [false, "Other players join at 192.168.1.7:5173"]);
     const two = reachabilityLine({ kind: "app", lan: true, addresses: ["192.168.1.7:8787", "10.8.0.2:8787"] });
     check("two networks offer BOTH — a wrong single address is worse than a list",
-      two.text, "Other players join at 192.168.1.7:8787 or 10.8.0.2:8787");
+      two.text, "Other players join at 192.168.1.7:8787 / 10.8.0.2:8787");
     check("reachable with nothing to offer says nothing",
       reachabilityLine({ kind: "app", lan: true, addresses: [] }), null);
   }
@@ -586,7 +591,7 @@ const ME = { id: 2, name: "Joiner", host: false };
       lobby.snapshot.rooms.map((r) => r.key), ["#1", "ws://192.168.1.42:8787/relay#1"]);
 
     lobby.join("ws://192.168.1.42:8787/relay#1", "Bob");
-    check("the join is sent to THEIR relay", remote.sent, [{ t: "join", roomId: "1", playerName: "Bob" }]);
+    check("the join is sent to THEIR relay", remote.sent, [{ t: "join", roomId: "1", playerName: "Bob", flavor: "sd" }]);
     check("…and ours is never asked about a room it does not have", own.sent, []);
     check("…our connection is let go: the match wire is the host's", own.connected, false);
     check("…and their list is now the list", lobby.snapshot.rooms.map((r) => [r.key, r.source]), [["#1", ""]]);
@@ -804,7 +809,11 @@ const ME = { id: 2, name: "Joiner", host: false };
     made.find((t) => t.url === FRIEND).onMessage({ t: "rooms", rooms: [{ ...ROOM, id: "1", name: "Theirs" }] });
     lobby.join(`${FRIEND}#1`, "Bob");
     check("the friend's relay is where we play", lobby.primary, { url: FRIEND, kind: "typed" });
-    check("…and the official server is still on the list", lobby.relays.map((r) => `${r.url} ${r.source}`), [`${OFFICIAL} official`]);
+    check(
+      "…and the official server is still on the list",
+      lobby.relays.map((r) => `${r.url} ${r.source}`),
+      [`${FRIEND} primary`, `${OFFICIAL} official`],
+    );
     lobby.close();
   }
 

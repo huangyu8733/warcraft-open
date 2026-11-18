@@ -100,11 +100,51 @@ dealing damage to an area around the target area". We still burst it in the ring
 the line before that is not stated in any file or reference we have, so it is left alone; it only
 matters on a rolled-back patch, a Reign of Chaos client or a custom table set.
 
+## Missile (Splash) is NOT artillery — it homes, then bursts
+
+`msplash` (the Chimaera's slot 2, the Frost Wyrm, the Phoenix, Metamorphosis, the Ancient
+Protector's slot 2, Serpent Ward 4, the Destroyers, every dragon — 45 slots state rings, 26
+more state none and are plain missiles) is the other weapon type that reads `Farea`/`Harea`/
+`Qarea`, and the difference is the whole of it: the missile keeps its TARGET and homes, so it
+cannot be walked out from under, and where it lands it bursts around the unit it struck
+(`SimProjectile.splash`, `applyMissileSplash`). The struck unit takes the blow in full with
+everything a homing hit carries (orb, Freezing Breath, Liquid Fire); everybody else in the rings
+takes their ring's share through the same `burstRings` the shell uses.
+
+The rings, the shares, `splashTargs` as kind AND allegiance, the trees and the once-per-attack
+miss are all the shell's rules. Most of these rows DO name `enemy`, so a Frost Wyrm spares its
+own Ghouls; the ones that name nobody (`[nadr]` = `ground`, the creep dragons) burn whoever is
+there. Three things are NOT carried over: no splatter (that line is about the Artillery type),
+no Attack Ground, and no dead zone. Keyed on `weapTp`, never on "has rings" — twelve plain
+`missile` rows carry stray rings and do not splash.
+
 ## What it kills SPLATTERS
 
 "Units killed by Artillery attacks splatter and do not leave corpses behind" (Weapon Types).
 The same death `SetUnitExploded` asks for — Art - Special, no corpse — keyed on the unit the
 burst is striking (`splatterId`), never on a building or a hero.
+
+## Missile (Bounce) — the glaive goes on
+
+`mbounce` is two rows, the Huntress (`[esen]`) and Naisha (`[ensh]`), and four columns that mean
+something else here than on a splashing slot (issue #279 — the glaive used to stop at one body):
+
+| column | Huntress | reads as |
+| --- | --- | --- |
+| `targCount1` | 2 (Naisha 5) | bodies ONE attack strikes, the aimed one included |
+| `Farea1` | 400 | how far a bounce may reach, from the body just struck |
+| `damageLoss1` | 0.5 | what each hop sheds: 100 %, 50 %, 25 % |
+| `splashTargs1` | `ground,structure,debris,enemy` | who a bounce may land on — kind AND allegiance |
+
+Each hop is a missile of its own (`SimWorld.bounceOn`): it leaves from the struck body for the
+NEAREST one it may still hit, homes as the first did, and never returns to a body this attack
+has struck. Upgrade Moon Glaive (`Remg`) is the upgrade effect `ratc` "Attack Target Count",
+base 1 — a third body — added to the slot's count in `recomputeStats` as Long Rifles adds to
+range. The hop carries the damage only: no orb, no strike passive.
+
+2.0.3 stops the glaive at buildings with a passive of its own, the Bouncing Missile Filter
+(`Amgi`, `targs1 = structure`): a bounce goes neither TO nor FROM a kind it names
+(`SimWorld.bounceFilter`, read off the unit TYPE's ability list — the row has no button).
 
 ## Minimum range — a dead zone, not a retreat
 
@@ -147,3 +187,6 @@ without it); `GetUnitCurrentOrder` answers `attackground` (851984).
 
 `tools/sim-artillery-test.cjs` pins the arc (a spell missile's too), the thrown fields, friendly fire, the `enemy` exception, a missed shell's burst, splatter,
 dodging, Attack Ground (at a spot, from out of range, at a tree) and the dead zone.
+
+`tools/sim-bounce-test.cjs` pins the bounce: the count, the halving, `ratc`, the reach, the
+allegiance and the 2.0.3 filter.

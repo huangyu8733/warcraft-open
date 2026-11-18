@@ -29,7 +29,7 @@ import { type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { wc3ToHtml } from "./wc3Text";
-import { blpToCanvas } from "../render/blputil";
+import { vfsImage } from "../render/blputil";
 import { mapDisplayText } from "../i18n/mapLanguage";
 
 const MULTIBOARD_FDF = "UI\\FrameDef\\UI\\MultiBoard.fdf";
@@ -336,9 +336,7 @@ export class MultiboardOverlay {
     let out: string | null = null;
     const tries = [path, path.replace(/\.tga$/i, ".blp"), path.replace(/\.blp$/i, ".tga")];
     for (const p of tries) {
-      const bytes = this.vfs.rawBytes(p);
-      if (!bytes) continue;
-      const canvas = blpToCanvas(bytes);
+      const canvas = vfsImage(this.vfs, p);
       if (canvas) {
         out = canvas.toDataURL();
         break;

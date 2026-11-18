@@ -2,11 +2,12 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import type { DataSource } from "../vfs/types";
 import { readIni, splitList, type IniSection } from "./customKeysDoc";
 import { parseWar3Skins, skinValue, WAR3SKINS } from "./war3skins";
+import { decodeGameText as decode } from "./text";
 
 // What the hotkey editor lists (issue #156): every command card a player can meet, read out of
 // the install rather than written down here.
 //
-// The editor is Options → Gameplay → "Hotkeys:" → Custom's own screen, and its job is the one
+// The editor is the in-game Options screen's Hotkeys category, and its job is the one
 // the community's hotkey generators do (the issue links jcfields' warcraft3-hotkey-editor): pick
 // a unit, see its card, rebind a button. Those tools ship a hand-made list of units and buttons.
 // This one reads it, from the same tables the command card is built from, so a button is on the
@@ -104,8 +105,6 @@ const SKIN: Record<CatalogRace, string> = { human: "Human", orc: "Orc", nightelf
 const BUILD_CMD: Record<CatalogRace, string> = {
   human: "CmdBuildHuman", orc: "CmdBuildOrc", nightelf: "CmdBuildNightElf", undead: "CmdBuildUndead", neutral: "CmdBuild",
 };
-
-const decode = (bytes: Uint8Array): string => new TextDecoder("windows-1252").decode(bytes);
 
 /** Strip WC3 colour markup, for a name built out of a Tip. */
 export const plainTip = (s: string): string => s.replace(/\|c[0-9a-f]{8}/gi, "").replace(/\|r/gi, "");

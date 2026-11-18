@@ -1,0 +1,131 @@
+.hd-official .LoadingScreen{display:flex;width:100vw;height:100vh;justify-content:flex-start;position:absolute;background-color:#000;left:0;flex:1;perspective:1px;z-index:1;animation:.4s linear 0s 1 FadeIn;animation-fill-mode:forwards}
+.hd-official .LoadingScreen-fadeOut{animation:.6s linear 0s 1 FadeOut;animation-fill-mode:forwards}
+.hd-official .LoadingScreen-Background{display:flex;flex-direction:column;height:100vh;width:177.77778vh;max-width:100%;background-repeat:no-repeat;background-size:cover;background-position:50%;justify-content:flex-end;position:relative}
+.hd-official .LoadingScreen-Background.isDefaultBg{flex-direction:row;align-items:flex-end;justify-content:center;position:fixed;background-size:cover;left:0;width:100%;background-image:url("LoadingScreen/loadscreen_dragonlineart.png")}
+.hd-official .LoadingScreen-Top-Ornament{width:1375px;height:215px;top:0;background-image:url("LoadingScreen/top_center_goth_piece.png")}
+.hd-official .LoadingScreen-Bottom-Ornament,
+.hd-official .LoadingScreen-Top-Ornament{position:fixed;background-size:contain;background-repeat:no-repeat}
+.hd-official .LoadingScreen-Bottom-Ornament{width:1198px;height:340px;bottom:0;background-position:bottom;background-image:url(LoadingScreen/bottom_center_goth_piece.png);filter:contrast(80%)}
+.hd-official .LoadingScreen-Map-Name{font-size:34px;padding-bottom:10px}
+.hd-official .LoadingScreen-Map-CustomTitle,
+.hd-official .LoadingScreen-Map-Name{font-variant:small-caps;font-weight:700;letter-spacing:2px;color:#fcd200;text-align:center}
+.hd-official .LoadingScreen-Map-CustomTitle{font-size:20px}
+.hd-official .LoadingScreen-Map-Description{font-size:18px;color:#e6e6e6;white-space:pre-line}
+.hd-official .LoadingScreen-CenterLoadingColumn{display:flex;flex-direction:column;align-items:center;margin:0 0 82px;z-index:4}
+.hd-official .LoadingScreen-LoadingBar{display:flex;width:1100px;height:70px;align-items:center;justify-content:center;position:relative;border-image:url(LoadingScreen/loading-bar-4k.png);border-image-width:18px 42px 34px 42px;border-image-slice:40 80 82 80 fill;border-image-repeat:repeat;border-image-outset:0}
+.hd-official .LoadingScreen-LoadingBarText{font-family:var(--game-font);color:#ffd428;font-size:30px;font-variant:small-caps;text-transform:none;line-height:1.125;letter-spacing:.06em;text-shadow:1px 2px 1px #000,-1px -1px 1px rgba(0,0,0,.6),1px -1px 1px rgba(0,0,0,.6),-1px 1px 1px rgba(0,0,0,.6),1px 1px 1px rgba(0,0,0,.6);z-index:2;margin-top:-4px;width:100%;text-align:center;letter-spacing:.22em;text-transform:uppercase}
+.hd-official .LoadingScreen-LoadingFill-Container{display:flex;flex-direction:row;position:absolute;left:24px;bottom:-4px;width:1044px;height:100%;overflow:hidden}
+.hd-official .LoadingScreen-LoadingBarFill{left:0;margin-left:15px;margin-top:10px;width:575px;height:41px;align-self:flex-start;background-size:633px;background-image:url(LoadingScreen/loadingscreen-fill-flat.png);box-shadow:inset 0 0 10px #000;border-radius:4px}
+.hd-official .LoadingScreen-Fill-Endcap{position:relative;width:22px;height:82px;background-image:url(LoadingScreen/loadingscreen-bar-endcap_4k.png);background-size:cover;margin-left:-14px;margin-top:-20px;mix-blend-mode:color-dodge}
+.hd-official .LoadingScreen-MapAuthorHolder{color:#e6e6e6;font-size:15px;line-height:1.1;letter-spacing:.08em;margin-bottom:50px}
+.hd-official .LoadingScreen-MapAuthor,
+.hd-official .LoadingScreen-MapAuthorHolder{font-variant:small-caps;text-transform:none;text-shadow:0 2px 1px #000}
+.hd-official .LoadingScreen-MapAuthor{color:#ffd428;font-size:18px;line-height:.9;letter-spacing:.1em}
+.hd-official .LoadingScreen-GameInfo{display:flex;width:auto;overflow:visible;height:calc(100% - 300px);width:100%;align-items:center;align-self:center;margin-bottom:150px;justify-content:center}
+.hd-official .LoadingScreen-TeamContainer{display:flex;flex-direction:column;position:relative;margin:0 37px;opacity:.82}
+.hd-official .LoadingScreen-TeamContainer-Wrapper-Left{display:flex;flex-direction:column;flex-wrap:wrap-reverse;max-height:100%;margin-right:70px}
+.hd-official .LoadingScreen-TeamContainer-Wrapper-Right{display:flex;flex-direction:column;flex-wrap:wrap;max-height:100%;margin-left:48px;margin-right:22px}
+.hd-official .LoadingScreen-TeamContainer-Extra{margin-bottom:12px;margin-top:19px}
+.hd-official .LoadingScreen-TeamName{font-family:var(--game-font);font-size:24px;font-variant:small-caps;line-height:.9;letter-spacing:.08em;color:#e6e6e6;text-shadow:0 1px 2px rgba(0,0,0,.9);margin-top:12px;margin-bottom:3px;margin-left:7px}
+.hd-official .LoadingScreen-TeamName:first-child{margin-top:0}
+.hd-official .LoadingScreen-MapInfo{flex-direction:column;display:flex;justify-content:center;position:relative}
+.hd-official .LoadingScreen-MapTitle{text-align:center;position:absolute;width:100%;font-size:30px;text-transform:uppercase;color:#ffd428;text-shadow:0 2px 2px #000;bottom:100%}
+.hd-official .LoadingScreen-MapTitle,
+.hd-official .LoadingScreen-MapTitle span{font-family:var(--game-font)}
+.hd-official .LoadingScreen-MapImageHolder{width:340px;height:340px;border-image:url(LoadingScreen/loadscreen_mapframe.png) 28 fill repeat;border-image-width:14px;display:flex;align-items:center;justify-content:center;position:relative}
+.hd-official .LoadingScreen-MapImage{width:311px;height:311px;position:relative;background-size:contain;background-repeat:no-repeat;background-position:50%;margin-top:0}
+.hd-official .LoadingScreen-Decorations{display:flex;justify-content:center;position:absolute;width:100%;height:100%;left:0;top:0}
+.hd-official .LoadingScreen-DecorationTop{width:1125px;height:80px;position:relative;background-image:url("LoadingScreen/Loading_TopDecoration.png");background-repeat:no-repeat;background-size:contain;z-index:3;display:flex}
+.hd-official .LoadingScreen-DecorationLeft{z-index:10;left:0;background-image:url("LoadingScreen/Loading_CornerDecoration_LowerLeft.png")}
+.hd-official .LoadingScreen-DecorationLeft,
+.hd-official .LoadingScreen-DecorationRight{position:absolute;bottom:0;width:664px;height:419px;background-repeat:no-repeat;z-index:3;display:flex}
+.hd-official .LoadingScreen-DecorationRight{right:0;background-image:url("LoadingScreen/Loading_CornerDecoration_LowerRight.png")}
+.hd-official .LoadingScreen-DecorationBanner{position:absolute;width:100%;height:39px;left:0;background-image:url("LoadingScreen/Loading_PatternStrip.png");background-repeat:repeat}
+.hd-official .LoadingScreen-DecorationBannerTop{top:10px;display:flex}
+.hd-official .LoadingScreen-DecorationBannerBottom{bottom:10px;display:flex}
+.hd-official .LoadingScreen-CustomBackground{background-size:contain}
+.hd-official .PlayerLoadingWidget{position:relative;display:flex;flex-direction:row;align-items:center;width:390px;height:90px;background:transparent;border-image:url(Widgets/TextFields/war3_text_normal_4k.png) 48 fill repeat round;border-image-width:30px}
+.hd-official .PlayerLoadingWidget .Player-Icon-Level{display:flex;left:20px;bottom:-8px;height:40px;width:40px;position:absolute;background:url(Ranked/rankedBadge_0.png) no-repeat;background-size:100% 100%;justify-content:center;align-items:center;color:#ffd428;font-size:12px;padding-top:4px;font-family:var(--game-font);filter:drop-shadow(0 0 3px black)}
+.hd-official .PlayerLoadingWidget .Player-Icon-Frame{display:flex;align-items:center;border-image:url(Widgets/PlayerWidget/portrait_frame_large.png) 55 fill repeat round;padding:10px 11px 10px 13px;background-image:unset;filter:drop-shadow(2px 4px 6px black);pointer-events:none;height:75px;width:75px;border-image-width:13px 14px;margin-left:3px;margin-top:3px}
+.hd-official .PlayerLoadingWidget .Player-Icon-Frame:before{content:"";width:23px;height:23px;position:absolute;left:-18px;top:unset;background:url(Widgets/Buttons/war3_button_frame_end_left_alt.png) no-repeat;background-size:100% 100%}
+.hd-official .PlayerLoadingWidget .Player-Icon-Frame:after{content:"";width:23px;height:23px;position:absolute;right:-16px;top:unset;background:url(Widgets/Buttons/war3_button_frame_end_right_alt.png) no-repeat;background-size:100% 100%}
+.hd-official .PlayerLoadingWidget-AvatarHolder{position:relative;width:90px;height:90px;margin-left:4px;z-index:1}
+.hd-official .PlayerLoadingWidget-Avatar{display:flex}
+.hd-official .PlayerLoadingWidget-Portrait{background-image:url("Portraits/P068.png");background-size:cover;width:68px;height:68px;position:absolute;margin-left:7px;margin-top:7px}
+.hd-official .PlayerLoadingWidget-PortraitBorder{width:82px;height:82px;position:absolute;background:transparent;border-image:url(Widgets/PlayerWidget/portrait_frame_normal_4k.png) 54 80 90 80 fill repeat round;border-image-width:20px;z-index:0}
+.hd-official .PlayerLoadingWidget-PlayerColor{position:absolute;width:8px;height:60px;border:1px solid hsla(0,0%,100%,.1);outline:1px solid rgba(0,0,0,.6);background:linear-gradient(0deg,rgba(0,0,0,.6),rgba(0,0,0,.06));box-shadow:0 1px 4px #000;z-index:1}
+.hd-official .PlayerLoadingWidget-IsReady{width:calc(100% - 64px);height:calc(100% - 23px);margin:12px;margin-top:5px;top:0;right:0;position:absolute;opacity:1}
+.hd-official .PlayerLoadingWidget-IsNotReady{opacity:0;background-image:none}
+.hd-official .PlayerLoadingWidget-Background{display:flex;position:absolute;width:325px;height:94px;margin-left:76px;border-image:url(Widgets/PlayerWidget/portrait_frame_normal_4k.png) 54 80 90 80 fill repeat round;border-image-width:27px 40px 45px 40px;z-index:-1}
+.hd-official .PlayerLoadingWidget-PlayerInfo{display:flex;height:90px;width:220px;flex-direction:row;align-items:center;justify-content:center;z-index:1;margin-left:8px}
+.hd-official .PlayerLoadingWidget-PlayerInfo .RankedBadge-Wrapper{position:absolute;right:0}
+.hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details{display:flex;flex-direction:column;height:100%;padding-top:14px;padding-left:6px;justify-content:flex-start}
+.hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-PlayerName{font-family:var(--game-font);color:#e6e6e6;font-size:21px;font-variant:small-caps;text-transform:none;line-height:1.1;letter-spacing:.06em;font-size:24px;text-shadow:0 1px 2px rgba(0,0,0,.9);overflow:hidden;white-space:nowrap;width:240px;text-overflow:ellipsis}
+.hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-Level,
+.hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-MMR,
+.hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-Race{font-size:15px;font-variant:small-caps;text-transform:none;line-height:1.1;letter-spacing:.08em;color:#e6e6e6;text-shadow:0 1px 2px rgba(0,0,0,.9);white-space:nowrap;width:200px;text-overflow:ellipsis}
+.hd-official .Player-Details-Wrapper .PlayerLoadingWidget-Details .PlayerLoadingWidget-MMR{padding-top:8px}
+.hd-official .PlayerLoadingWidget-PlayerName-ClanName{font-size:18px;font-variant:normal;text-transform:uppercase;line-height:.9;letter-spacing:.1em;color:#ffc933}
+.hd-official .PlayerLoadingWidget-Race{display:flex;align-items:center;margin-left:144px;position:absolute}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Name{display:flex;width:96px;height:100%;font-size:15px;font-variant:small-caps;text-transform:none;line-height:1.1;letter-spacing:.08em;color:#e6e6e6;text-shadow:0 1px 2px rgba(0,0,0,.9);white-space:nowrap;font-weight:700;font-size:16px;justify-content:flex-end;align-self:flex-end;margin-bottom:41px}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon{width:96px;height:96px;margin-bottom:22px;align-self:center;background-size:cover}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon.human{background-image:url(Icons/Versus/human-icon-resting.png)}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon.orc{background-image:url(Icons/Versus/orc-icon-resting.png)}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon.undead{background-image:url(Icons/Versus/undead-icon-resting.png)}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon.nightelf{background-image:url(Icons/Versus/nightelf-icon-resting.png)}
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon.random{background-image:url(Icons/Versus/random-icon-resting.png)}/* The loading screen's own layer: full window, over the world and under the F10 menu. The
+ * parchment picture is the sheet's default background; everything above it is DOM. */
+.hd-official.LoadingScreen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  z-index: 9;
+  pointer-events: none;
+}
+
+.hd-official .LoadingScreen-Background.isDefaultBg { top: 0; height: 100%; }
+
+.hd-official .LoadingScreen-Background.isDefaultBg > .LoadingScreen-CenterLoadingColumn {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+}
+
+.hd-official .LoadingScreen-MapImageHolder { flex: none; }
+
+.hd-official .LoadingScreen-MapTitle {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  white-space: nowrap;
+  bottom: calc(100% + 12px);
+}
+
+.hd-official .LoadingScreen-LoadingBarFill { transition: width 0.18s linear; }
+
+/* The sheet lets the race plate fall where flex puts it; on this card that strands the crest
+ * under the plate. The reference ends the bar with the race badge as a medallion centred on the
+ * bar's right edge — half in, half onto the parchment — so anchor it there. */
+.hd-official .PlayerLoadingWidget-Race {
+  position: absolute;
+  top: -14%;
+  right: -10%;
+  margin-left: 0;
+}
+
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Name {
+  width: auto;
+  align-self: flex-end;
+  margin: 0 6px 20px 0;
+}
+
+.hd-official .PlayerLoadingWidget-Race .PlayerLoadingWidget-Race-Icon {
+  margin-bottom: 0;
+  align-self: center;
+}

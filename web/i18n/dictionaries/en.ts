@@ -47,6 +47,7 @@ export const en: Messages = {
     download: "Download",
     playInBrowser: "Play in your browser",
     playInBrowserHint: "Nothing to install: open the page and pick your local Warcraft III folder. Chrome / Edge on desktop recommended.",
+    playOnline: "Play online",
     unavailable: "Unavailable",
     resourcesTitle: "Resources",
     resourceName: "Name",
@@ -80,6 +81,13 @@ export const en: Messages = {
     search: "Search",
     category: "Category",
     allCategories: "All categories",
+    flavor: "Supported versions",
+    allFlavors: "All versions",
+    flavors: {
+      sd: "Classic",
+      hd: "Reforged",
+      both: "Classic & Reforged",
+    },
     categories: {
       moba: "MOBA",
       "hero-defense": "Hero defense",
@@ -105,6 +113,25 @@ export const en: Messages = {
     discord: "Discord",
     note: "Note",
     empty: "No contact details yet.",
+  },
+  gestureHelp: {
+    label: "How to turn off browser swipe gestures",
+    title: "Turn off browser swipe gestures",
+    intro:
+      "Browsers treat a two-finger swipe or a mouse side button as back / forward. A box-select drag in game can trigger it and drop you out of the match, so turn it off before you play.",
+    chrome: "Chrome / Edge (desktop)",
+    chromeSteps: [
+      "Open chrome://flags/#overscroll-history-navigation (edge://flags/#overscroll-history-navigation in Edge).",
+      "Set Overscroll history navigation to Disabled.",
+      "Press Relaunch at the bottom right, then come back to this site.",
+    ],
+    edgeNote: "Edge also has a Mouse gestures switch under Settings → Appearance — turn that off too.",
+    firefox: "Firefox",
+    firefoxSteps: [
+      "Open about:config and search for browser.gesture.swipe.",
+      "Clear the values of browser.gesture.swipe.left and browser.gesture.swipe.right.",
+    ],
+    close: "Got it",
   },
   footer: {
     disclaimer:

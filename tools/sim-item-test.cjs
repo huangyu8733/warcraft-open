@@ -55,6 +55,7 @@ const ABILITIES = new Map([
   // --- carried passives -------------------------------------------------------------------
   ["AIev", ability("AIev", "AEev", { levelData: [lvl({ data: D(0.15) })] })], // Talisman of Evasion
   ["AImb", ability("AImb", "AImm", { levelData: [lvl({ data: D(150) })] })], // Pendant of Energy
+  ["AIms", ability("AIms", "AIms", { levelData: [lvl({ data: D(60) })] })], // Boots of Speed — DataA 60
   ["AIsr", ability("AIsr", "AIsr", { levelData: [lvl({ data: D(NaN, 0.33) })] })], // Runed Bracers
   ["AIdd", ability("AIdd", "AIdd", { levelData: [lvl({ data: D(0.7, 1) })] })], // Arcanite Shield
   ["AImx", ability("AImx", "Amim", { levelData: [lvl({ data: D(10) })] })], // Necklace of Spell Immunity
@@ -110,7 +111,7 @@ const ITEMS = new Map([
   ["tkno", item("tkno", ["AIlm"])], ["tint", item("tint", ["AIim"])], ["tstr", item("tstr", ["AIsm"])],
   ["manh", item("manh", ["AImi"], { powerup: true, classType: "PowerUp" })],
   ["manx", item("manx", ["AImiN"], { powerup: true, classType: "PowerUp" })],
-  ["evtl", passive("evtl", ["AIev"])], ["penr", passive("penr", ["AImb"])],
+  ["evtl", passive("evtl", ["AIev"])], ["bspd", passive("bspd", ["AIms"])], ["penr", passive("penr", ["AImb"])],
   ["brac", passive("brac", ["AIsr"])], ["arsh", passive("arsh", ["AIdd"])],
   ["nspi", passive("nspi", ["AImx"])], ["gemt", passive("gemt", ["Adt1"])],
   ["ward", passive("ward", ["AIcd"])], ["spsh", passive("spsh", ["ANss"])],
@@ -541,7 +542,10 @@ console.log("\nan undroppable item cannot leave the inventory");
   world.transferItem(keeper, 0, mate);
   check("…it cannot be handed to another hero", mate.inventory.some((h) => h && h.id === ledger), false);
   check("…and the giver still has it", keeper.inventory[0] && keeper.inventory[0].id, ledger);
+  // …and the HUD has a line to say for all three (issue #299): [Errors] Cantdrop.
+  check("…and the refusal is the game's `Cantdrop`", world.itemLeaveError(keeper.id, 0), "Cantdrop");
   check("SetItemDroppable(true) gives it back", world.setItemDroppable(ledger, true), true);
+  check("…and the line goes with it", world.itemLeaveError(keeper.id, 0), null);
   check("…and now it drops", world.dropItem(keeper.id, 0, keeper.x + 10, keeper.y), true);
 }
 {
@@ -692,6 +696,41 @@ console.log("\nRune of Rebirth (`rreb` → `AIrb`) — the monster that held it 
   hero.x = 3000; hero.y = 3000;
   world.unitAddItem(hero.id, stray);
   check("a rune no monster held brings nobody", world.drainSummonRequests().length, 0);
+}
+
+// Boots of Speed: two pairs. The melee tables say they do NOT stack (`msbs` 0) — only the
+// largest carried `AIms` counts, so a hero with two pairs moves at +60, not +120 (issue #282).
+// The custom data sets say they do (MISC_GAME_CUSTOM, 1) — a chapter's hero really gets +120.
+{
+  world = newWorld();
+  const bare = unit({ x: 0, y: 0 });
+  const base = bare.speed;
+  const h = unit({ x: 100, y: 0 });
+  give(h, "bspd", 0);
+  give(h, "bspd", 1);
+  world.recomputeStats(h);
+  check("two pairs of Boots move the hero +60 on the melee tables", h.speed - base, 60);
+}
+
+console.log("\na restore with nothing to restore says why, and keeps its charge (issue #299)");
+{
+  world = newWorld();
+  const hero = give(unit({ isHero: true, hp: 1000, maxHp: 1000, mana: 0 }), "phea");
+  check("a Potion of Healing at full life: `HPmaxed`", world.itemUseError(hero.id, 0, 0), "HPmaxed");
+  check("…and the press is not spent", world.useItem(hero.id, 0, 0, hero.x, hero.y) || hero.inventory[0].charges, ITEMS.get("phea").charges);
+  hero.hp = 400;
+  check("hurt, it is legal again", world.itemUseError(hero.id, 0, 0), null);
+  const mule = give(unit({ isHero: false, hp: 1000, maxHp: 1000 }), "phea");
+  check("a non-hero carrier reads `UnitHPmaxed`", world.itemUseError(mule.id, 0, 0), "UnitHPmaxed");
+
+  world = newWorld();
+  const whole = give(unit({ isHero: true, hp: 1000, maxHp: 1000, mana: 500, maxMana: 500 }), "sres");
+  check("a Scroll of Restoration, everyone whole: `HPmanamaxed`", world.itemUseError(whole.id, 0, 0), "HPmanamaxed");
+  const hurt = unit({ x: whole.x + 100, hp: 10, maxHp: 1000 });
+  check("…one hurt Footman in the circle makes it legal", world.itemUseError(whole.id, 0, 0), null);
+  hurt.hp = hurt.maxHp;
+  whole.mana = 10;
+  check("…and so does the hero's own empty mana bar", world.itemUseError(whole.id, 0, 0), null);
 }
 
 console.log(failed ? `\nitems: ${failed} check(s) FAILED` : "\nitems: all checks passed");

@@ -1,5 +1,6 @@
 import { getDb } from "../index";
 import type { MapRow, MapTranslation, MapWithText } from "../schema";
+import type { MapFlavor } from "@/lib/mapFlavors";
 import { DEFAULT_LOCALE } from "@/i18n/config";
 
 const SELECT_WITH_TEXT = `
@@ -19,6 +20,8 @@ export interface MapListOptions {
   q?: string;
   /** A category key (web/lib/mapCategories.ts). */
   category?: string;
+  /** Only maps that run on this data line (web/lib/mapFlavors.ts). */
+  flavor?: MapFlavor;
   limit?: number;
 }
 
@@ -33,6 +36,12 @@ export function listPublishedMaps(
   if (opts.category) {
     where.push("m.category = ?");
     args.push(opts.category);
+  }
+  if (opts.flavor) {
+    // `flavors` is a canonical comma list ("sd", "hd", "sd,hd"); pad it so a LIKE cannot match
+    // the "hd" inside another token.
+    where.push("(',' || m.flavors || ',') LIKE ?");
+    args.push(`%,${opts.flavor},%`);
   }
   const q = opts.q?.trim().toLowerCase();
   if (q) {

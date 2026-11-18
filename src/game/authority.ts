@@ -338,6 +338,47 @@ export class Authority {
   }
 
   /**
+   * `IssueTargetOrder` aimed at an ITEM lying on the ground (issue #294). common.j's target is
+   * a `widget`, and Blizzard.j's `IssueTargetItemOrder` is that native by another name, so this
+   * is the GUI's "Unit - Issue Order Targeting An Item" (`UI\TriggerData.txt` defaults it to
+   * `UnitOrderSmartItem`). The two orders an item answers are the two a player has for one:
+   * `smart` — a right-click, which PICKS IT UP (the "getitem" command above) — and `attack`,
+   * which strikes its 75 hit points (SimWorld.issueAttackItem). Anything else is refused: no
+   * ability in our tables is cast on a ground item by order string.
+   *
+   * Not a command, for the reasons `issueUnitOrder` gives.
+   */
+  issueItemOrder(unitId: number, orderId: number, order: string, itemId: number): boolean {
+    const s = order || orderIdToString(orderId);
+    let ok = false;
+    if (s === "smart") ok = this.sim.issueGetItem(unitId, itemId);
+    else if (s === "attack") ok = this.sim.issueAttackItem(unitId, itemId);
+    if (ok) this.sim.noteOrder(unitId, orderId, "target", 0, 0, 0, itemId);
+    return ok;
+  }
+
+  /**
+   * `IssueTargetOrder` aimed at a destructable the sim keeps no UNIT for — which is a TREE
+   * (`IssueTargetDestructableOrder(u, "harvest", tree)`; a gate or a crate has a stand-in unit
+   * and goes through `issueUnitOrder`). A tree is known to the sim only by where it stands, so
+   * the .doo record's own spot is what finds it. `smart` and `harvest` gather, as a worker's
+   * right-click does; `attack` swings the weapon at it (SimWorld.issueAttackTree). Each is the
+   * sim's own judgement of who may — a Footman told to harvest answers false.
+   */
+  issueTreeOrder(unitId: number, orderId: number, order: string, x: number, y: number): boolean {
+    const s = order || orderIdToString(orderId);
+    // Ours, not the game's: the slack for "the tree AT this record" — the sim plants a tree on
+    // the record's exact coordinates, so anything under a pathing cell is the same tree.
+    const tree = this.sim.nearestTree(x, y, 32);
+    if (!tree) return false;
+    let ok = false;
+    if (s === "smart" || s === "harvest") ok = this.sim.issueHarvest(unitId, "lumber", tree.id);
+    else if (s === "attack") ok = this.sim.issueAttackTree(unitId, tree.id);
+    if (ok) this.sim.noteOrder(unitId, orderId, "target", tree.x, tree.y, 0);
+    return ok;
+  }
+
+  /**
    * `IssueNeutralImmediateOrderById(player, shop, id)` and its point/target siblings: an order
    * given to a NEUTRAL building on a player's behalf — which is to say a purchase, since buying
    * is the only thing a player can ask of a unit that is not theirs. It is how a script shops
@@ -379,7 +420,7 @@ export class Authority {
       this.abilityOrders = new Set();
       for (const def of this.abilities.all()) {
         if (isHarvestCode(def.code)) continue;
-        for (const o of [def.order, def.orderOn, def.orderOff]) if (o) this.abilityOrders.add(o);
+        for (const o of [def.order, def.orderOn, def.orderOff, def.unOrder]) if (o) this.abilityOrders.add(o);
       }
     }
     return this.abilityOrders.has(order);
@@ -700,6 +741,16 @@ export class Authority {
       if (isHarvestCode(ab.code)) continue;
       const def = this.abilities.get(ab.id);
       if (!def) continue;
+      // A FORM TOGGLE is one button answering two orders, and each of them names the form it
+      // LEAVES the unit in: `ravenform` on a crow and `unravenform` on a druid are already
+      // true and do nothing, where pressing the button would flip the unit the wrong way.
+      // (`Unorder` was not matched at all before: a script could put a unit into its other
+      // form and never get it out — Prologue01 lands the Prophet with "unravenform".)
+      const form = def.unOrder && (def.order === order || def.unOrder === order) ? this.sim.formOf(unitId, ab.id) : null;
+      if (form) {
+        const want = def.order === order ? "alternate" : "normal";
+        return form === want ? true : this.sim.issueCast(unitId, ab.id, targetId, x, y);
+      }
       // By the row's ID, not its code: two Channels on one hero answer to two different orders.
       if (def.order === order) return this.sim.issueCast(unitId, ab.id, targetId, x, y);
       // "…on"/"…off" are the autocast toggles (Heal's "autocastoff"/"autocaston").
@@ -1169,6 +1220,9 @@ export class Authority {
         const have = state.researchLevel(player, cmd.upgradeId);
         const next = have + 1;
         if (next > d.maxLevel) return false;
+        // …nor past the level the MAP stops this player at (TechState.researchCap).
+        const cap = state.researchCap(player, cmd.upgradeId);
+        if (cap >= 0 && next > cap) return false;
         if (!state.meets(player, cmd.upgradeId, next - 1)) return false;
         const cost = this.upgrades.cost(cmd.upgradeId, next);
         const stash = this.sim.stashOf(player);

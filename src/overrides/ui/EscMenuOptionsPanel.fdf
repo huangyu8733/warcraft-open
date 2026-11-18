@@ -17,6 +17,8 @@
 //     an Warcraft Open LAN match has no such knob to offer (docs/multiplayer.md).
 //   · "Difficulty:" GOES. It was a readout of the campaign screen's own dropdown, printing back
 //     at the player the one thing about the chapter they chose themselves.
+//   · "Sound Provider:" GOES. It printed the device the engine mixed through, and a browser has
+//     only the one (Web Audio) — a readout with nothing it could ever say differently.
 //
 // …and adds the rows of ours that the glue panel grew with them: the "Healthbars:" pulldown
 // under "Always show Health Bars", "Show hotkeys on command buttons" under "Hotkeys:", and on the
@@ -104,6 +106,21 @@ Frame "POPUPMENU" "EscHotkeysMenu" {
 
     PopupMenuFrame "EscHotkeysPopupMenuMenu",
     Frame "MENU" "EscHotkeysPopupMenuMenu" INHERITS WITHCHILDREN "EscMenuPopupMenuMenuTemplate" {
+    }
+}
+
+// The editor (src/ui/hotkeyEditor.ts) the glue Options screen used to hang off its own Hotkeys
+// tab, beside the pulldown it belongs to: a narrow "Edit" button in the space the 0.1175
+// pulldown leaves on this panel's right. It opens the same dialog over the match.
+Frame "GLUETEXTBUTTON" "HotkeyEditorButton" INHERITS WITHCHILDREN "EscMenuButtonTemplate" {
+    Width 0.052,
+    Height 0.0245,
+    SetPoint LEFT, "EscHotkeysMenu", RIGHT, 0.004, 0.0,
+
+    ButtonText "HotkeyEditorButtonText",
+    Frame "TEXT" "HotkeyEditorButtonText" INHERITS "EscMenuButtonTextTemplate" {
+        FrameFont "EscMenuTextFont", 0.011, "",
+        Text "HOTKEY_EDITOR",
     }
 }
 

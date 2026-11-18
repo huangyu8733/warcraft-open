@@ -51,23 +51,33 @@ contextBridge.exposeInMainWorld("ow3native", {
   /** Quit the whole app (the launcher's Exit Program). macOS keeps an app alive with no windows,
    *  so closing the window is not the same thing. */
   quit: () => ipcRenderer.send("ow3:quit"),
-  /** `{ path, valid }` — the remembered folder, and whether it is still an install. A folder
-   *  that has been moved or deleted is reported rather than silently re-asked for, so the
-   *  screen can say which one it lost. */
-  installPath: () => ipcRenderer.invoke("ow3:install-get"),
+  /** `{ path, valid }` — the remembered folder for the current line, and whether it is still an
+   *  install. A folder that has been moved or deleted is reported rather than silently re-asked
+   *  for, so the screen can say which one it lost. `flavor` is optional and defaults to the
+   *  line the page set with `flavor.set`. */
+  installPath: (flavor) => ipcRenderer.invoke("ow3:install-get", flavor),
+  /** Which line this window is on (`"sd" | "hd"`), and the page's way to pick one before it
+   *  reads a folder. `set` also remembers it for the next launch. */
+  flavor: {
+    get: () => ipcRenderer.invoke("ow3:flavor-get"),
+    set: (flavor) => ipcRenderer.invoke("ow3:flavor-set", String(flavor ?? "")),
+  },
+  /** Start a game on `flavor` ("sd" | "hd") in a window of its own, leaving this one as it is.
+   *  The launcher opens one window per line, which is how both lines can be up at once. */
+  openGame: (flavor) => ipcRenderer.invoke("ow3:open-game", String(flavor ?? "")),
   /** Open the OS folder picker. Resolves to the chosen path, or null if the player cancelled
    *  or picked something that is not an install. */
-  pickInstall: () => ipcRenderer.invoke("ow3:install-pick"),
+  pickInstall: (flavor) => ipcRenderer.invoke("ow3:install-pick", flavor),
   /** "Download game files": ask where to put it, then fetch an install from the first of
    *  `sources` that works (src/assets/downloadInstall.ts `GameFilesSource` — plain data, the
    *  page's list) and unpack it there. `onProgress` gets `{ fraction, received, total, source }`.
    *  Resolves to the folder — now the remembered one — or null if the player cancelled the
    *  folder dialog. */
-  downloadInstall: async (sources, onProgress) => {
+  downloadInstall: async (sources, onProgress, flavor) => {
     const handler = (_event, progress) => onProgress?.(progress);
     ipcRenderer.on("ow3:install-download-progress", handler);
     try {
-      return await ipcRenderer.invoke("ow3:install-download", sources);
+      return await ipcRenderer.invoke("ow3:install-download", sources, flavor);
     } finally {
       ipcRenderer.off("ow3:install-download-progress", handler);
     }
@@ -76,7 +86,7 @@ contextBridge.exposeInMainWorld("ow3native", {
    *  in-flight download then throws, the staging folder is wiped and the invoke rejects. */
   cancelDownload: () => ipcRenderer.send("ow3:install-download-cancel"),
   /** Forget the remembered folder, so the next launch asks again. */
-  forgetInstall: () => ipcRenderer.invoke("ow3:install-forget"),
+  forgetInstall: (flavor) => ipcRenderer.invoke("ow3:install-forget", flavor),
   /** Write the folder's CustomKeys.txt — the hotkey editor's Save (issue #156). ONE named file
    *  the shell resolves inside the install itself; the page names no path, so this is not the
    *  general write primitive the note above rules out. */
@@ -118,6 +128,19 @@ contextBridge.exposeInMainWorld("ow3native", {
         ipcRenderer.off("ow3:replay-bundle-progress", handler);
       }
     },
+  },
+  /**
+   * SAVE GAMES (src/game/saveFile.ts): `saves/` in the data folder, beside the replays.
+   * `write(name, bytes)` keeps one under a name the player chose, `list()` is the save
+   * screen's, `read(name)` the load path's, `remove(name)` its Delete. Names only — the
+   * shell picks the folder, exactly as it does for replays.
+   */
+  saves: {
+    write: (name, bytes) => ipcRenderer.invoke("ow3:save-write", String(name ?? ""), bytes),
+    list: () => ipcRenderer.invoke("ow3:save-list"),
+    read: (name) => ipcRenderer.invoke("ow3:save-read", String(name ?? "")),
+    exists: (name) => ipcRenderer.invoke("ow3:save-exists", String(name ?? "")),
+    remove: (name) => ipcRenderer.invoke("ow3:save-delete", String(name ?? "")),
   },
   /** Keep a map a LAN game handed us, in the install's Maps\Download\ (src/assets/downloadedMaps.ts).
    *  The page names a FILE, never a folder: the shell puts it in that one folder or nowhere. */

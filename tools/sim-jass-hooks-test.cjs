@@ -62,7 +62,10 @@ const EXPECTED = [
   // The PREDICATES whose answer is the world's rather than a viewpoint's (pass 4). The vision
   // half of that family is NOT here: `IsUnitVisible` and its four siblings are answered by the
   // viewpoint the renderer draws from, which is `visionHooks`' table, not this one.
-  "isUnitInRange", "isUnitInRangeXY", "isUnitIllusion", "unitRace", "isTerrainPathable",
+  "isUnitInRange", "isUnitInRangeXY", "isUnitIllusion", "unitTransport", "isHeroXpSuspended", "unitRace", "isTerrainPathable",
+  // Sleep and food: a creep camp asleep at night and a unit's food cost (sim-creep-sleep-test.cjs,
+  // sim-unit-fields-test.cjs).
+  "getUnitCanSleep", "setUnitCanSleep", "getUnitSleeping", "getUnitUsesFood",
   // SetPlayerAbilityAvailable — per-player availability, stored on TechState beside the tech
   // cap it sits next to (pass 8; sim-ability-available-test.cjs).
   "setPlayerAbilityAvailable",
@@ -83,11 +86,11 @@ const EXPECTED = [
   "unitName", "setUnitName",
   // UnitApplyTimedLife (pass 6; sim-summon-test.cjs).
   "applyTimedLife",
-  "setHeroXp", "setItemCharges", "setItemDroppable", "setItemInvulnerable", "setItemLife", "setItemPosition", "setPlayerTechMaxAllowed",
+  "setHeroXp", "setItemCharges", "setItemDroppable", "setItemDropOnDeath", "setItemPawnable", "setItemInvulnerable", "setItemLife", "setItemPosition", "setPlayerTechMaxAllowed",
   // StoreUnit — a chapter writing its hero down for the next one (docs/campaigns.md). Its
   // twin RestoreUnit is the AUTHORITY's, because putting one back means creating it.
   "storeUnit",
-  "setPlayerTechResearched", "setTimeOfDay", "setTypeSlots", "setUnitAbilityLevel", "setUnitAcquireRange",
+  "setPlayerTechResearched", "setTimeOfDay", "setTypeSlots", "setUnitAbilityLevel", "setUnitAcquireRange", "setUnitSkin",
   // The rest of the day/night clock: how fast it runs and whether it runs at all. A campaign
   // sets both (Rise of the Naga: 25% speed, then UseTimeOfDayBJ(false) to hold it at night).
   "getTimeOfDayScale", "setTimeOfDayScale", "suspendTimeOfDay",
@@ -264,11 +267,13 @@ const ah = authorityHooks({
   currentOrderId: (id) => authority.currentOrderId(id),
   issueUnitOrder: (...a) => authority.issueUnitOrder(...a),
   issueNeutralOrder: (...a) => authority.issueNeutralOrder(...a),
+  issueItemOrder: (...a) => authority.issueItemOrder(...a),
+  issueTreeOrder: (...a) => authority.issueTreeOrder(...a),
   createScriptUnit: (...a) => { created.push(a); return 909; },
   restoreScriptUnit: (...a) => { restored.push(a); return 910; },
 });
 check("authorityHooks holds the resource, order and create natives", Object.keys(ah).sort(),
-  ["createUnit", "getPlayerState", "getUnitCurrentOrder", "issueNeutralImmediateOrder", "issueNeutralOrder", "issueUnitOrder", "restoreUnit", "setPlayerState"]);
+  ["createUnit", "getPlayerState", "getUnitCurrentOrder", "issueItemOrder", "issueNeutralImmediateOrder", "issueNeutralOrder", "issueTreeOrder", "issueUnitOrder", "restoreUnit", "setPlayerState"]);
 
 // RestoreUnit is a CREATE — the game cache only says what to make (docs/campaigns.md) — so it
 // is here beside CreateUnit rather than in the pure-world half, and it is synchronous for the

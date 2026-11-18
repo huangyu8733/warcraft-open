@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
-import { deleteDownloadedMap, downloadedMapExists, installVersion, listDownloadedMaps, looksLikeInstall, serveInstall, writeCustomKeys, writeDownloadedMap } from "./install.mjs";
+import { deleteDownloadedMap, downloadedMapExists, installPathFromSettings, installPathPatch, installVersion, listDownloadedMaps, looksLikeInstall, normalizeFlavor, serveInstall, writeCustomKeys, writeDownloadedMap } from "./install.mjs";
 import { downloadFromSources } from "./download.mjs";
 import { detectInstall } from "./locate.mjs";
 import { startBeacon } from "./beacon.mjs";
@@ -29,6 +29,7 @@ import { PROTOCOL_VERSION } from "../server/rooms.mjs";
 import { readSettings, useSettingsDir, writeSettings } from "./settings.mjs";
 import { createLogStore } from "./logStore.mjs";
 import { createReplayStore } from "./replayStore.mjs";
+import { createSaveStore } from "./saveStore.mjs";
 import { arrangeDataDir } from "./dataDir.mjs";
 import { SHELL_CONTRACT, createSandbox, downloadBundle, fetchBundleManifest, removeSandbox, sweepSandboxes, withMapPath } from "./replayBundles.mjs";
 import { readMapSite } from "./mapSites.mjs";
@@ -110,6 +111,27 @@ app.commandLine.appendSwitch("js-flags", `--max-old-space-size=${HEAP_MIB}`);
 // the usual price of vsync off. OURS, not the game's: 1.30.4 has no frame-rate or vsync setting.
 useSettingsDir(DATA_DIR);
 const VSYNC = readSettings().vsync !== false;
+/** The line a window that has not said which one yet is treated as: the launcher's own default.
+ *  It is no longer "the" line — see `windowFlavors` below. */
+let activeFlavor = normalizeFlavor(readSettings().flavor);
+
+/**
+ * Which line each WINDOW is on (webContents id → "sd" | "hd").
+ *
+ * There used to be one line per process, because the page reloaded to change it. The launcher
+ * now opens a window per line instead, so the classic and the Reforged game can be up at the
+ * same time — and the answer to "which folder do you mean?" is the window's, not the app's.
+ * Every IPC that touches an install resolves it through `flavorOf(event.sender)`.
+ */
+const windowFlavors = new Map();
+const flavorOf = (sender) => (sender && windowFlavors.get(sender.id)) || activeFlavor;
+
+/** The launcher's own address, as a string, for the windows it opens. Set once the page is
+ *  actually being served, in `whenReady`. */
+let pageUrl = null;
+/** The launcher window, kept apart from game windows: a second launch of the app should bring
+ *  the LAUNCHER forward (where both lines are), not whichever game happens to be running. */
+let launcherWin = null;
 
 // THE MATCH LOGS (src/game/matchLog.ts, docs/match-log.md): every match the player plays writes a
 // plain-text record of itself into `.logs/` in the data folder — Warcraft Open's own data folder, beside the
@@ -127,6 +149,32 @@ matchLogs.sweep();
 const replayFiles = createReplayStore(join(DATA_DIR, "replays"), {
   warn: (msg) => console.warn(`[replays] ${msg}`),
 });
+// …and the SAVE GAMES (src/game/saveFile.ts): `saves/<line>/` beside them, in the same data
+// folder. Each line has its own folder, because the two run different installs: a classic save
+// restored from Reforged's unit/item data would be the wrong world. `saves/` itself stays as the
+// pre-split folder — old files are still listed and readable (the page knows which line wrote
+// each from the save's own header) and are deleted from there when the panel deletes them.
+// A save is only ever written under a name the player chose, which is why this store has no
+// `LastSave` the way replays have `LastReplay`.
+const saveStore = (line) =>
+  createSaveStore(join(DATA_DIR, "saves", line), {
+    warn: (msg) => console.warn(`[saves] ${msg}`),
+  });
+const saveFiles = { sd: saveStore("sd"), hd: saveStore("hd") };
+/** The folder saves lived in before the split — read-listed for both lines, never written. */
+const legacySaveFiles = createSaveStore(join(DATA_DIR, "saves"), {
+  warn: (msg) => console.warn(`[saves] ${msg}`),
+});
+/** The window's own line: the launcher's default only when it never said. */
+const savesFor = (sender) => saveFiles[flavorOf(sender)] ?? saveFiles.sd;
+/** One listing for a line: its folder first, then anything of its own still in the old one
+ *  (same name → the new folder's copy wins). Sorted newest first, as both stores are. */
+const listSaves = (store) => {
+  const byName = new Map();
+  for (const info of store.list()) byName.set(info.name, info);
+  for (const info of legacySaveFiles.list()) if (!byName.has(info.name)) byName.set(info.name, info);
+  return [...byName.values()].sort((a, b) => b.mtime - a.mtime);
+};
 // …and the SANDBOXES an earlier run left in the temp folder (electron/replayBundles.mjs): another
 // version's replay files, unpacked to watch one replay and deleted when its window closed —
 // unless the app crashed first. Swept on every launch, before anything else is drawn.
@@ -248,11 +296,28 @@ async function watchInVersion(mainWin, request) {
   }
 }
 
-function createWindow(url) {
+/**
+ * Open a window on the app's page.
+ *
+ * `game: true` is a game window: full screen, one line, and the page starts loading on its own
+ * (`?play=1`). Otherwise it is the LAUNCHER — windowed, never entering a game — which is what
+ * allows a second window (the other line) to be opened while a game is already running.
+ */
+function createWindow(url, { flavor: line = activeFlavor, game = false } = {}) {
+  // The URL wins: `?flavor=` is what the page itself reads (data/flavor.ts), so a window opened
+  // on a hand-written address still answers every install and save question with the line the
+  // page is actually on — the launcher's default only speaks for a page that never said.
+  let which = normalizeFlavor(line);
+  try {
+    const asked = new URL(url).searchParams.get("flavor");
+    if (asked === "sd" || asked === "hd") which = asked;
+  } catch {
+    /* not an absolute URL: keep the caller's line */
+  }
   const win = new BrowserWindow({
     width: 1600,
     height: 900,
-    fullscreen: true,
+    fullscreen: game,
     backgroundColor: "#000000",
     // Only when it is actually there: a missing path here is not an error Electron reports, it is
     // a window that silently wears the default Electron icon — and in `pnpm app:dev` there may be
@@ -273,6 +338,12 @@ function createWindow(url) {
       contextIsolation: true,
     },
   });
+  // A window's line lives as long as the window: EVERY install question it asks is answered by
+  // this entry (`flavorOf`), so two windows on two lines each read their own folder.
+  const contentsId = win.webContents.id;
+  windowFlavors.set(contentsId, which);
+  win.webContents.once("destroyed", () => windowFlavors.delete(contentsId));
+  if (!game) launcherWin = win;
   win.once("ready-to-show", () => win.show());
   // Alt+Enter toggles fullscreen, answered HERE rather than in the page. `before-input-event`
   // runs before the renderer is sent the key, and cancelling it means the page never receives
@@ -307,7 +378,9 @@ function createWindow(url) {
   // the window open.
   let closeAsked = false;
   win.on("close", (event) => {
-    if (closeAsked) return;
+    // Only a GAME window has something to say goodbye to (a LAN room, its partner); the launcher
+    // closes at once, because a launcher that took a second to shut would be read as a hang.
+    if (!game || closeAsked) return;
     closeAsked = true;
     event.preventDefault();
     const close = () => {
@@ -325,6 +398,7 @@ function createWindow(url) {
   // Holding a close cancels a QUIT that was closing it (Electron aborts `app.quit()` when a
   // window refuses to close), so a quit that met the hold is asked for again once it is through.
   win.on("closed", () => {
+    if (launcherWin === win) launcherWin = null;
     if (quitting) app.quit();
   });
   void win.loadURL(url);
@@ -350,13 +424,16 @@ let heard = [];
 /** The remembered install, and whether it is still usable. A folder that has been MOVED and one
  *  that has been PATCHED to another version are both unusable and are not the same news, so the
  *  answer carries enough for the game to say which happened (src/ui/gate.ts). */
-const currentInstall = () => {
+const currentInstall = (which = activeFlavor) => {
   // `WARCRAFT_OPEN_INSTALL` is the same variable the dev server's asset route reads
   // (tools/vite-plugin-dev-install.ts) and it is here for the same reason: so the app can be
   // driven without a human at a folder dialog, which a native dialog cannot be automated past.
   // It is a FALLBACK, under what the player actually chose, and a packaged launch has no such
-  // variable — nothing about it changes what a shipped app does.
-  const path = readSettings().installPath ?? process.env.WARCRAFT_OPEN_INSTALL ?? null;
+  // variable — nothing about it changes what a shipped app does. It is SD-only: an HD window must
+  // read the folder remembered for HD, never the classic one.
+  const f = normalizeFlavor(which);
+  const remembered = installPathFromSettings(readSettings(), f);
+  const path = remembered ?? (f === "sd" ? process.env.WARCRAFT_OPEN_INSTALL ?? null : null);
   return {
     path,
     valid: !!path && looksLikeInstall(path),
@@ -366,16 +443,36 @@ const currentInstall = () => {
   };
 };
 
+// One launcher at a time. SD and HD remember separate folders (install.mjs), but they share this
+// process's relay port and the machine's beacon, so a second copy would fight the first. A second
+// launch focuses the window that is already open instead of starting another game.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    // The launcher is where both lines live, so that is what comes forward — not the game window
+    // that happened to be opened last.
+    const win = launcherWin && !launcherWin.isDestroyed() ? launcherWin : BrowserWindow.getAllWindows()[0];
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  });
+}
+
 app.whenReady().then(async () => {
+  if (!app.hasSingleInstanceLock()) return;
 
   // Nothing remembered, or what was remembered is gone or patched: look for the install before
   // the page asks (electron/locate.mjs). The Windows installer put this app INSIDE the player's
   // Warcraft III folder, so on a fresh install this finds it without a single click. What it
   // finds is remembered exactly as a picked folder is, and what it cannot find is left to the
   // gate's folder picker — the fallback, never replaced.
-  if (!currentInstall().valid) {
+  // Only the classic line is auto-detected. An HD folder is chosen explicitly, and the Reforged
+  // reader does not exist before P2 (SD-HD双版本方案.md §9) — guessing one here would mount the
+  // wrong store.
+  if (activeFlavor === "sd" && !currentInstall().valid) {
     const found = await detectInstall({ packaged: app.isPackaged }).catch(() => null);
-    if (found) writeSettings({ installPath: found });
+    if (found) writeSettings(installPathPatch("sd", found));
   }
 
   // No application menu at all. `autoHideMenuBar` only HID Electron's default File/Edit/View
@@ -385,25 +482,65 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
 
   // The install, served to the page over the app's own scheme. The root is read PER REQUEST
-  // rather than captured, so choosing a different folder takes effect without a relaunch.
-  protocol.handle(INSTALL_SCHEME, (request) => serveInstall(currentInstall().path, request));
+  // rather than captured, so choosing a different folder takes effect without a relaunch — and
+  // the request's HOST names the line (`ow3-install://hd/…`), because two windows may be on
+  // different lines at once. `local` is what a page from before the split asked for: this app's
+  // own line, the one it booted on.
+  protocol.handle(INSTALL_SCHEME, (request) => {
+    let host = "";
+    try {
+      host = new URL(request.url).host;
+    } catch {
+      /* not a URL this scheme produced: fall through to the app's own line */
+    }
+    const which = host === "sd" || host === "hd" ? host : activeFlavor;
+    return serveInstall(currentInstall(which).path, request);
+  });
 
-  ipcMain.handle("ow3:install-get", () => currentInstall());
-  ipcMain.handle("ow3:install-pick", async () => {
+  ipcMain.handle("ow3:flavor-get", (event) => flavorOf(event.sender));
+  // The page picks its line before it asks for a folder or a byte. It is THIS WINDOW's line that
+  // is recorded: the launcher opens one window per line, and a game window must keep reading its
+  // own folder even while the other line's window is doing something else.
+  ipcMain.handle("ow3:flavor-set", (event, flavor) => {
+    const next = normalizeFlavor(flavor);
+    windowFlavors.set(event.sender.id, next);
+    // …and remembered, so a fresh launcher starts on the line last played (it shows both either way).
+    writeSettings({ flavor: next });
+    return currentInstall(next);
+  });
+  /**
+   * Open a game window on `flavor` and leave the launcher as it is. This is the whole of "both
+   * lines at once": each window mounts its own line (`?flavor=`), reads its own folder (the
+   * `ow3-install://` host), and runs its own game. False when the page is not being served.
+   */
+  ipcMain.handle("ow3:open-game", (_event, flavor) => {
+    if (!pageUrl) return false;
+    const target = normalizeFlavor(flavor);
+    const url = new URL(pageUrl);
+    url.searchParams.set("flavor", target);
+    url.searchParams.set("play", "1");
+    createWindow(url.toString(), { flavor: target, game: true });
+    return true;
+  });
+  ipcMain.handle("ow3:install-get", (event, flavor) => currentInstall(flavor ?? flavorOf(event.sender)));
+  ipcMain.handle("ow3:install-pick", async (event, flavor) => {
+    const target = normalizeFlavor(flavor ?? flavorOf(event.sender));
     const { canceled, filePaths } = await dialog.showOpenDialog({
-      title: "Select your Warcraft III folder",
+      title: target === "hd" ? "Select your Warcraft III: Reforged folder" : "Select your Warcraft III folder",
       properties: ["openDirectory"],
-      defaultPath: readSettings().installPath || undefined,
+      defaultPath: installPathFromSettings(readSettings(), target) || undefined,
     });
     const picked = canceled ? null : filePaths[0];
     // A folder that is not an install is refused HERE, where the disk is: the page would have to
     // mount it to find out, and "that is not a Warcraft III folder" is a better answer than a
     // mount failing three steps later.
     if (!picked || !looksLikeInstall(picked)) return null;
-    writeSettings({ installPath: picked });
+    writeSettings(installPathPatch(target, picked));
     return picked;
   });
-  ipcMain.handle("ow3:install-forget", () => { writeSettings({ installPath: null }); });
+  ipcMain.handle("ow3:install-forget", (event, flavor) => {
+    writeSettings(installPathPatch(flavor ?? flavorOf(event.sender), null));
+  });
   // "Download game files" (electron/download.mjs): an install, from the first of the page's
   // sources that works (the Drive zip, then the Internet Archive — src/assets/downloadInstall.ts).
   // Where it goes is asked here with the OS dialog — a 2 GB folder lands where the player says, not in app data — and
@@ -411,7 +548,8 @@ app.whenReady().then(async () => {
   // Resolves to the folder, or null if the player cancelled the dialog. The load gate's Cancel
   // (below) aborts the transfer; pressed during the dialog it takes effect before a byte moves.
   let downloadAbort = null;
-  ipcMain.handle("ow3:install-download", async (event, sources) => {
+  ipcMain.handle("ow3:install-download", async (event, sources, flavor) => {
+    const target = normalizeFlavor(flavor ?? flavorOf(event.sender));
     downloadAbort = new AbortController();
     try {
       const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -426,7 +564,7 @@ app.whenReady().then(async () => {
       if (!looksLikeInstall(folder)) {
         throw new Error(`The download finished, but ${folder} is not a supported Warcraft III install.`);
       }
-      writeSettings({ installPath: folder });
+      writeSettings(installPathPatch(target, folder));
       return folder;
     } finally {
       downloadAbort = null;
@@ -435,19 +573,20 @@ app.whenReady().then(async () => {
   ipcMain.on("ow3:install-download-cancel", () => { downloadAbort?.abort(); });
   // The hotkey editor's Save (issue #156): the page's bytes, into the CURRENT folder's
   // CustomKeys.txt. The root is read here, never taken from the page.
-  ipcMain.handle("ow3:customkeys-save", (_event, bytes) => writeCustomKeys(currentInstall().path, bytes));
+  ipcMain.handle("ow3:customkeys-save", (event, bytes) => writeCustomKeys(currentInstall(flavorOf(event.sender)).path, bytes));
   // …and a map a LAN game handed us, into Maps\Download\ (src/assets/downloadedMaps.ts).
-  ipcMain.handle("ow3:map-save", (_event, name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
+  ipcMain.handle("ow3:map-save", (event, name, bytes) => writeDownloadedMap(currentInstall(flavorOf(event.sender)).path, name, bytes));
   // …and whether a map the launcher offers is already in that folder, so the shelf can say so.
-  ipcMain.handle("ow3:map-exists", (_event, name) => downloadedMapExists(currentInstall().path, name));
+  ipcMain.handle("ow3:map-exists", (event, name) => downloadedMapExists(currentInstall(flavorOf(event.sender)).path, name));
   // …and the shelf's "installed" view: what that folder holds, and removing one of them.
-  ipcMain.handle("ow3:map-list", () => listDownloadedMaps(currentInstall().path));
-  ipcMain.handle("ow3:map-delete", (_event, name) => deleteDownloadedMap(currentInstall().path, name));
+  ipcMain.handle("ow3:map-list", (event) => listDownloadedMaps(currentInstall(flavorOf(event.sender)).path));
+  ipcMain.handle("ow3:map-delete", (event, name) => deleteDownloadedMap(currentInstall(flavorOf(event.sender)).path, name));
   // The map list's Download Maps dialog (src/ui/mapSites.ts): EpicWar READ for the page, under
   // the allow-list in electron/mapSites.mjs — and the sites it cannot read SHOWN in a web view
   // laid over the dialog, whose map downloads land in Maps\Download\ and on the page's list.
   ipcMain.handle("ow3:mapsite-fetch", (_event, url) => readMapSite(String(url)));
-  wireMapSiteViews(ipcMain, BrowserWindow, (name, bytes) => writeDownloadedMap(currentInstall().path, name, bytes));
+  wireMapSiteViews(ipcMain, BrowserWindow, (name, bytes, game) =>
+    writeDownloadedMap(currentInstall(game && !game.isDestroyed() ? flavorOf(game.webContents) : activeFlavor).path, name, bytes));
   // Options → Video → "Vertical Sync". The SAVED choice, not the running one: a player who turns it
   // off and reopens the panel before relaunching should see the box they left, not the old state.
   // The match log (see `matchLogs` above). The page names a MAP, never a path: the file is the
@@ -459,6 +598,17 @@ app.whenReady().then(async () => {
   // to a name in its one folder.
   ipcMain.handle("ow3:replay-save-last", (_event, bytes, keep) => replayFiles.saveLast(Buffer.from(bytes), keep ? String(keep) : undefined));
   ipcMain.handle("ow3:replay-keep", (_event, name) => replayFiles.keepLast(String(name ?? "")));
+  // Save games (see `saveFiles` above) — the same rule as replays: a FILE name, never a path.
+  ipcMain.handle("ow3:save-write", (event, name, bytes) => savesFor(event.sender).write(String(name ?? ""), Buffer.from(bytes)));
+  ipcMain.handle("ow3:save-list", (event) => listSaves(savesFor(event.sender)));
+  ipcMain.handle("ow3:save-read", (event, name) => savesFor(event.sender).read(String(name ?? "")) ?? legacySaveFiles.read(String(name ?? "")));
+  ipcMain.handle("ow3:save-exists", (event, name) => savesFor(event.sender).exists(String(name ?? "")) || legacySaveFiles.exists(String(name ?? "")));
+  ipcMain.handle("ow3:save-delete", (event, name) => {
+    // Both places: a file of this line's may still be in the pre-split folder.
+    const inLine = savesFor(event.sender).remove(String(name ?? ""));
+    const inLegacy = legacySaveFiles.remove(String(name ?? ""));
+    return inLine || inLegacy;
+  });
   ipcMain.handle("ow3:replay-list", () => replayFiles.list());
   ipcMain.handle("ow3:replay-read", (_event, name) => replayFiles.read(String(name ?? "")));
   ipcMain.handle("ow3:replay-delete", (_event, name) => replayFiles.remove(String(name ?? "")));
@@ -541,6 +691,8 @@ app.whenReady().then(async () => {
     console.log(`[Warcraft Open] serving on ${server.url} — LAN players join at http://<this machine's ip>:${server.port} (protocol ${server.protocol})`);
   }
   const install = currentInstall();
+  // A game window is this same page, one line, in play mode; the launcher keeps the bare address.
+  pageUrl = url;
   // Three different pieces of news, said as three: it is there, it is gone, or it is there and
   // is the wrong Warcraft III (src/vfs/version.ts). The screen draws the same distinction.
   console.log(install.valid
@@ -564,11 +716,13 @@ app.whenReady().then(async () => {
     },
   });
 
-  createWindow(url);
+  // The launcher: windowed, and it stays on the front page — every Launch press opens a GAME
+  // window of its own (`ow3:open-game`), so both lines can be up at once.
+  createWindow(pageUrl, { game: false });
 
   // macOS: the app outlives its windows.
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(pageUrl, { game: false });
   });
 });
 

@@ -1,6 +1,7 @@
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { layCustomKeys } from "./customKeys";
 import { decodeGameText } from "./text";
+import { flavor, hdArt } from "./flavor";
 import type { DataSource } from "../vfs/types";
 
 // Item data registry (issue #22). Merges WC3's ItemData.slk (numbers/flags),
@@ -60,6 +61,11 @@ export interface ItemDef {
   perishable: boolean; // destroyed when its charges hit 0
   powerup: boolean; // consumed instantly on pickup (tomes, runes, gold) — never stored
   droppable: boolean; // can be dropped / dropped by a creep
+  /** `drop` — "Dropped When Carrier Dies" (`idrp` in the object editor). A HERO keeps its
+   *  whole inventory through death and revival EXCEPT these: in the stock tables exactly five
+   *  items set it — the four capture-the-flag flags (`flag`/`nflg`/`oflg`/`uflg`) and `btst`.
+   *  A non-hero carrier scatters everything anyway (SimWorld.dropInventory). */
+  dropOnDeath: boolean;
   sellable: boolean; // a shop may sell it (JASS IsItemSellable) — distinct from pawnable
   pawnable: boolean; // sellable back to a shop
   pickRandom: boolean; // eligible to fill a "random item of level N" drop slot
@@ -188,6 +194,14 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
   const strs = new MappedData();
   const sb = vfs.rawBytes("Units\\ItemStrings.txt");
   if (sb) strs.load(decodeGameText(sb));
+  // Reforged moved the ground-model art out of `ItemData.slk` (this install's table has no
+  // `file`/`scale` column at all) into `itemSkin.txt`, the same move `unitSkin.txt` made for
+  // units. Every row repeats `skinnableID` = its own rawcode, so look rows up by item id.
+  const skin = new MappedData();
+  const kb = vfs.rawBytes("Units\\itemSkin.txt");
+  if (kb) skin.load(decodeGameText(kb));
+  const hd = flavor() === "hd";
+  const art = hdArt();
   // The player's own file over both (data/customKeys.ts) — an item's row is a SHOP button, so
   // this is what moves "Purchase Potion of Healing" onto another key and another slot.
   layCustomKeys(strs, func);
@@ -200,6 +214,17 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
     if (!classType) continue;
     const f = func.getRow(id) as Row | undefined;
     const s = strs.getRow(id) as Row | undefined;
+    const skinRow = skin.getRow(id) as Row | undefined;
+    // `ItemData.slk`'s own art columns are the SD (1.30) source and win when present; Reforged's
+    // `itemSkin.txt` supplies them otherwise. Same precedence and same per-art key chain as
+    // `units.ts`'s `unitSkin.txt` read.
+    const rawFile = str(r, "file") || itemSkinFile(skinRow, hd, art);
+    const rawScale = num(r, "scale", 0) || itemSkinScale(skinRow, hd, art);
+    // Only the DE art module ships the category models `itemSkin.txt` names (ItemRing, ItemWeapon,
+    // …); the HD/classic mounts carry just the chest and the one-off props. A path the mount does
+    // not have renders NOTHING, so keep the old chest fallback rather than lose the item.
+    const artModel = itemModel(rawFile);
+    const model = rawFile && vfs.exists(artModel) ? artModel : itemModel("");
     const [bx, by] = buttonPos(f ? str(f, "Buttonpos") : "");
     const abilities = (str(r, "abilList") || "")
       .split(",")
@@ -215,8 +240,8 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       hotkey: s ? str(s, "Hotkey") : "",
       buttonX: bx,
       buttonY: by,
-      model: itemModel(str(r, "file")),
-      scale: num(r, "scale", 1),
+      model,
+      scale: rawScale > 0 ? rawScale : 1,
       gold: num(r, "goldcost", 0),
       lumber: num(r, "lumbercost", 0),
       level: num(r, "level", 0),
@@ -229,6 +254,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       perishable: num(r, "perishable", 0) === 1,
       powerup: num(r, "powerup", 0) === 1,
       droppable: num(r, "droppable", 0) === 1,
+      dropOnDeath: num(r, "drop", 0) === 1,
       sellable: num(r, "sellable", 0) === 1,
       pawnable: num(r, "pawnable", 0) === 1,
       pickRandom: num(r, "pickRandom", 0) === 1,
@@ -255,7 +281,7 @@ export function blankItemDef(id: string): ItemDef {
     id, name: id, description: "", summary: "", icon: "", tip: "", hotkey: "", buttonX: 0, buttonY: 0,
     model: itemModel(""), scale: 1, gold: 0, lumber: 0, level: 0, classType: "Miscellaneous", abilities: [],
     charges: 0, cooldownGroup: "", ignoreCooldown: false, usable: false, perishable: false, powerup: false,
-    droppable: true, sellable: false, pawnable: false, pickRandom: false, maxHp: 75, stockMax: 0,
+    droppable: true, dropOnDeath: false, sellable: false, pawnable: false, pickRandom: false, maxHp: 75, stockMax: 0,
     stockRegen: 0, stockStart: 0,
   };
 }
@@ -266,6 +292,34 @@ function itemModel(v: string): string {
   const pick = (v || "").split(",")[0]?.trim();
   const p = (pick || "Objects\\InventoryItems\\TreasureChest\\treasurechest.mdl").replace(/\//g, "\\").replace(/\.mdl$/i, "");
   return /\.mdx$/i.test(p) ? p : `${p}.mdx`;
+}
+
+/** `itemSkin.txt`'s ground model. 3.0 writes a plain `file`; ask the art set's key first anyway,
+ *  mirroring `units.ts`, because that is how Reforged names its per-variant art. On HD the SD
+ *  path is deliberately NOT a fallback — classic art on a Reforged mount is the one case where
+ *  the classic file is not what was asked. */
+function itemSkinFile(row: Row | undefined, hd: boolean, art: string): string {
+  if (!row) return "";
+  if (!hd) return str(row, "file");
+  if (art === "sd") return str(row, "file:sd") || str(row, "file");
+  return str(row, `file:${art}`) || str(row, "file:hd") || str(row, "file");
+}
+
+/** `itemSkin.txt`'s ground scale. This install writes a plain `scale`; the `modelScale:*` chain
+ *  is what a per-art Reforged table would use. **Never 0**: a zero scale draws nothing, so an
+ *  absent key must become 1. */
+function itemSkinScale(row: Row | undefined, hd: boolean, art: string): number {
+  if (!row) return 1;
+  const keys = hd
+    ? art === "sd"
+      ? ["modelScale:sd", "modelScale", "scale"]
+      : [`modelScale:${art}`, "modelScale", "scale"]
+    : ["scale"];
+  for (const key of keys) {
+    const n = num(row, key, 0);
+    if (n > 0) return n;
+  }
+  return 1;
 }
 
 // Strip only the surrounding quotes the SLK reader leaves on. The WC3 markup

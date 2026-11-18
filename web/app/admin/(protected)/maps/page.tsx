@@ -3,6 +3,7 @@ import { deleteMapAction } from "@/lib/actions/maps";
 import { listAllMaps } from "@/lib/db/queries/maps";
 import { listLocales } from "@/lib/db/queries/locales";
 import { ADMIN_CATEGORY_LABELS, MAP_CATEGORIES, isMapCategory } from "@/lib/mapCategories";
+import { ADMIN_FLAVOR_LABELS, parseFlavors } from "@/lib/mapFlavors";
 import { AdminNotice } from "@/components/admin/AdminNotice";
 import { formatDate } from "@/lib/format";
 
@@ -68,6 +69,7 @@ export default async function AdminMapsPage({ searchParams }: { searchParams: Se
               <th>名称</th>
               <th>Slug</th>
               <th>分类</th>
+              <th>支持版本</th>
               <th>状态</th>
               <th>版本</th>
               <th>推荐人数</th>
@@ -82,6 +84,7 @@ export default async function AdminMapsPage({ searchParams }: { searchParams: Se
                 <th scope="row">{map.name || "（未翻译）"}</th>
                 <td>{map.slug}</td>
                 <td>{ADMIN_CATEGORY_LABELS[isMapCategory(map.category) ? map.category : "other"]}</td>
+                <td>{parseFlavors(map.flavors).map((flavor) => ADMIN_FLAVOR_LABELS[flavor]).join(" / ")}</td>
                 <td>{map.status === "published" ? "已发布" : "草稿"}</td>
                 <td>{map.version || "—"}</td>
                 <td>{map.players || "—"}</td>
@@ -109,7 +112,7 @@ export default async function AdminMapsPage({ searchParams }: { searchParams: Se
             ))}
             {maps.length === 0 ? (
               <tr>
-                <td colSpan={9} className="cell-empty">
+                <td colSpan={10} className="cell-empty">
                   {filtered ? "没有找到符合条件的地图。" : "还没有地图。点击「新增地图」开始。"}
                 </td>
               </tr>

@@ -1,5 +1,6 @@
 import type { DataSource } from "../vfs/types";
 import { edition } from "../data/edition";
+import { flavor } from "../data/flavor";
 import { gameSpeedLabel, toGameSpeed } from "../data/gameSpeed";
 import type { MapInfo } from "../world/mapInfo";
 import type { MapPreview } from "../world/mapPreview";
@@ -10,7 +11,7 @@ import type { ListItem } from "./fdf/widgets";
 import { reachabilityLine, type LanLobby, type LobbyState } from "../net/lobby";
 import { LABEL_GOLD } from "./glueColors";
 import type { StartMatch } from "../net/protocol";
-import { advancedOf, visibilityFog } from "../net/advancedOptions";
+import { advancedOf, mapFlagsOf, visibilityFog } from "../net/advancedOptions";
 import { LAN_JOIN_OVERRIDE, OW3_STRINGS } from "../overrides";
 import { showJoinAddressDialog, type JoinAddressDialog } from "./joinAddressDialog";
 import { OBSERVER_PLAYER, type MeleeConfig, type SlotConfig } from "./lobby";
@@ -261,9 +262,11 @@ export async function mountLanScreen(
   /** Paint the current lobby state onto the screen. */
   function render(s: FdfScreen, st: LobbyState): void {
     const list = s.list("MapListBox");
-    // Only games on THIS client's edition: a Reign of Chaos match and an expansion one read
-    // different object tables and cannot be joined across (src/net/protocol.ts RoomInfo.edition).
-    st = { ...st, rooms: st.rooms.filter((r) => (r.edition ?? "tft") === edition()) };
+    // Only games on THIS client's edition AND data line: an RoC/TFT match reads different object
+    // tables, and an SD/HD match is a different data set entirely (src/net/protocol.ts
+    // RoomInfo.edition / flavor). A room from an older relay carries neither field and reads as
+    // TFT + SD, which is what it was.
+    st = { ...st, rooms: st.rooms.filter((r) => (r.edition ?? "tft") === edition() && (r.flavor ?? "sd") === flavor()) };
     // A row is the game's name and its seats, "(1/2)", in the same face as the name and in the
     // LABEL gold the screen's own captions wear (StandardLabelTextTemplate's 0.99 0.827 0.0705)
     // — and, for a game that takes observers, the game's own GAMELIST_OBSERVERS " (observers)".
@@ -370,11 +373,14 @@ export function toConfig(msg: StartMatch, me: number | undefined, mapExplored: b
   // is on the bench instead, and that machine plays nobody (MeleeConfig.observer).
   const seat = slots.find((s) => s.peer === me)?.id;
   const watching = seat === undefined ? observers.find((o) => o.peer === me) : undefined;
+  const fog = visibilityFog(advanced.visibility, mapExplored);
   return {
     slots,
     // Advanced Options → Visibility. An older host's `start` carries none and reads as the
     // pane's own default, the map's own visibility.
-    fog: visibilityFog(advanced.visibility, mapExplored),
+    fog,
+    // …and the whole pane as the flags the map's script asks about (Random Hero, issue #296).
+    mapFlags: mapFlagsOf(advanced, fog),
     seed: msg.seed,
     localPlayer: watching ? watching.id : seat,
     ...(watching ? { observer: true } : {}),

@@ -74,6 +74,50 @@ const text = async (url) => (typeof url === "string" && url.startsWith("blob:") 
   check("nothing of the map is left", solve("war3mapImported\\Santa.mdx"), "war3mapImported\\Santa.mdx");
   check("every URL minted is on the revocation list", new Set(created).size, created.length);
 
+  // P6: the DE/HD Sheep models still name SD-era texture paths. The store files the corpse maps
+  // under Textures\, and the flying-sheep maps under FlyingSheep\ (DE calls them Sheep_*).
+  console.log("\nHD critter textures the store files elsewhere");
+  const corpse = "Units\\Critters\\Sheep\\Sheep_Corpse_Diffuse.tif";
+  const flying = "Units\\Critters\\Sheep\\Unit_FlyingSheep_main_Diffuse.tif";
+  const installHd = source("hd", {
+    "Textures\\Sheep_Corpse_Diffuse.dds": "corpse",
+    "Units\\Critters\\FlyingSheep\\Unit_FlyingSheep_main_Diffuse.dds": "flying hd",
+    "Units\\Critters\\FlyingSheep\\Sheep_Diffuse.dds": "flying de",
+  });
+  const solveHd = createAssetSolver(installHd, { archive: null, epoch: 0 }, new Map(), [], true);
+  check("a sheep corpse map resolves from Textures\\", await text(solveHd(corpse)), "corpse");
+  check("a flying-sheep map prefers the HD name", await text(solveHd(flying)), "flying hd");
+  const installDe = source("de", {
+    "Textures\\Sheep_Corpse_Diffuse.dds": "corpse",
+    "Units\\Critters\\FlyingSheep\\Sheep_Diffuse.dds": "flying de",
+  });
+  const solveDe = createAssetSolver(installDe, { archive: null, epoch: 0 }, new Map(), [], true);
+  check("…and falls back to DE's Sheep_*.dds", await text(solveDe(flying)), "flying de");
+
+  // P6: Reforged building models kept the artist's absolute disk path. Everything after the
+  // `/de/` art root is the store's path (`Buildings\Undead\Crypt\CryptBirth.mdx` and friends).
+  console.log("\nHD models with the artist's absolute path");
+  const installAbs = source("abs", {
+    "Buildings\\Undead\\Crypt\\CryptBirth.mdx": "crypt birth",
+    "Buildings\\Undead\\UBirth\\UBirth.mdx": "ubirth",
+    "Buildings\\Undead\\AltarOfDarkness\\AltarOfDarknessDeath.mdx": "altar death",
+  });
+  const solveAbs = createAssetSolver(installAbs, { archive: null, epoch: 0 }, new Map(), [], true);
+  check("an absolute /art/de/ model resolves from its art root",
+    await text(solveAbs("c:/users/dok/perforce/art/de/buildings/undead/crypt/cryptbirth.mdx")), "crypt birth");
+  check("an absolute double-slash /de// model too",
+    await text(solveAbs("h:/bz/de//buildings/undead/ubirth/ubirth.mdx")), "ubirth");
+  check("…and so does an altar death model",
+    await text(solveAbs("c:/users/dok/perforce/art/de/Buildings/Undead/AltarOfDarkness/AltarOfDarknessDeath.mdx")), "altar death");
+
+  // 3.0's ability data still names effect models with the SD-era `.mdl`, while the store ships
+  // `.mdx` only — the town portal's caster/target, Immolation's target, every `Targetart`.
+  console.log("\nHD effect models the data still names as .mdl");
+  const installFx = source("fx", { "Abilities\\Spells\\Items\\AIhe\\AIheTarget.mdx": "heal target" });
+  const solveFx = createAssetSolver(installFx, { archive: null, epoch: 0 }, new Map(), [], true);
+  check("a .mdl effect path resolves to the store's .mdx",
+    await text(solveFx("Abilities\\Spells\\Items\\AIhe\\AIheTarget.mdl")), "heal target");
+
   if (failed) {
     console.log(`\n${failed} check(s) failed`);
     process.exit(1);

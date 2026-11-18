@@ -46,6 +46,7 @@ export const zh = {
     download: "下载",
     playInBrowser: "浏览器直接玩",
     playInBrowserHint: "无需安装：打开网页，选择本机的魔兽争霸 III 文件夹即可开战。推荐使用 Chrome / Edge 桌面版。",
+    playOnline: "在线玩",
     unavailable: "暂不可用",
     resourcesTitle: "资料下载",
     resourceName: "名称",
@@ -79,6 +80,13 @@ export const zh = {
     search: "搜索",
     category: "分类",
     allCategories: "全部分类",
+    flavor: "支持版本",
+    allFlavors: "全部版本",
+    flavors: {
+      sd: "经典版",
+      hd: "重制版",
+      both: "双版本通用",
+    },
     categories: {
       moba: "对抗（MOBA）",
       "hero-defense": "英雄防守",
@@ -104,6 +112,25 @@ export const zh = {
     discord: "Discord",
     note: "备注",
     empty: "暂未填写联系方式。",
+  },
+  gestureHelp: {
+    label: "如何关闭浏览器手势",
+    title: "关闭浏览器手势",
+    intro:
+      "浏览器会把触控板的双指侧滑、鼠标侧键当成「后退 / 前进」。在游戏里拖框选或横向拖动时被误触，页面会直接后退，对局就断了。建议开玩之前先关掉它。",
+    chrome: "Chrome / Edge（桌面版）",
+    chromeSteps: [
+      "地址栏输入 chrome://flags/#overscroll-history-navigation（Edge 用 edge://flags/#overscroll-history-navigation）。",
+      "把 Overscroll history navigation 设为 Disabled。",
+      "点右下角「重新启动」重启浏览器，再回到本站开玩。",
+    ],
+    edgeNote: "Edge 另有「鼠标手势」开关：设置 → 外观 → 鼠标手势，一并关掉。",
+    firefox: "Firefox",
+    firefoxSteps: [
+      "地址栏输入 about:config，搜索 browser.gesture.swipe。",
+      "把 browser.gesture.swipe.left 和 browser.gesture.swipe.right 的值清空。",
+    ],
+    close: "知道了",
   },
   footer: {
     disclaimer:

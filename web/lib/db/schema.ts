@@ -1,7 +1,7 @@
 // SQLite schema for the site. Kept in TypeScript so both the app and the CLI scripts
 // (run with Node's native TypeScript support) share one definition.
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS maps (
   version TEXT,
   author TEXT,
   players TEXT,
+  -- 支持的数据线：sd（经典版）、hd（重制版）或两者，逗号分隔（lib/mapFlavors.ts）。
+  flavors TEXT NOT NULL DEFAULT 'sd,hd',
   category TEXT NOT NULL DEFAULT 'other',
   sort INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
@@ -92,6 +94,8 @@ export interface MapRow {
   version: string | null;
   author: string | null;
   players: string | null;
+  /** `sd`、`hd` 或 `sd,hd` — 见 lib/mapFlavors.ts。 */
+  flavors: string;
   category: string;
   sort: number;
   created_at: string;

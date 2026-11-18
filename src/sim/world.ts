@@ -49,7 +49,7 @@ import {
 import { perfNow, simProfile } from "./profile";
 import { flyHeight, type MissileFlight } from "./missile";
 import { HERO_KILL_VALUE, MatchStats } from "./matchStats";
-import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, FIGHTER_BUFFS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
+import { SPELL_HANDLERS, ITEM_INVULN_GROUP, AURA_BUFFS, SELF_INVIS_GROUP, BLADESTORM_GROUP, FIELD_PIERCES_SPELL_IMMUNITY, POLARITY_SPELLS, HEAL_SPELLS, SLOWED_BUFF, FROST_ARMOR_GROUP, dur as debuffDuration, FIGHTER_BUFFS, DISPEL_CODES, REPLENISH_BAR, replenishRefusal, survivesDispel, clockedBuff, worthDispelling, invisTransition, waveSchedule, WAVE_FIELDS, fx, buffIdOf, spellShieldBuff, drainTag, burningOilField, spellStealPlan, DRAIN_GROUP, CANNIBALIZE_GROUP, POSSESSION_GROUP, type SpellApi, type SimBuffInit, type SpellFieldInit, type CastContext, type WaveOptions, type RaiseOptions } from "./spells";
 /** The buff group a Tornado's toss is applied under — both halves, so the invulnerability's wipe
  *  spares the stun it came with (clearStatusForInvulnerable). See tickTornado. */
 const TORNADO_SPIN_GROUP = "tornadoSpin";
@@ -119,9 +119,11 @@ export interface SimWeapon {
   baseSpillDist: number; // pre-upgrade (`rasd`/`rasr` add to these, as Long Rifles adds to range)
   baseSpillRadius: number;
   damageLoss: number;
-  /** AREA splash — the three concentric rings an ARTILLERY shot lands in (`Farea`/`Harea`/
-   *  `Qarea`; see WeaponSlotDef). Nonzero only on the siege weapons: Cannon Tower, Demolisher,
-   *  Mortar Team, Glaive Thrower. See spawnProjectile / applyAreaSplash. */
+  /** AREA splash — the three concentric rings a splashing shot lands in (`Farea`/`Harea`/
+   *  `Qarea`; see WeaponSlotDef). Nonzero on the ARTILLERY slots (Cannon Tower, Demolisher,
+   *  Mortar Team, Glaive Thrower), whose shell flies at the ground (applyAreaSplash), and on
+   *  the `msplash` ones (Chimaera, Frost Wyrm, Phoenix, the dragons), whose missile still
+   *  homes and bursts around whoever it struck (applyMissileSplash). See spawnProjectile. */
   areaFull: number;
   areaHalf: number;
   areaQuarter: number;
@@ -131,6 +133,11 @@ export interface SimWeapon {
   areaHalfFactor: number;
   areaQuarterFactor: number;
   splashTargets: string[]; // `splashTargs` — what the area may catch
+  /** `targCount` — how many bodies one attack of a MISSILE (BOUNCE) slot strikes, the aimed one
+   *  included (WeaponSlotDef.targetCount). `base` is the row's; Upgrade Moon Glaive's `ratc`
+   *  adds to it in recomputeStats, as Long Rifles adds to range. See SimProjectile.bounce. */
+  targetCount: number;
+  baseTargetCount: number;
   /** `weapTp` — artillery shots fly at the GROUND, everything else homes (see spawnProjectile). */
   weaponType: WeaponType;
   showUI: boolean; // `showUI` — does this attack get an Attack command on the card
@@ -161,6 +168,15 @@ export interface SimWeapon {
   launchY: number;
   launchZ: number;
   impactZ: number;
+}
+
+/** The three rings a splashing shot bursts in, and the fraction of the damage each of the
+ *  outer two gets. They travel with the shot because they are the SLOT's (`Farea`/`Harea`/
+ *  `Qarea`, `Hfact`/`Qfact`, `splashTargs`) and not a rule — see WeaponSlotDef.areaHalfFactor. */
+export interface SplashRings {
+  full: number; half: number; quarter: number;
+  halfFactor: number; quarterFactor: number;
+  targets: string[];
 }
 
 /** An in-flight projectile: homes on its target's current position, dealing its
@@ -218,15 +234,25 @@ export interface SimProjectile extends MissileFlight {
    * out of the way, while a Guard Tower's homing arrow cannot. On arrival it damages
    * everything in its rings rather than the one unit it was aimed at (see applyAreaSplash).
    */
-  area?: {
-    aimX: number; aimY: number;
-    /** The three rings, and the fraction of the damage each of the outer two gets. The
-     *  fractions travel with the shot because they are the SLOT's (`Hfact`/`Qfact`) and not
-     *  a rule — see WeaponSlotDef.areaHalfFactor. */
-    full: number; half: number; quarter: number;
-    halfFactor: number; quarterFactor: number;
-    targets: string[];
-  };
+  area?: SplashRings & { aimX: number; aimY: number };
+  /**
+   * A MISSILE (SPLASH) shot (`weapTp` = `msplash` — the Chimaera, the Frost Wyrm, the Phoenix,
+   * Metamorphosis, every dragon): unlike a shell it is aimed at a UNIT and homes on it, so it
+   * cannot be walked out from under, but where it lands it bursts in the slot's rings around
+   * the body it struck (applyMissileSplash). Absent on an `msplash` row that states no rings
+   * (26 of the 71 — a Nether Dragon's, the Obsidian Statue's), which is then a plain missile.
+   */
+  splash?: SplashRings;
+  /**
+   * A MISSILE (BOUNCE) shot (`weapTp` = `mbounce` — the Huntress's glaive, Naisha's): when it
+   * lands it leaves again for the nearest body it may strike within `radius` (`Farea`, 400) of
+   * the one it just hit, carrying `1 - loss` (`damageLoss`, 0.5) of what it carried in, until
+   * `left` hops are spent. `targets` is the slot's `splashTargs` — KIND and ALLEGIANCE, as for
+   * a burst — and `hit` is everybody this attack has struck, since a glaive never comes back
+   * to a body. `block` is 2.0.3's Bouncing Missile Filter (`Amgi`): kinds a glaive bounces
+   * neither to nor from. See bounceOn.
+   */
+  bounce?: { left: number; radius: number; loss: number; targets: string[]; hit: number[]; block?: string[] };
   /**
    * A WAVE: the travelling front of a line spell (Shock Wave, Carrion Swarm, Breath of
    * Fire). Aimed at a direction rather than a unit, and unlike every other projectile it
@@ -324,7 +350,7 @@ export interface SimLightning {
  * anyone draws it) and the area-of-interest test the host filters recipients by.
  */
 export interface CombatText {
-  kind: "crit" | "deny" | "gold" | "lumber" | "bounty" | "xp";
+  kind: "crit" | "deny" | "miss" | "gold" | "lumber" | "bounty" | "xp";
   /** The unit the text floats over, and follows. 0 for a deny — the victim is dead. */
   unitId: number;
   x: number;
@@ -402,6 +428,9 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
       areaHalfFactor: s.areaHalfFactor,
       areaQuarterFactor: s.areaQuarterFactor,
       splashTargets: s.splashTargets,
+      // `?? 1`: a slot built outside the SLK loader (a fixture) states no count — one target.
+      targetCount: s.targetCount ?? 1,
+      baseTargetCount: s.targetCount ?? 1,
       weaponType: s.weaponType,
       showUI: s.showUI,
       // `acquire`, and the launch/impact offsets, are UNIT columns — not per-weapon ones.
@@ -568,6 +597,12 @@ export interface SimBuff {
    *  when the holder leaves, so it is not a timed buff anybody can end — see spells.ts
    *  `clockedBuff`, which every "is there anything here to dispel" question asks. */
   aura?: boolean;
+  /** The ability row (its id, and the rank it was cast at) a PROC of this buff reads when it
+   *  fires, long after the cast: Frost Armor's shield slows whoever strikes it for that row's
+   *  own `Dur`/`HeroDur` and flashes its buff's `Specialart` (applyFrostArmorChill). An id and
+   *  not the numbers, so a map's edited row — and a patched one — is read like any other. */
+  procAbility?: string;
+  procRank?: number;
 }
 
 /** The ORB EFFECT one blow carries, once the priority ladder has picked it (see
@@ -1534,7 +1569,7 @@ export interface TrainEvent {
  *  the upgrade's rawcode (GetResearched). */
 export interface ResearchEvent {
   building: EventUnitInfo;
-  upgradeId: string;
+  techId: string;
   phase: "start" | "cancel" | "finish";
 }
 
@@ -2076,6 +2111,11 @@ export interface SimUnit {
    *  drawn changes (RtsController.retype's `skin`). Set by hexUnit, cleared by recomputeStats
    *  on the tick the last `hex` buff goes, however it went (the clock, a dispel). */
   hexForm: string;
+  /** The Reforged SKIN this unit is DRAWN as (0 = its own body) — `BlzCreateUnitWithSkin` /
+   *  `BlzSetUnitSkin`. Render-only: the sim stores it so the renderer can pick a model, but it is
+   *  not authoritative state, is not in the replay hash, and is not replicated (both machines
+   *  run the same script and arrive at the same value). See `MapViewerScene.remodelUnit`. */
+  skinId: number;
   ethereal: boolean; // derived from buffs (Banish): can't attack, immune to physical damage
   /** Pulled out of the air and stuck to the ground — derived from a NET on a flyer (a `web` or
    *  an `ensnare` root buff) the way `ethereal` is derived from Banish's. While it is set the
@@ -2238,6 +2278,18 @@ export interface SimUnit {
    *  move (`recomputeStats` zeroes the speed). Without it a walking Ancient slid across the
    *  ground mid-morph, and a planting one was already a building before it had sat down. */
   morphT: number;
+  /**
+   * A walk ordered WHILE the unit was changing form, kept until the change is over.
+   *
+   * A form toggle that is underway cannot be re-tasked (`castLocked`), but an order to go
+   * somewhere is not a re-tasking of it — it is what the unit is to do NEXT, and the game
+   * takes it. The campaign depends on that: Prologue01 orders the Prophet to "ravenform" and,
+   * half a second into a 1.65-second change, to "move" — he finishes becoming a crow and
+   * flies off. Refused at the lock, the order was simply lost and the crow sat where the man
+   * had stood until the scene faded out on it. The newest one wins; anything else the unit is
+   * told in the meantime (a stop, a cast it can somehow take) forgets it.
+   */
+  afterMorph: { x: number; y: number; attack: boolean } | null;
   /**
    * A change of ALTITUDE still being flown: a form toggle that moved the unit between the ground
    * and the air (an Obsidian Statue becoming a Destroyer, a Druid of the Talon taking Storm Crow
@@ -2590,6 +2642,7 @@ export interface SimUnit {
 
   strayT: number; // seconds chasing past GUARD_DISTANCE without being attacked (→ return)
   struckAt: number; // `elapsed` when a creep was last struck or hit by a harmful spell (provoke) — the sleep calm (campQuiet)
+  wokenAt: number; // `elapsed` when a script last woke it (UnitWakeUp, `wakeUnit`) — its OWN sleep calm (campQuiet)
   returnBestDist: number; // closest-to-home distance reached this return (stuck detection)
   returnStuckT: number; // seconds making no homeward progress while returning (→ give up, fight)
   // --- inventory (heroes) ---------------------------------------------------
@@ -3013,11 +3066,25 @@ interface UpgradeBonuses {
   dice: number; armor: number; hp: number; hpPct: number; mana: number; manaRegen: number;
   range: number; sight: number; speed: number; attackSpeed: number; damage: number;
   lumber: number; spillDist: number; spillRadius: number; weaponMask: number;
+  /** `ratc` — bodies added to a bouncing slot's `targCount` (Upgrade Moon Glaive). */
+  targetCount: number;
   attackLevel: number; armorLevel: number;
+  /** `rhpr` — hit points a second, on top of the type's own `regenHP` (Troll Regeneration). */
+  hpRegen: number;
+  /** `rart` — the armour CLASS the research swaps the type's for, or null (Reinforced Defenses). */
+  armorType: ArmorType | null;
+  /** `rspi` / `rspp` — what a melee blow on this building costs the attacker: a flat amount and
+   *  a share of the blow (Spiked Barricades; the share is 1.31's). */
+  spikes: number; spikesPct: number;
+  /** `rrai` — seconds added to the skeletons this unit's Raise Dead raises (Skeletal Mastery). */
+  raiseLife: number;
   /** `rlev` — ability id → the LEVEL a research sets it to (see sumUpgradeBonuses). */
   abilityLevels: [string, number][];
   /** `raud` — ability id → what a research ADDS to that aura's `DataA` (see applyAuras). */
   auraData: [string, number][];
+  /** `rauv` — the research gives this unit night sight equal to its day sight (Glyph of
+   *  Ultravision's `Rguv`, the only stock row that carries it). */
+  ultravision: boolean;
 }
 /** The grid's cell, in world units. Ours, and free to be anything: the reach a body is offered is
  *  computed from the radii, so the size only decides how many cells a query walks and how many
@@ -3051,7 +3118,9 @@ const RING_PUSH = 256;
 // AbilityMetaData.slk + UI\WorldEditStrings.txt: DataA "Max Gold" 12500, DataB "Mining
 // Duration" 1, DataC "Mining Capacity" 1. Capacity 1 is the `SimMine.busy` latch: a classic
 // gold mine holds exactly ONE worker at a time and the rest queue at the rim.
-const MINE_TIME = 1.0; // seconds a worker spends inside the mine (Agld DataB)
+// The duration is READ off that row (SimWorld.mineTime) — a map may edit `Agld` — and this is
+// only the answer for a bare sim with no ability registry, which is the shipped value.
+const MINE_TIME = 1.0; // seconds a worker spends inside the mine (Agld DataB) — fallback only
 /**
  * How near a gold mine a TOWN HALL may be founded — centre to centre, Euclidean — and the one
  * placement rule in the game that is about DISTANCE rather than about the ground. A hall
@@ -3183,7 +3252,6 @@ const REGEN_PER_INT = (): number => gameNum("IntRegenBonus"); // mana/sec per In
 const IAS_MAX = 4.0; // +400% — cannot swing faster than 5x its base attack time
 const IAS_MIN = -0.8; // -80% — cannot be slowed below 1/5 of its base attack rate
 const DAMAGE_POINT_FLOOR = 0.02; // a swing always lands 0.02s before it may start the next
-const UNIT_MANA_REGEN = 0.67; // flat mana/sec for non-hero casters (approx WC3 base)
 /** How long a NET (Web, or Ensnare on a flyer) takes to bring its flyer down to the ground, and
  *  to drag it clear of trees on the way (SimWorld.netAltitude). OURS: nothing in the data times
  *  the fall — the buff simply holds the unit on the ground — so this is only long enough to SEE
@@ -3220,6 +3288,9 @@ const FREEZE_GROUP = "freezingbreath";
  *  OURS — the row carries no columns at all (see tickWander). */
 const WANDER_RADIUS = 400;
 const WANDER_EVERY = 8;
+/** How far past that radius a critter must be found before it is taken to have been MOVED
+ *  (and its post moved with it — tickWander). Ours: room for a stroll that ended a step wide. */
+const WANDER_SLACK = 64;
 const FACING_CAST_EPS = 0.4; // must roughly face a unit target to cast
 // Channelled abilities (base code): the caster stands locked for the channel and a
 // new order stops it AND the remaining ticks (unlike a backswing, which is free to
@@ -3266,15 +3337,17 @@ const PRECAST_WARNING = new Set(["AHfs"]);
  * wind-up, on the caster — rather than at the cast point with the effect. Not a warning like
  * PRECAST_WARNING (which paints the target's ground and charges the cast up front): this is
  * the caster's own flourish, which in WC3 begins with the gesture and not with what the
- * gesture throws. The Warden is both cases:
+ * gesture throws:
  *
  *   [AEbl] Specialart = …\Blink\BlinkCaster.mdl   the smoke she goes out in
- *   [AEfk] Effectart  = …\FanOfKnives\FanOfKnivesCaster.mdl   the burst she spins up
  *
- * Her Cast Point is 0.5s (UnitWeapons.slk Ewar castpt), so held to the effect both read as
- * half a second LATE — the blades are already out before the burst that threw them.
+ * Fan of Knives' burst (`[AEfk] Effectart = …\FanOfKnives\FanOfKnivesCaster.mdl`) USED to be
+ * here too and was taken back out: a wind-up can be INTERRUPTED (a stun, an order), and art
+ * dropped at the button press then played for a cast that never happened — no damage, no
+ * mana, no cooldown, just the knives. In the real game the burst comes with the blades, so it
+ * is emitted by the spell's own handler (spells.ts AEfk), which only a completed cast reaches.
  *
- * `follow` = ride the caster (the burst spins with her); false = stand where it was struck,
+ * `follow` = ride the caster (a flourish that moves with it); false = stand where it was struck,
  * which is what Blink's plume needs — it is "art to LEAVE BEHIND at old coordinate" and the
  * caster is about to be somewhere else.
  *
@@ -3318,7 +3391,6 @@ const ITEM_CORPSE_SPELL: Record<string, string> = {
 };
 const CAST_START_ART: Record<string, (d: AbilityDef) => { art: string; follow: boolean; sound: boolean }> = {
   AEbl: (d) => ({ art: d.specialArt, follow: false, sound: true }),
-  AEfk: (d) => ({ art: d.effectArt, follow: true, sound: false }),
 };
 /**
  * Abilities whose `Cast` column is NOT a casting time.
@@ -3664,6 +3736,9 @@ const FOGGED_ATTACK_REVEAL_TIME = 1;
 // same way — hiveworkshop "Vision guide" 290769.) How LONG it lasts is the type's own death
 // time (UnitData `death`, UnitDef.deathTime) — the body sees for as long as it takes to fall.
 const DYING_REVEAL_RADIUS = (): number => dataNum("DyingRevealRadius");
+// `Units\MiscData.txt` [Misc] SpellCastRangeBuffer = 300 — how far past its cast range a unit
+// target may get during the wind-up before the cast is dropped (tickCast, phase 2).
+const SPELL_CAST_RANGE_BUFFER = (): number => dataNum("SpellCastRangeBuffer");
 
 /**
  * The sight a body keeps while it falls — a dying unit's own eyes, outliving it.
@@ -3876,6 +3951,19 @@ function autocastOutOfReach(u: SimUnit, t: SimUnit, range: number): boolean {
   }
   return Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius > range;
 }
+
+/** The instant RESTORE item abilities, by base code: which Data column holds the hit points
+ *  and which the mana (-1 = this row has no such half). `AIhe`/`AIha` put life in DataA and
+ *  `AIma`/`AImr` mana in DataA too, while `AIra` carries both (DataA life, DataB mana) —
+ *  Units\ItemAbilityData. Read by `useItem` and by `itemRestoreError`, so the press and its
+ *  refusal are one table. */
+const ITEM_RESTORE: Record<string, readonly [hpIdx: number, manaIdx: number]> = {
+  AIhe: [0, -1],
+  AIma: [-1, 0],
+  AIha: [0, -1],
+  AImr: [-1, 0],
+  AIra: [0, 1],
+};
 
 export class SimWorld {
   readonly units = new Map<number, SimUnit>();
@@ -4169,7 +4257,16 @@ export class SimWorld {
   // Buildings that changed type this tick (Town Hall → Keep): the renderer swaps the model.
   private morphs: Array<{ unitId: number; from: string; to: string }> = [];
   private nextNodeId = 1;
-  private rng: () => number;
+  /** The match's stream, as plain STATE rather than a closure: a saved game (issue #159,
+   *  docs/save-games.md) writes the world down field by field, and a position hidden inside a
+   *  closure is a position no save can carry. The deterministic Park–Miller LCG the sim has always
+   *  drawn from (plan §1.4: the sim stays replayable). */
+  private rngState = 1;
+  private rng(): number {
+    this.rngDraws++;
+    this.rngState = (this.rngState * 16807) % 2147483647;
+    return (this.rngState - 1) / 2147483646;
+  }
   /** The seed this world's RNG was started from. Part of a match's identity: a replay or
    *  a joining client needs it to roll the same damage, crits, misses and item drops as
    *  the machine that owns the game (docs/multiplayer.md). */
@@ -4244,6 +4341,9 @@ export class SimWorld {
   private summonRequests: SummonRequest[] = [];
   /** Entangled Gold Mines waiting for the renderer to raise them (see entangleMine). */
   private entangleRequests: EntangleRequest[] = [];
+  /** Units whose Reforged SKIN changed this tick — the renderer swaps their model (`setUnitSkin`).
+   *  Render-only, like the field itself. */
+  private skinChanges: number[] = [];
 
   /** Per-player tech state: researched levels + what their live units unlock (issue #57).
    *  Null until the registries are supplied — a bare sim (headless pathing/combat tests)
@@ -4288,7 +4388,7 @@ export class SimWorld {
     private upgradeReg?: UpgradeRegistry,
   ) {
     this.seed = seed;
-    this.rng = this.countedRng(seed);
+    this.startRng(seed);
     this.tech =
       techReg && upgradeReg
         ? new TechState(techReg, upgradeReg, () =>
@@ -5493,9 +5593,9 @@ export class SimWorld {
    *  payouts. Selling a drunk-down bottle at the full-bottle price was a gold printer: buy,
    *  drink two, sell. An item whose type carries no charges (`uses` 0) is unaffected, and so
    *  is a call with no held item (a price quoted off the type alone). */
-  pawnPrice(itemId: string, charges?: number): { gold: number; lumber: number } {
+  pawnPrice(itemId: string, charges?: number, entityId?: number): { gold: number; lumber: number } {
     const def = this.itemReg?.get(itemId);
-    if (!def?.pawnable) return { gold: 0, lumber: 0 };
+    if (!def || !this.itemPawnable(itemId, entityId)) return { gold: 0, lumber: 0 };
     const share = def.charges > 0 && charges !== undefined ? Math.max(0, charges) / def.charges : 1;
     const rate = gameNum("PawnItemRate") * share;
     return { gold: Math.floor(def.gold * rate), lumber: Math.floor(def.lumber * rate) };
@@ -5511,7 +5611,7 @@ export class SimWorld {
     const held = u.inventory[slot];
     if (!held) return false;
     const def = this.itemReg.get(held.itemId);
-    if (!def || !def.pawnable) return false;
+    if (!def || !this.itemPawnable(held.itemId, held.id)) return false;
     // …and an UNDROPPABLE item is not sellable either, whatever its `pawnable` column says:
     // selling is one of the ways an item is "removed from a Hero's inventory" (setItemDroppable).
     if (!this.mayLeaveInventory(held)) return false;
@@ -5527,7 +5627,7 @@ export class SimWorld {
     if (!this.inPawnRange(u, shop)) return false;
     u.inventory[slot] = null;
     const stash = this.stashOf(u.owner);
-    const { gold, lumber } = this.pawnPrice(held.itemId, held.charges);
+    const { gold, lumber } = this.pawnPrice(held.itemId, held.charges, held.id);
     stash.gold += gold;
     stash.lumber += lumber;
     // Being paid is a thing you SEE (issue #120), and the seller is where you are looking —
@@ -8530,6 +8630,44 @@ export class SimWorld {
    * pair can be entered from either side, which matters because several of these units are
    * TRAINED in their alternate form (the Spirit Walker arrives ethereal).
    */
+  /**
+   * Does this unit come into the world ALREADY in the alternate form of one of its own form
+   * toggles? Then it is wearing the alternate half of its model from its first frame, exactly
+   * as if it had morphed into it — `altModel` is a fact about the body, not a record of a
+   * button press.
+   *
+   * Nothing derived this for a unit that was placed or created in the form, and the flag is
+   * what the renderer keys the TRANSITION on (applyFormAnims plays the Morph clip of the form
+   * being left when it flips). So such a unit's first change of shape flipped nothing and was
+   * played with no clip at all: Prologue01 places the Prophet as `nmdm`, the crow of
+   * `[Amrf]` nmed ⇄ nmdm, and "unravenform" swapped a hovering bird for a standing man
+   * between two frames, with Medivh.mdx's 1.67-second "Morph Alternate" never drawn.
+   *
+   * Only a toggle with an off-switch counts (`Unorder` — see morphToggle): a timed hero form's
+   * alternate unit is nobody's birth form.
+   */
+  private bornAlternate(u: SimUnit): boolean {
+    if (!this.abilities) return false;
+    for (const a of u.abilities) {
+      const def = this.abilities.get(a.id);
+      if (def?.unOrder && this.isFormToggle(def) && def.levelData.some((l) => altFormOf(l) === u.typeId)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Which half of a form toggle a unit is standing in — "alternate" when its type is one of
+   * the ability's alternate forms (any rank's, as `morphToggle` asks it), "normal" otherwise —
+   * or null when the ability is not a form toggle at all. What an ORDER needs to know that a
+   * button press does not: `unravenform` is "be the druid", not "press Raven Form".
+   */
+  formOf(unitId: number, abilityId: string): "normal" | "alternate" | null {
+    const u = this.units.get(unitId);
+    const def = this.abilities?.get(abilityId);
+    if (!u || !def || !this.isFormToggle(def)) return null;
+    return def.levelData.some((l) => altFormOf(l) === u.typeId) ? "alternate" : "normal";
+  }
+
   morphToggle(u: SimUnit, def: AbilityDef, rank = 1, byTimer = false): boolean {
     const lvl = def.levelData[Math.min(Math.max(1, rank), def.levelData.length) - 1];
     const normal = lvl?.dataStr[0] ?? ""; // DataA "Normal Form Unit" — the same for all of them
@@ -9127,7 +9265,7 @@ export class SimWorld {
     const dmg = this.dataOf(lvl, 0, 10);
     for (const t of this.unitsInAreaInternal(u.x, u.y, lvl.area || 160)) {
       if (t === u || t.hp <= 0 || t.invulnerable || !this.hostile(u, t) || !this.targsAdmit(t, def.targetFlags)) continue;
-      this.landDamage(t, dmg, u.id, false);
+      this.landDamage(t, dmg * this.spellTypeMult(t), u.id, false);
       // The flare rides the burnt unit's `Specialattach` bone (`head`) and lasts exactly as
       // long as its Stand clip runs — the model is one Stand and nothing else, so opened on
       // a Birth it has none it showed nothing, and a flat 2.5 s held its last frame.
@@ -9249,7 +9387,7 @@ export class SimWorld {
         const dmg = this.dataOf(cloak.level, 0, 10);
         for (const t of this.unitsInAreaInternal(u.x, u.y, cloak.level.area || 160)) {
           if (t === u || t.hp <= 0 || t.invulnerable || !this.hostile(u, t) || !this.targsAdmit(t, cloak.def.targetFlags)) continue;
-          this.landDamage(t, dmg, u.id, false);
+          this.landDamage(t, dmg * this.spellTypeMult(t), u.id, false);
           if (cloak.def.buffSpecialArt) this.spellEffects.push({ art: cloak.def.buffSpecialArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
         }
       }
@@ -9850,6 +9988,7 @@ export class SimWorld {
       | "entangler"
       | "ringSlot"
       | "morphT"
+      | "afterMorph"
       | "altitudeShift"
       | "portalLeft"
       | "portalX"
@@ -9928,6 +10067,7 @@ export class SimWorld {
       | "reviveMana"
       | "strayT"
       | "struckAt"
+      | "wokenAt"
       | "returnBestDist"
       | "returnStuckT"
       | "inventory"
@@ -10128,6 +10268,7 @@ export class SimWorld {
       hexed: false,
       disarmed: false,
       hexForm: "",
+      skinId: 0,
       ethereal: false,
       webbed: false,
       magicImmune: false, // recomputeStats derives it from the unit's ability list
@@ -10152,6 +10293,7 @@ export class SimWorld {
       entangler: 0, // …and the Tree of Life that grew it (attachEntangled)
       ringSlot: 0,
       morphT: 0,
+      afterMorph: null,
       altitudeShift: null,
       portalLeft: 0,
       portalX: 0,
@@ -10233,6 +10375,7 @@ export class SimWorld {
       reviveMana: -1,
       strayT: 0,
       struckAt: -Infinity,
+      wokenAt: -Infinity,
       returnBestDist: 0,
       returnStuckT: 0,
       // The slots are the type's INVENTORY abilities' "Item Capacity" (`AInv` DataA — 6 for a
@@ -10248,6 +10391,7 @@ export class SimWorld {
       pendingSell: null,
       pendingDrop: null,
     };
+    u.altModel = this.bornAlternate(u);
     this.units.set(u.id, u);
     this.unitsVersion++; // see unitsInOrder
     this.settle(u);
@@ -10898,10 +11042,10 @@ export class SimWorld {
 
   /** Record a research milestone (`captureResearch`) — start at enqueue, cancel from the
    *  queue, finish where the level lands in tickBuildings. */
-  private noteResearch(buildingId: number, upgradeId: string, phase: ResearchEvent["phase"]): void {
+  private noteResearch(buildingId: number, techId: string, phase: ResearchEvent["phase"]): void {
     if (!this.captureResearch) return;
     const b = this.units.get(buildingId);
-    if (b) this.researchEvents.push({ building: eventInfo(b), upgradeId, phase });
+    if (b) this.researchEvents.push({ building: eventInfo(b), techId, phase });
   }
 
   /** Research events since the last drain (`captureResearch`). */
@@ -10977,6 +11121,7 @@ export class SimWorld {
    *  long way round the building. */
   issueMove(id: number, tx: number, ty: number, targetId = 0): boolean {
     const u = this.units.get(id);
+    if (u && !targetId && this.holdForMorph(u, tx, ty, false)) return true;
     if (!u || this.castLocked(u)) return false;
     if (!this.canPursue(u)) return false; // a building goes nowhere — and must not sit on a "move" order
     const target = targetId ? this.units.get(targetId) : undefined;
@@ -11042,6 +11187,7 @@ export class SimWorld {
    *  route (WC3 A-click). Behaves like a move for pathing/arrival. */
   issueAttackMove(id: number, tx: number, ty: number): boolean {
     const u = this.units.get(id);
+    if (u && this.holdForMorph(u, tx, ty, true)) return true;
     if (!u || this.castLocked(u)) return false;
     // A tower cannot advance on anything, so an attack-move is not an order it can hold: it
     // would stand there on an "attackmove" it can never finish. Its own auto-acquisition is
@@ -11853,6 +11999,19 @@ export class SimWorld {
     return !!u && this.itemsLocked(u);
   }
 
+  /**
+   * A walk ordered mid-FORM-CHANGE: kept for when the change is over (SimUnit.afterMorph) and
+   * answered as taken. Only where the morph is the ONLY thing in the way, and only for a unit
+   * that will be able to walk — an Ancient settling its roots is becoming a building, and a
+   * hero mid-Town-Portal is refused for the portal's own reason.
+   */
+  private holdForMorph(u: SimUnit, x: number, y: number, attack: boolean): boolean {
+    if (!(u.morphT > 0) || u.hp <= 0 || u.devouredBy > 0 || u.portalLeft > 0 || u.building) return false;
+    if (u.baseSpeed <= 0 && !(this.unitReg?.get(u.typeId)?.speed ?? 0)) return false;
+    u.afterMorph = { x, y, attack };
+    return true;
+  }
+
   private castLocked(u: SimUnit): boolean {
     // A unit in a Kodo's BELLY does nothing at all until it is digested or spat out — no
     // order of anybody's reaches it, a script's or a computer's included (the authority only
@@ -11907,7 +12066,10 @@ export class SimWorld {
 
   stop(id: number): void {
     const u = this.units.get(id);
-    if (u) this.standDown(u, false);
+    if (u) {
+      u.afterMorph = null; // Stop means stop: not "…and then walk off once you have changed"
+      this.standDown(u, false);
+    }
   }
 
   /**
@@ -12943,6 +13105,15 @@ export class SimWorld {
     return this.mineStandSpot(u, mine, depot.x - mine.x, depot.y - mine.y);
   }
 
+  /** Seconds a worker spends inside a gold mine per load: `[Agld]` Gold Mine's `DataB1`,
+   *  "Mining Duration" (AbilityMetaData.slk + UI\WorldEditStrings.txt), 1 in the shipped
+   *  table. Read off the registry rather than retyped, because a map's w3a may change it
+   *  (the same row `createScriptMine` in game/rts.ts reads its Max Gold from). */
+  private mineTime(): number {
+    const t = this.abilities?.get("Agld")?.levelData[0]?.data[1];
+    return t !== undefined && Number.isFinite(t) && t >= 0 ? t : MINE_TIME;
+  }
+
   /** How far from a mine's CENTRE a worker has to stand for its own reservation block to
    *  clear the mine's footprint, along an axis. `mine.radius` is the half-width of that
    *  footprint (mapViewer sizes it off the blocked extent of `16x16Goldmine.tga`), and a
@@ -13501,10 +13672,20 @@ export class SimWorld {
 
   /** A unit type's own mana regeneration, before buffs/items/upgrades.
    *
-   *  A HERO's comes from Intelligence and nothing else. Everyone else's is UnitBalance.slk's
-   *  `regenMana`, which is a real per-type number the sim used to flatten to one constant:
-   *  a Sorceress 0.667, a Priest 0.72, a Spirit Walker 1, a Moon Well 1.5. UNIT_MANA_REGEN
-   *  survives only as the fallback for a mana-carrying type whose row states none.
+   *  Every type's base is UnitBalance.slk's `regenMana`, which is a real per-type number the
+   *  sim used to flatten to one constant: a Sorceress 0.667, a Priest 0.72, a Spirit Walker 1,
+   *  a Moon Well 1.5. A zero is a ZERO: there used to be a flat 0.67 fallback for "a
+   *  mana-carrying type whose row states none", but no such row exists — every unit with a
+   *  `manaN` in all four UnitBalance.slk data sets states a non-zero `regenMana` — so the
+   *  only thing that ever reached it was a custom map's `umpr = 0`, whose caster then
+   *  refilled against its author's wishes (issue #293).
+   *
+   *  A HERO's row is not skipped: it ADDS to the Intelligence term (MiscGame `IntRegenBonus`),
+   *  exactly as `regenHP` adds to the Strength one in typeHpRegen. Every melee hero's row is
+   *  0.01 (Hamg, Hpal, Obla, Ofar, Udea, Edem…) and two campaign heroes carry 2 (Ecen
+   *  Cenarius, Uwar Archimonde); Liquipedia's hero infobox computes the same sum —
+   *  `(int) * 0.05 + 0.01` (Module:Infobox/Character/Custom, `_calculateManaRegen`) — and a
+   *  map's `umpr` on a hero is honoured with it. Issue #232: the row used to be dropped.
    *
    *  The MOON WELL is the one caster whose regeneration has a clock on it: "Regenerates mana
    *  at night" (NightElfUnitStrings [emow]) — a well drained by day stays drained until dusk,
@@ -13515,10 +13696,10 @@ export class SimWorld {
    *  that column, but "can restore mana" fits it exactly as well, so the alias is the honest
    *  discriminator. See tickReplenish.) */
   private baseManaRegen(u: SimUnit): number {
-    if (u.isHero) return REGEN_PER_INT() * u.int;
-    if (u.baseMaxMana <= 0) return 0;
     const def = this.unitReg?.get(u.typeId);
-    return def?.manaRegen || UNIT_MANA_REGEN;
+    if (u.isHero) return (def?.manaRegen ?? 0) + REGEN_PER_INT() * u.int;
+    if (u.baseMaxMana <= 0) return 0;
+    return def?.manaRegen ?? 0;
   }
 
   /** A Moon Well by day: it refills at night and not otherwise, and the clock applies to the
@@ -13554,6 +13735,7 @@ export class SimWorld {
       maxHp: 0, maxMana: 0, hpRegen: 0, weaponsOn: 0, magicReduction: 0, rangedReduction: 0,
     };
     if (!u.inventory.length || !this.itemReg || !this.abilities) return b;
+    const speedStack = gameNum("MoveSpeedBonusesStack") !== 0;
     for (const held of u.inventory) {
       if (!held) continue;
       const item = this.itemReg.get(held.itemId);
@@ -13581,7 +13763,10 @@ export class SimWorld {
           // The two the shops made reachable (issue #57). Both are plain passive bonuses, and
           // both were dead code paths until now because nothing sold them: Boots of Speed are
           // the Goblin Merchant's signature item, and the Periapt is the +HP staple.
-          case "AIms": b.speed += val(0); break; // Boots of Speed (+60 movement)
+          // Boots of Speed (+60 movement) — and whether a SECOND pair adds anything is the
+          // data's answer, `MoveSpeedBonusesStack`: 0 on the melee tables, where only the
+          // largest carried bonus counts, 1 on the custom ones, where they add (issue #282).
+          case "AIms": b.speed = speedStack ? b.speed + val(0) : Math.max(b.speed, val(0)); break;
           case "AIml": b.maxHp += val(0); break; // Periapt of Vitality (+150 max HP)
           // …and its mana twin, which had no case at all: `AImm` "MaxManaBonus" is the
           // Pendant of Energy's +150, the Pendant of Mana's +250 and the Mindstaff's +200
@@ -13635,9 +13820,7 @@ export class SimWorld {
    *  `base + mod*(level-1)`. Priest Master Training therefore reads +200 max mana at level 2,
    *  not another +100 on top of level 1.
    *
-   *  Still deliberately unhandled rather than guessed at: `rart` (armour-type swap, Orc
-   *  Reinforced Defenses), `ratc` (attack target count — Moon Glaive's bounce), `rrai`,
-   *  `rent`, `rspi`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
+   *  Still deliberately unhandled rather than guessed at: `rent`, `rmin`, `radl`. `rtma` is not a stat at all — it flips a
    *  unit's availability and is handled by TechState.maxAllowed. */
   private upgradeBonuses(u: SimUnit): Readonly<UpgradeBonuses> {
     // The sum depends on three things only — the owner's research levels, the unit's TYPE (its
@@ -13662,12 +13845,14 @@ export class SimWorld {
   private sumUpgradeBonuses(u: SimUnit): UpgradeBonuses {
     const b = {
       dice: 0, armor: 0, hp: 0, hpPct: 0, mana: 0, manaRegen: 0, range: 0, sight: 0, speed: 0,
-      attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0,
+      attackSpeed: 0, damage: 0, lumber: 0, spillDist: 0, spillRadius: 0, targetCount: 0,
       attackLevel: 0, armorLevel: 0,
+      hpRegen: 0, armorType: null as ArmorType | null, spikes: 0, spikesPct: 0, raiseLife: 0,
       // -1 = "no `renw` researched" — the unit keeps whatever mask its data shipped with.
       weaponMask: -1,
       abilityLevels: [] as [string, number][],
       auraData: [] as [string, number][],
+      ultravision: false,
     };
     if (!this.tech || !this.upgradeReg || !this.unitReg) return b;
     const def = this.unitReg.get(u.typeId);
@@ -13715,6 +13900,10 @@ export class SimWorld {
           // opens up the line-splash the weapon already carries a radius for.
           case "rasd": b.spillDist += v; break;
           case "rasr": b.spillRadius += v; break;
+          // Attack Target Count (`ratc`, an `int`): bodies added to the slot's `targCount`.
+          // Upgrade Moon Glaive (`Remg`) is base 1 on the Huntress, whose glaive is 2 — "strike
+          // additional units with her bouncing glaive attacks" (`[Amgl]` Ubertip): a third body.
+          case "ratc": b.targetCount += v; break;
           // Enable Weapons (`renw`) — an attackBits MASK that REPLACES `weapsOn`, it does not
           // add to it. Flying Machine Bombs (`Rhgb`) and Corrosive Breath (`Recb`) are 3 (both
           // slots); Impaling Bolt (`Repb`) is 2, which SWITCHES the Glaive Thrower off slot 1
@@ -13725,6 +13914,7 @@ export class SimWorld {
           // shows `Ahlh` at level 1 (its first icon) and Advanced at level 2 (its second). Read
           // as the level SET, not added: an unresearched badge is hidden by its `Requires`, so
           // there is no level to add to.
+          case "rauv": b.ultravision = true; break;
           case "rlev": if (e.code) b.abilityLevels.push([e.code, v]); break;
           // Aura Data (`raud`, `code` = the aura): the research's total is ADDED to the aura's
           // `DataA`. Its one stock user is Improved War Drums (`Rwdm` base 0.1 / mod 0.1 on
@@ -13732,6 +13922,32 @@ export class SimWorld {
           // gives with the upgrade. Keyed on the ability ID like `rlev`, so the Warsong Battle
           // Drums' item copy (`AIwd`, code `Aakb` too) is not improved by it.
           case "raud": if (e.code) b.auraData.push([e.code, v]); break;
+          // Hit Point Regeneration (`rhpr`, an `unreal`): hit points a SECOND, the unit of the
+          // `regenHP` column it adds to. Troll Regeneration (`Rotr`) is base 1 on the Headhunter,
+          // Berserker, Batrider and Witch Doctor — whose own row is 0.25, so the research
+          // quintuples it (0.8 on a custom map's frozen set, 1.25 in Reign of Chaos).
+          case "rhpr": b.hpRegen += v; break;
+          // Armor Type (`rart`): UpgradeEffectMetaData types its base as `defenseTypeInt`, the
+          // UnitEditorData enum whose 3 is Fortified — and Reinforced Defenses (`Rorb`) is 3 from
+          // 2.0.2 on. The 1.30.4 row (and the custom set, which no patch touches) says **1**,
+          // which that enum reads as Medium, while the research's own Ubertip is "so that they
+          // have Fortified armor": the old engine took the 1 as a switch. So 1 is Fortified here
+          // and every other value is the enum's.
+          case "rart": {
+            const t = v === 1 ? ArmorType.Fort : defenseTypeFrom(Math.round(v));
+            if (t) b.armorType = t;
+            break;
+          }
+          // Spiked Barricade Damage (`rspi`): what one melee blow on the building costs whoever
+          // swung it — 5 / 12 / 19 on the 1.30.4 row, "Deals <Rosp,base1> damage per attack".
+          // `rspp` is 1.31's second half, a SHARE of the blow on top (src/patches/data/1.31.0.json).
+          // Spent in dealDamage.
+          case "rspi": b.spikes += v; break;
+          case "rspp": b.spikesPct += v; break;
+          // Raise Dead Duration (`rrai`): seconds on the life of what this unit's Raise Dead
+          // raises — Skeletal Mastery (`Rusm`) on the Necromancer, 20 in melee and 15 on the
+          // custom set's Skeletal Longevity (`Rusl`). Spent in summonFromCorpse.
+          case "rrai": b.raiseLife += v; break;
         }
       }
     }
@@ -14025,6 +14241,11 @@ export class SimWorld {
     const raising = !!u.building && u.building.constructionLeft > 0;
     u.armor = raising ? 0 : u.baseArmor + ARMOR_PER_AGI() * dAgi + armorBonus + carapaceArmor + item.armor + upg.armor;
     u.bonusArmor = raising ? 0 : armorBonus + carapaceArmor + item.armor + upg.armor; // the buff/aura/item/upgrade portion (shown green in the HUD)
+    // `rart` (Reinforced Defenses): the research swaps the armour CLASS the damage table reads.
+    // Only off the type's OWN class — one a script wrote onto this unit (setUnitField) stays.
+    if (upg.armorType && u.armorType !== upg.armorType && u.armorType === this.unitReg?.get(u.typeId)?.armorType) {
+      u.armorType = upg.armorType;
+    }
     // The corner numbers on the info panel's two icons: the LEVEL researched, not the bonus.
     u.attackUpgrade = upg.attackLevel;
     u.armorUpgrade = upg.armorLevel;
@@ -14087,6 +14308,8 @@ export class SimWorld {
       w.cooldown = Math.max(w.baseCooldown * speedFactor, w.damagePoint + DAMAGE_POINT_FLOOR);
       w.spillDist = w.baseSpillDist + upg.spillDist; // Storm Hammers — see the spill fields on SimWeapon
       w.spillRadius = w.baseSpillRadius + upg.spillRadius;
+      // Upgrade Moon Glaive — only a slot that bounces has a count to add to (spawnProjectile).
+      w.targetCount = (w.baseTargetCount ?? 1) + upg.targetCount;
     }
     // Root (`Aroo`) swaps which WEAPON SLOT is live, and the Data columns say so outright
     // (AbilityMetaData Roo1..Roo4 → WorldEditStrings):
@@ -14140,7 +14363,10 @@ export class SimWorld {
     // hero carrying one sees at night without ever having built a Hunter's Hall.
     const ultravision = (this.tech && this.tech.researchLevel(u.owner, "Reuv") > 0
       && u.abilities.some((a) => a.code === "Ault" && a.level >= 1))
-      || this.itemAbilityLevel(u, "Ault") !== null;
+      || this.itemAbilityLevel(u, "Ault") !== null
+      // …and the Glyph of Ultravision, which is neither: its research `Rguv` carries the
+      // upgrade EFFECT `rauv`, on every unit whose row lists it (sumUpgradeBonuses).
+      || upg.ultravision;
     u.sightNight = ultravision ? u.sightDay : u.baseSightNight + upg.sight;
     u.speed = Math.max(0, (u.baseSpeed + upg.speed + item.speed) * (1 - slowMove) * (1 + hasteMove));
     // …under the game's ceiling. Without it a Scroll of Speed's +200% walked a Footman at 810.
@@ -14179,7 +14405,7 @@ export class SimWorld {
     u.manaRegen = this.manaRegenSuspended(u)
       ? 0
       : this.baseManaRegen(u) + manaRegenBonus + item.manaRegen + upg.manaRegen;
-    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR() * u.str : 0) + hpRegenBonus + item.hpRegen;
+    u.hpRegen = this.typeHpRegen(u) + (u.isHero ? REGEN_PER_STR() * u.str : 0) + hpRegenBonus + item.hpRegen + upg.hpRegen;
     // Vampiric Aura only — the Mask of Death's life steal is an ORB (exclusive with every
     // other orb, and it works on a ranged attack), so it is applied at the blow instead.
     u.lifesteal = lifesteal;
@@ -14772,7 +14998,8 @@ export class SimWorld {
       // a unit's health bar's worth of hp but never the last point itself.
       else if (b.kind === "dot" && b.value) {
         const before = u.hp;
-        u.hp = b.nonLethal ? Math.max(1, u.hp - b.value * dt) : u.hp - b.value * dt;
+        const bite = b.value * dt * this.spellTypeMult(u); // a dot is ability damage: DamageBonusSpells (issue #277)
+        u.hp = b.nonLethal ? Math.max(1, u.hp - bite) : u.hp - bite;
         // A dot IS "a spell which does damage", so it cancels a salve on the tick it bites —
         // burning under a Rain of Fire is exactly the fight you cannot regenerate through.
         // Flagged rather than dispelled here: we are walking u.buffs, which the break edits.
@@ -14853,7 +15080,7 @@ export class SimWorld {
       if (s.holder.hp <= 0) continue;
       for (const t of this.unitsInAreaInternal(s.holder.x, s.holder.y, s.radius)) {
         if (t === s.holder || t.hp <= 0 || t.building || t.invulnerable || this.godProtected(t)) continue;
-        t.hp -= s.dps * dt; // spell damage — no armor reduction
+        t.hp -= s.dps * dt * this.spellTypeMult(t); // spell damage — the armour class's Spells cell, no armour value
         this.breakItemRegen(t); // "hit by a spell which does damage" — see breakItemRegen
         if (t.hp <= 0) this.kill(t, s.killerId);
       }
@@ -15557,11 +15784,15 @@ export class SimWorld {
         existing.delay = init.delay ?? 0; // a re-cast restarts the transition
         if (init.art) existing.art = init.art;
         if (init.buffId) existing.buffId = init.buffId;
+        if (init.procAbility) {
+          existing.procAbility = init.procAbility;
+          existing.procRank = init.procRank;
+        }
         return;
       }
     }
     const art = init.art ?? "";
-    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, total: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable, aura: init.aura });
+    u.buffs.push({ kind: init.kind, group, timeLeft: init.timeLeft, total: init.timeLeft, sourceId: init.sourceId, value: init.value ?? 0, value2: init.value2 ?? 0, art, fx: init.fx ?? (art ? [{ path: art, attach: [] }] : []), buffId: init.buffId ?? "", delay: init.delay ?? 0, meld: init.meld, nonLethal: init.nonLethal, untilHealed: init.untilHealed, undispellable: init.undispellable, aura: init.aura, procAbility: init.procAbility, procRank: init.procRank });
   }
 
   private interruptForStun(u: SimUnit): void {
@@ -16567,8 +16798,8 @@ export class SimWorld {
       this.noteSpell(u, pc, "channel");
       this.noteSpell(u, pc, "cast");
       // The caster's own flourish, if this ability's art belongs to the GESTURE rather than
-      // to what the gesture throws (see CAST_START_ART): Blink's plume and Fan of Knives'
-      // burst play here, at the button press, not half a second later with the effect.
+      // to what the gesture throws (see CAST_START_ART): Blink's plume plays here, at the
+      // button press, not half a second later with the effect.
       const startFx = CAST_START_ART[pc.code]?.(def);
       if (startFx?.art) this.spellEffects.push({ art: startFx.art, x: u.x, y: u.y, targetId: startFx.follow ? u.id : 0, z: 0, sound: startFx.sound });
       // Delayed-strike "beware" warning (see PRECAST_WARNING): drop the ability's
@@ -16591,6 +16822,20 @@ export class SimWorld {
     // (a new order, or a stun via interruptForStun) aborts the spell — with no cost
     // for a normal spell, but a PRECAST_WARNING spell (Flame Strike) has already paid
     // at wind-up start, so an interrupt there simply wastes the cast. ---
+    //
+    // A UNIT target is only held for so far: `Units\MiscData.txt` [Misc]
+    // SpellCastRangeBuffer = 300, "distance target can move between starting cast and spell
+    // effect". The range is checked once, before the wind-up, so without this a hero who Blinks
+    // or runs off during the cast point was still struck from wherever he got to. Past the
+    // cast range plus the buffer the cast is dropped as an interrupt is — unpaid, exactly like
+    // the mana re-check below (and wasted for a spell that already paid at wind-up start).
+    if (pc.targetId) {
+      const t = this.units.get(pc.targetId);
+      if (t && this.castGap(u, t.x, t.y, t) > pc.range + SPELL_CAST_RANGE_BUFFER()) {
+        this.stop(u.id);
+        return;
+      }
+    }
     pc.castLeft -= dt;
     if (pc.castLeft > 0) return;
     // Commit: spend mana + start the cooldown, THEN fire. Re-check mana in case it
@@ -17890,7 +18135,7 @@ export class SimWorld {
    * the Deer…). The row has no columns at all, so how far and how often are not the game's to
    * read: both are OURS (WANDER_RADIUS, WANDER_EVERY) until a measurement against the real
    * client says otherwise. A critter left alone strolls to somewhere near the post it was put
-   * at (its guard post, else where it stands now), waits, and goes again; one that has been
+   * at (its guard post — which follows it when something else moves it), waits, and goes again; one that has been
    * given an order, or is fleeing, or is owned by a player who is moving it, is left alone.
    */
   private tickWander(u: SimUnit, dt: number): void {
@@ -17898,6 +18143,19 @@ export class SimWorld {
     if (!u.abilities.some((a) => a.code === "Awan" && a.level >= 1)) return;
     if ((u.wanderT = (u.wanderT ?? this.rng() * WANDER_EVERY) - dt) > 0) return;
     u.wanderT = WANDER_EVERY * (0.5 + this.rng());
+    // Its post is where it was PUT — and being sent somewhere is being put there. A stroll of
+    // its own never takes a critter further than WANDER_RADIUS from the post, so one found
+    // idle beyond that was moved by something else (a script's order, a player's, a flight
+    // from danger), and wandering "home" from there is not wandering: Prologue02's intro
+    // orders its four Vultures 7,500 units across the map to the far corner, and on their
+    // next stroll they flew all the way back to where the editor had placed them. The closing
+    // scene then orders them over the bay from the corner it left them in, timed to cross the
+    // shot of the ships — and ours, already beside the bay, arrived in seconds and hung there
+    // flapping for the whole of it. So the post follows the critter.
+    if (Math.hypot(u.x - u.guardX, u.y - u.guardY) > WANDER_RADIUS + WANDER_SLACK) {
+      u.guardX = u.x;
+      u.guardY = u.y;
+    }
     const hx = u.guardX;
     const hy = u.guardY;
     const a = this.rng() * Math.PI * 2;
@@ -18725,8 +18983,8 @@ export class SimWorld {
   }
 
   /** `GetTerrainCliffLevel` — the terrain's cliff LAYER at a point (the w3e's own number, so a
-   *  fresh map's ground reads the editor's default rather than 0). Walkable destructibles
-   *  adding their own level on top (jassbot) are not modelled. 0 with no terrain. */
+   *  fresh map's ground reads the editor's default rather than 0). A walkable destructible's
+   *  deck reads the level of the banks it joins (WalkableSurfaces.levelAt). 0 with no terrain. */
   terrainCliffLevel(x: number, y: number): number {
     return this.cliffLevelAt ? Math.round(this.cliffLevelAt(x, y) / CLIFF_STEP) : 0;
   }
@@ -19232,7 +19490,7 @@ export class SimWorld {
    *  They live OUTSIDE their field on purpose: shards already in the air still land
    *  when the channel is broken, so a Blizzard cancelled the instant before impact
    *  still deals that last wave. */
-  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[]; healField?: LiveSpellField }> = [];
+  private waveImpacts: Array<{ code: string; t: number; x: number; y: number; area: number; damage: number; casterId: number; team: number; flags: string[]; maxDamage: number; buildingReduction: number; dot: SpellFieldInit["dot"]; stun?: SpellFieldInit["stun"]; halfRing?: SpellFieldInit["halfRing"]; pctOfMax: boolean; buildingsOnly: boolean; fellsTrees: boolean; skipEthereal?: boolean; hitArt?: string; hitAttach?: string[]; healField?: LiveSpellField }> = [];
 
   // --- Mirror Image (AOmi) ------------------------------------------------------------
   //
@@ -19590,6 +19848,8 @@ export class SimWorld {
           maxDamage: f.maxDamagePerWave ?? 0,
           buildingReduction: f.buildingReduction ?? 0,
           dot: f.dot,
+          stun: f.stun,
+          halfRing: f.halfRing,
           pctOfMax: f.damagePctOfMax ?? false,
           buildingsOnly: f.buildingsOnly ?? false,
           fellsTrees: f.fellsTrees ?? false,
@@ -19720,7 +19980,7 @@ export class SimWorld {
   private landInferno(drop: (typeof this.infernoDrops)[number]): void {
     for (const t of this.unitsInAreaInternal(drop.x, drop.y, drop.area)) {
       if (!this.areaEffectAffects(drop.casterId, drop.team, drop.flags, t)) continue;
-      this.landDamage(t, drop.damage, drop.casterId, false);
+      this.landDamage(t, drop.damage * this.spellTypeMult(t), drop.casterId, false);
       if (t.hp <= 0 || t.building) continue; // a building takes the damage and is not stunned
       this.applyBuffInternal(t, {
         kind: "stun",
@@ -19770,7 +20030,11 @@ export class SimWorld {
     for (const t of reached) {
       const share = t.building && (f.buildingReduction ?? 0) > 0 ? f.buildingReduction! : 1;
       t.hp = Math.min(t.maxHp, t.hp + each * share);
-      if (f.healArt) this.spellEffects.push({ art: f.healArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
+      // …and HEARD on that unit: the flash carries its own sound, `SNDXAHEA` on frame 0 of
+      // HealTarget.mdx's Birth (AnimLookups AHEA → "Heal" → HealTarget.wav), so every unit a wave
+      // mends chimes as its flash is born — the sound the engine plays off the model, rather than
+      // the one chime the press used to be given for it (mapViewer SOUNDED_BY_EFFECT).
+      if (f.healArt) this.spellEffects.push({ art: f.healArt, x: t.x, y: t.y, targetId: t.id, z: 0, events: true });
       // The worn model, kept alive a beat past the next wave so it does not blink between two.
       if (f.healBuff) this.applyBuffInternal(t, { kind: "mark", group: f.healBuff.group, timeLeft: f.interval + 0.25, sourceId: caster.id, art: f.healBuff.art, fx: f.healBuff.fx, buffId: f.healBuff.buffId });
     }
@@ -19812,7 +20076,9 @@ export class SimWorld {
       // victim's pool (`Udd1 "Max Life Drained per Second (%)"` = 0.04), which is what
       // makes it the one spell a Town Hall genuinely fears.
       if (w.pctOfMax) dmg = t.maxHp * dmg;
-      if (dmg > 0) this.landDamage(t, dmg, w.casterId, false); // spell damage: ignore armor
+      // The outer ring of a two-ring field (SpellFieldInit.halfRing — Volcano).
+      if (w.halfRing && Math.hypot(t.x - w.x, t.y - w.y) - t.radius > w.halfRing.fullRadius) dmg *= w.halfRing.factor;
+      if (dmg > 0) this.landDamage(t, dmg * this.spellTypeMult(t), w.casterId, false); // spell damage: the armour CLASS (DamageBonusSpells), never the armour value
       // The wave's mark on the unit it struck (Starfall's star — SpellFieldInit.hitArt): rides
       // it for its own clip (`life` 0), so a unit that runs keeps its star over it. The
       // model's own SND event is cued once per wave, not once per victim, as Blizzard's is.
@@ -19823,6 +20089,11 @@ export class SimWorld {
       // Rain of Fire's burn: every wave (re)lights whatever it hits for DataE dps.
       if (w.dot && w.dot.dps > 0 && !t.building) {
         this.applyBuffInternal(t, { kind: "dot", group: w.dot.group, timeLeft: t.isHero && w.dot.heroDuration > 0 ? w.dot.heroDuration : w.dot.duration, sourceId: w.casterId, value: w.dot.dps, art: w.dot.art, buffId: w.dot.buffId });
+      }
+      // Volcano's rocks stun what they hit (SpellFieldInit.stun) — a body, never a building.
+      if (w.stun && dmg > 0 && !t.building) {
+        const time = debuffDuration({ duration: w.stun.duration, heroDuration: w.stun.heroDuration } as AbilityLevel, t);
+        if (time > 0) this.applyBuffInternal(t, { kind: "stun", group: `field:${w.code}`, timeLeft: time, sourceId: w.casterId, art: w.stun.art, fx: w.stun.fx, buffId: w.stun.buffId });
       }
     }
     // Burn down trees too when the ability lists `tree` in Targets Allowed
@@ -20096,6 +20367,18 @@ export class SimWorld {
     return out;
   }
 
+  /**
+   * The armour CLASS's Spells cell (`DamageBonusSpells`) — the multiplier every point of
+   * ability damage takes against this target, whatever its armour VALUE. Same table as a
+   * Spells-type weapon reads in dealDamage; a structure still RAISING has no armour class,
+   * so nothing in the table applies (×1, exactly as a weapon's blow does). The caller
+   * multiplies BEFORE the ethereal/Spell-Reduction/Elune cuts, which are separate seams.
+   */
+  private spellTypeMult(t: SimUnit): number {
+    if (this.raising(t)) return 1;
+    return damageMultiplier(AttackType.Spells, t.armorType);
+  }
+
   // === SpellApi (what spell handlers may do to the world) ===================
 
   private spellApi: SpellApi = {
@@ -20120,7 +20403,7 @@ export class SimWorld {
     // is being hit, not a second reduction to be netted off. Elune's Grace (`magicTaken`) is the
     // same kind of cut, worn by the unit instead of carried.
     spellDamage: (t, amount, src) =>
-      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * (1 - t.magicReduction) * t.magicTaken), src, false),
+      t.magicImmune ? 0 : this.landDamage(t, this.absorbSpellDamage(t, (t.ethereal ? amount * etherealSpellBonus() : amount) * this.spellTypeMult(t) * (1 - t.magicReduction) * t.magicTaken), src, false),
     spellHeal: (t, amount) => {
       t.hp = Math.min(t.maxHp, t.hp + amount);
     },
@@ -20304,6 +20587,7 @@ export class SimWorld {
       caster.voodooAbil = def.id;
     },
     countOwned: (owner, typeId) => this.countOwnedOf(owner, typeId),
+    raiseDeadBonus: (caster) => this.upgradeBonuses(caster).raiseLife,
     summonCapMake: (casterId, typeIds, cap, incoming) => this.summonCapMake(casterId, typeIds, cap, incoming),
     revealArea: (owner, team, o) => this.addItemReveal(owner, team, o),
     // One copy beside the original, on the spot the summon placer finds for it (`atPoint`
@@ -20888,6 +21172,22 @@ export class SimWorld {
     return out;
   }
 
+  /** `BlzCreateUnitWithSkin` / `BlzSetUnitSkin` — a render-only skin. 0 is the unit's own body. */
+  setUnitSkin(unitId: number, skinId: number): void {
+    const u = this.units.get(unitId);
+    if (!u || u.skinId === skinId) return;
+    u.skinId = skinId;
+    this.skinChanges.push(unitId);
+  }
+
+  /** Units whose skin changed this tick, for the renderer to re-model. */
+  drainSkinChanges(): number[] {
+    if (!this.skinChanges.length) return this.skinChanges;
+    const out = this.skinChanges;
+    this.skinChanges = [];
+    return out;
+  }
+
   /**
    * Restart the RNG from a new seed. Legal only BEFORE the match rolls anything — the
    * lobby knows the seed after the world is constructed (render/mapViewer.ts builds the
@@ -20897,7 +21197,7 @@ export class SimWorld {
    */
   reseed(seed: number): void {
     this.seed = seed;
-    this.rng = this.countedRng(seed);
+    this.startRng(seed);
   }
 
   /** How many numbers the match's stream has handed out. Part of a replay's state check
@@ -20906,13 +21206,13 @@ export class SimWorld {
    *  look like yet. */
   rngDraws = 0;
 
-  private countedRng(seed: number): () => number {
-    const next = lcg(seed);
+  /** Start the stream from `seed`, so a world reseeded with the same number draws the same
+   *  numbers it always did. */
+  private startRng(seed: number): void {
+    let st = seed % 2147483647;
+    if (st <= 0) st += 2147483646;
+    this.rngState = st;
     this.rngDraws = 0;
-    return () => {
-      this.rngDraws++;
-      return next();
-    };
   }
 
   /** Draw from the match's seeded stream. For the few rolls that live just OUTSIDE the sim
@@ -21001,7 +21301,16 @@ export class SimWorld {
       this.recomputeStats(u); // derive armour/speed/damage/regen/stun/invuln
       this.tickRegen(u, dt); // mana + (hero) hp regeneration
       this.tickReplenish(u, dt); // a Moon Well pouring itself into whoever is drinking
-      if (u.morphT > 0) u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
+      if (u.morphT > 0) {
+        u.morphT = Math.max(0, u.morphT - dt); // an Ancient mid-root/unroot
+        // …and the walk it was told to make while it changed (SimUnit.afterMorph).
+        if (u.morphT <= 0 && u.afterMorph) {
+          const { x, y, attack } = u.afterMorph;
+          u.afterMorph = null;
+          if (attack) this.issueAttackMove(u.id, x, y);
+          else this.issueMove(u.id, x, y);
+        }
+      }
       if (u.altitudeShift) this.tickAltitude(u, dt); // …and a Destroyer lifting off once its morph is done
       if (u.portalLeft > 0) this.tickTownPortal(u, dt); // …and a hero mid-Town-Portal
       if (u.rootSettle) this.tickRootSettle(u); // …and one mid-ROOT is still lowering itself onto its site
@@ -22765,7 +23074,9 @@ export class SimWorld {
    */
   private campQuiet(u: SimUnit): boolean {
     const calm = this.elapsed - CREEP_SLEEP_CALM;
-    if (u.struckAt > calm) return false;
+    // `wokenAt` is asked of THIS creep alone: a script waking one creep (wakeUnit) is not a fight,
+    // so it must not hold — or, through tickCreep's sleeper branch, rouse — its camp-mates.
+    if (u.struckAt > calm || u.wokenAt > calm) return false;
     for (const c of this.units.values()) {
       if (c.hp <= 0) continue;
       if (c.isCreep && (c === u || this.sameCamp(c, u))) {
@@ -23252,6 +23563,20 @@ export class SimWorld {
       // only `weapTp` is the one the engine sorts missiles by: the Cannon Tower's slot 1 is
       // `artillery` with 50/100/125 rings, its slot 2 is a plain homing `missile` at buildings.
       area: isArtillery(w) ? this.shellArea(w, t.x, t.y) : undefined,
+      // A MISSILE (SPLASH) slot keeps its target and homes like any arrow; what it adds is the
+      // burst where it lands (SimProjectile.splash). Keyed on `weapTp` for the same reason the
+      // line above is — twelve plain `missile` rows carry stray rings and do not splash.
+      splash: w.weaponType === WeaponType.MissileSplash && Math.max(w.areaFull, w.areaHalf, w.areaQuarter) > 0
+        ? this.splashRings(w)
+        : undefined,
+      // A MISSILE (BOUNCE) slot: the glaive goes on from whoever it strikes (SimProjectile.bounce).
+      // Keyed on `weapTp` like the two above, and on a count that leaves a hop to make.
+      bounce: w.weaponType === WeaponType.MissileBounce && w.targetCount > 1 && w.areaFull > 0
+        ? {
+          left: w.targetCount - 1, radius: w.areaFull, loss: w.damageLoss, targets: w.splashTargets, hit: [t.id],
+          block: this.bounceFilter(u),
+        }
+        : undefined,
     };
     this.projectiles.set(id, proj);
     this.spawnedProjectiles.push({ id, art: proj.art, x: proj.x, y: proj.y, z: proj.z });
@@ -23270,8 +23595,12 @@ export class SimWorld {
   /** Where an artillery shell bursts and what its rings are — the SLOT's, carried on the shell
    *  so it bursts as loosed whatever becomes of the shooter. */
   private shellArea(w: SimWeapon, x: number, y: number): NonNullable<SimProjectile["area"]> {
+    return { aimX: x, aimY: y, ...this.splashRings(w) };
+  }
+
+  /** A slot's rings as a shot carries them (SplashRings). */
+  private splashRings(w: SimWeapon): SplashRings {
     return {
-      aimX: x, aimY: y,
       full: w.areaFull, half: w.areaHalf, quarter: w.areaQuarter,
       halfFactor: w.areaHalfFactor, quarterFactor: w.areaQuarterFactor,
       targets: w.splashTargets,
@@ -23393,6 +23722,93 @@ export class SimWorld {
       if (damage <= 0) break;
       this.applyDamage(h.t, damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
     }
+  }
+
+  /**
+   * The BOUNCE of a MISSILE (BOUNCE) shot — `weapTp` = `mbounce`, the Huntress's glaive
+   * (Units\UnitWeapons.slk `[esen]`: targCount 2, damageLoss 0.5, Farea 400) and Naisha's
+   * (`[ensh]`, targCount 5). Issue #279: the glaive struck one body and stopped, and Upgrade
+   * Moon Glaive (`Remg`, `ratc` +1) bought nothing.
+   *
+   * Having just struck `struck`, the glaive leaves from where that body stands for the NEAREST
+   * one it may still hit within `Farea` of it, as a missile of its own (same art, speed and
+   * attack type, homing as the first did), carrying `1 - damageLoss` of what it carried in —
+   * 50%, then 25% — until the slot's count is spent. Who it may land on is the slot's
+   * `splashTargs`, read as a burst's is: the KIND (`ground,structure,debris` — a glaive never
+   * goes up to a flyer) and the ALLEGIANCE (`enemy`, so not through the Huntress's own army).
+   * No body is struck twice by one attack.
+   *
+   * 2.0.3's Bouncing Missile Filter (`Amgi`, src/patches/data/2.0.3.json) is `block`: "no
+   * longer bounce to or from structures" — its Targets Allowed names the kinds that END the
+   * chain when struck and are skipped as a next body.
+   *
+   * What a bounce does NOT carry is the blow's own riders — the orb, the strike passives, the
+   * spill: those were the aimed attack's, and the hop is only its damage.
+   */
+  /** The kinds `u`'s bouncing missile goes neither to nor from: the Targets Allowed of a
+   *  Bouncing Missile Filter (`Amgi`, 2.0.3 — `structure` on the Huntress) on its TYPE's
+   *  ability list. Read off the type because the row is a filter with no button, so it is
+   *  not one of the unit's live abilities (KNOWN_ABILITIES). Undefined before 2.0.3. */
+  private bounceFilter(u: SimUnit): string[] | undefined {
+    for (const id of this.unitReg?.get(u.typeId)?.abilities ?? []) {
+      const def = this.abilities?.get(id);
+      if (def?.code === "Amgi") return def.targetFlags;
+    }
+    return undefined;
+  }
+
+  private bounceOn(p: SimProjectile, struck: SimUnit): void {
+    const b = p.bounce!;
+    if (b.left < 1) return;
+    if (b.block?.includes(targetKeyOf(struck))) return; // never bounces FROM one of these
+    const source = this.units.get(p.sourceId)
+      ?? (p.sourceOwner !== undefined
+        ? ({ id: p.sourceId, owner: p.sourceOwner, team: p.sourceTeam ?? p.sourceOwner, neutralPassive: false } as SimUnit)
+        : undefined);
+    if (!source) return;
+    let next: SimUnit | undefined;
+    let best = Infinity;
+    for (const t of this.units.values()) {
+      if (b.hit.includes(t.id)) continue;
+      if (t.hp <= 0 || t.invulnerable || t.hidden || t.locust || isOffField(t)) continue; // nobody there to hit
+      const key = targetKeyOf(t);
+      if (b.targets.length && !b.targets.includes(key)) continue;
+      if (b.block?.includes(key)) continue; // …nor TO one
+      if (!this.splashAdmits(source, t, b.targets)) continue;
+      // An invisible body the shooter's side cannot see is not one a glaive goes looking for
+      // (the same test a missile in flight loses its target on — missileDisjointed).
+      if (p.sourceTeam !== undefined && t.team !== p.sourceTeam && t.invisible && !this.teamDetects(p.sourceTeam, t.x, t.y, t)) continue;
+      const gap = Math.hypot(t.x - struck.x, t.y - struck.y) - t.radius;
+      if (gap > b.radius || gap >= best) continue;
+      best = gap;
+      next = t;
+    }
+    if (!next) return;
+    const id = this.nextProjectileId++;
+    const z = p.impactZ;
+    const hop: SimProjectile = {
+      id,
+      x: struck.x,
+      y: struck.y,
+      z,
+      sourceId: p.sourceId,
+      targetId: next.id,
+      speed: p.speed,
+      damage: p.damage * (1 - b.loss),
+      art: p.art,
+      attackType: p.attackType,
+      weaponSound: p.weaponSound,
+      startZ: z,
+      impactZ: p.impactZ - struck.flyHeight + next.flyHeight,
+      startDist: Math.hypot(next.x - struck.x, next.y - struck.y),
+      arc: p.arc,
+      sourceOwner: p.sourceOwner,
+      sourceTeam: p.sourceTeam,
+      targetTeleports: next.teleports,
+      bounce: { ...b, left: b.left - 1, hit: [...b.hit, next.id] },
+    };
+    this.projectiles.set(id, hop);
+    this.spawnedProjectiles.push({ id, art: hop.art, x: hop.x, y: hop.y, z: hop.z });
   }
 
   /**
@@ -23561,7 +23977,12 @@ export class SimWorld {
           // dealt"), so the debuff half of an orb goes on first and the rest after.
           this.applyOrbArmorFirst(this.units.get(p.sourceId), t, p.orb);
           const hitsBefore = this.hits.length;
-          const dealt = this.applyDamage(t, p.damage, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true);
+          // A MISSILE (SPLASH) shot is a splash attack, and a splash attack that misses still
+          // bursts at a reduced share (see applyAreaSplash) — so its one roll is made here, for
+          // the struck unit and the rings alike, and `applyDamage` is told not to roll again.
+          const share = p.splash ? this.splashHitShare(this.units.get(p.sourceId), t) : 1;
+          const dealt = this.applyDamage(t, p.damage * share, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true, !!p.splash);
+          if (p.splash) this.applyMissileSplash(p, t, share);
           // The blow this missile struck is ITS hit: tag it with the art that flew, so the noise
           // is ChimaeraAcidMissile's "ChimaeraAcidHit" on a building and the lightning ball's
           // own on a soldier — each read off its model's SND event (AnimLookups MCAH → the three
@@ -23573,6 +23994,7 @@ export class SimWorld {
           const shooter = this.units.get(p.sourceId);
           if (shooter) this.applyPillage(shooter, t, dealt); // ranged Pillage (Raider) off a struck building
           if (p.spill) this.applySpill(p, t); // Storm Hammers / Impaling Bolt carry on down the line
+          if (p.bounce) this.bounceOn(p, t); // a glaive leaves again for the next body
         }
         this.removeProjectile(p.id);
       } else {
@@ -23681,30 +24103,91 @@ export class SimWorld {
     const aimed = p.targetId ? this.units.get(p.targetId) : undefined;
     const aimedCaught = !!aimed && aimed.hp > 0 && !aimed.invulnerable
       && Math.hypot(aimed.x - a.aimX, aimed.y - a.aimY) - aimed.radius <= outer;
-    const missed = (!!shooter && this.rollMiss(shooter)) || (aimedCaught && this.tryEvade(aimed!));
-    const hitShare = missed ? 1 - (miscGame("MissDamageReduction") as number) : 1;
-    const ring = (gap: number): number => hitShare * (gap <= a.full ? 1 : gap <= a.half ? a.halfFactor : gap <= a.quarter ? a.quarterFactor : 0);
-    let nearest: SimUnit | undefined; // for an `aline` shot, whoever the line starts at
-    for (const t of this.units.values()) {
-      if (t.hp <= 0 || t.invulnerable || t.hidden || isOffField(t)) continue; // nobody there to hit
-      if (a.targets.length && !a.targets.includes(targetKeyOf(t))) continue;
-      if (!this.splashAdmits(source, t, a.targets)) continue;
-      const gap = Math.hypot(t.x - a.aimX, t.y - a.aimY) - t.radius;
-      // The outer rings' shares are the SLOT's own — a Mortar Team's "half" ring is 0.4 and
-      // its "quarter" ring 0.1. Only a row that states neither takes the names literally.
-      const frac = ring(gap);
-      if (frac <= 0) continue;
-      this.splatterId = t.id;
-      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true, true);
-      this.splatterId = 0;
-      if (shooter) this.applyPillage(shooter, t, dealt); // a Demolisher with Pillage loots what it shells
-      if (frac === hitShare && !nearest && this.hostile(source, t)) nearest = t;
-    }
+    const hitShare = this.splashHitShare(shooter, aimedCaught ? aimed : undefined, { x: a.aimX, y: a.aimY });
+    const ring = (gap: number): number => hitShare * ringShare(a, gap);
+    // What it kills SPLATTERS (the doc comment above) — an artillery rule, not a splash one.
+    const nearest = this.burstRings(p, a, source, a.aimX, a.aimY, hitShare, { splatter: true });
     if (a.targets.includes("tree")) this.shellTrees(a.aimX, a.aimY, outer, (gap) => p.damage * ring(gap));
     this.applyShellPassives(shooter, a.aimX, a.aimY, p.attackType ?? AttackType.None); // Fragmentation Shards, Burning Oil
     // Artillery (Line) — the Glaive Thrower — is BOTH: it bursts, and with Impaling Bolt
     // researched the bolt carries on down the line from whoever it hit (see applySpill).
     if (p.spill && nearest) this.applySpill(p, nearest);
+  }
+
+  /**
+   * One burst's damage to every unit in its rings around (x, y): the ring's share of the
+   * shot, to whoever `splashTargs` admits by kind and by allegiance (`splashAdmits`). Shared by
+   * the artillery shell (applyAreaSplash) and the splash missile (applyMissileSplash), which
+   * differ only in where the centre is, in `skipId` (the unit a homing missile already struck
+   * in full) and in `splatter`. Returns the first hostile body in the full ring, which is
+   * where an `aline` shot's spill starts.
+   */
+  private burstRings(
+    p: SimProjectile, a: SplashRings, source: SimUnit, x: number, y: number, hitShare: number,
+    opts: { skipId?: number; splatter?: boolean } = {},
+  ): SimUnit | undefined {
+    const shooter = this.units.get(p.sourceId);
+    let nearest: SimUnit | undefined;
+    for (const t of this.units.values()) {
+      if (t.id === opts.skipId) continue;
+      if (t.hp <= 0 || t.invulnerable || t.hidden || isOffField(t)) continue; // nobody there to hit
+      if (a.targets.length && !a.targets.includes(targetKeyOf(t))) continue;
+      if (!this.splashAdmits(source, t, a.targets)) continue;
+      const gap = Math.hypot(t.x - x, t.y - y) - t.radius;
+      // The outer rings' shares are the SLOT's own — a Mortar Team's "half" ring is 0.4 and
+      // its "quarter" ring 0.1. Only a row that states neither takes the names literally.
+      const frac = ringShare(a, gap) * hitShare;
+      if (frac <= 0) continue;
+      if (opts.splatter) this.splatterId = t.id;
+      const dealt = this.applyDamage(t, p.damage * frac, p.sourceId, p.attackType ?? AttackType.None, p.weaponSound ?? "", true, true);
+      this.splatterId = 0;
+      if (shooter) this.applyPillage(shooter, t, dealt); // a Demolisher with Pillage loots what it shells
+      if (frac === hitShare && !nearest && this.hostile(source, t)) nearest = t;
+    }
+    return nearest;
+  }
+
+  /**
+   * The burst of a MISSILE (SPLASH) shot — `weapTp` = `msplash`: the Chimaera's acid, the Frost
+   * Wyrm's breath, the Phoenix, Metamorphosis, the Ancient Protector's rock, Serpent Ward 4,
+   * every dragon (45 slots of Units\UnitWeapons.slk state rings). The missile HOMED and has
+   * just struck `struck` in full, so this is everybody ELSE in the slot's rings, measured from
+   * where that unit stands at the impact (issue #278 — these all hit a single target before).
+   *
+   * Everything else is the shell's rule, read off the same columns: `Farea`/`Harea`/`Qarea`
+   * at 1/`Hfact`/`Qfact`, and `splashTargs` for both the KIND and the ALLEGIANCE. Most of
+   * these rows name `enemy` (unlike the siege rows — docs/artillery.md), so a Frost Wyrm does
+   * not freeze its own Ghouls; the ones that name nobody (`[nadr]` = `ground`, the creep
+   * dragons and wyrms) burn whoever is standing there, exactly as the data says. A row with
+   * `tree` (the Destroyers') takes its share off the trunks too.
+   *
+   * What it does NOT do is splatter: "Units killed by Artillery attacks splatter" is
+   * Liquipedia's line about the Artillery weapon type, and this is not one.
+   */
+  private applyMissileSplash(p: SimProjectile, struck: SimUnit, hitShare: number): void {
+    const a = p.splash!;
+    const source = this.units.get(p.sourceId)
+      ?? (p.sourceOwner !== undefined
+        ? ({ id: p.sourceId, owner: p.sourceOwner, team: p.sourceTeam ?? p.sourceOwner, neutralPassive: false } as SimUnit)
+        : undefined);
+    if (!source) return;
+    this.burstRings(p, a, source, struck.x, struck.y, hitShare, { skipId: struck.id });
+    if (a.targets.includes("tree")) {
+      this.shellTrees(struck.x, struck.y, Math.max(a.quarter, a.half, a.full), (gap) => p.damage * hitShare * ringShare(a, gap));
+    }
+  }
+
+  /**
+   * How much of a SPLASH attack lands: 1, or 1 − `MissDamageReduction` when the attack missed.
+   * The miss is the ATTACK's and is rolled ONCE — the shooter's `miss` buffs (Curse, Drunken
+   * Haze) and the Evasion of the unit it was aimed at (`aimed`; pass none when the burst no
+   * longer catches it) — never once per body in the rings. `at` is the GROUND the shell was
+   * thrown at, for the one roll that needs no unit: a shell lobbed up a cliff (`rollMiss`).
+   */
+  private splashHitShare(shooter: SimUnit | undefined, aimed: SimUnit | undefined, at?: { x: number; y: number }): number {
+    const missed = (!!shooter && this.rollMiss(shooter, aimed ?? at, true)) || (!!aimed && this.tryEvade(aimed));
+    if (missed) this.noteMiss(aimed ?? at);
+    return missed ? 1 - (miscGame("MissDamageReduction") as number) : 1;
   }
 
   /** The unit a burst is striking this instant, so `kill` can make the death a splatter
@@ -24072,7 +24555,7 @@ export class SimWorld {
       mine.busyBy = u.id;
       u.inMine = true;
       u.inMineId = mine.id;
-      u.workT = MINE_TIME;
+      u.workT = this.mineTime();
       u.atNode = false;
       this.unsettle(u); // don't block cells while invisible inside
       u.moving = false;
@@ -24401,6 +24884,37 @@ export class SimWorld {
     return owner === undefined ? dmg : dmg * this.playerHandicap(owner);
   }
 
+  /**
+   * FROST ARMOR's other half: "slows melee units that attack it for <AUfu,Dur1> seconds"
+   * (UndeadAbilityStrings [AUfu] Ubertip; its buff's own, "melee units that attack it will
+   * have their movement speed and attack rate reduced for a short duration").
+   *
+   * Called from dealDamage alone, which is the melee blow — a missile never passes through it,
+   * so "melee" needs no test here. The striker takes the generic Slowed buff (`Bfro`, the row
+   * the creep Frost Armors name beside `BUfa` in their `BuffID`; Liquipedia's Slowed card lists
+   * Frost Armor among its sources) at the engine's own frost magnitudes — the ability's Data
+   * columns are its armour and nothing else — for the ROW's `Dur`/`HeroDur`: 4 s on the Lich's,
+   * 5 on the creeps', and resisted like any other debuff (spells.ts `dur`). `[BUfa] Specialart`
+   * (FrostArmorDamage.mdl, at `chest`) is the chill landing on the attacker (see
+   * AbilityDef.buffSpecialArt). Like an orb's slow it rides only a blow that CONNECTED.
+   */
+  private applyFrostArmorChill(attacker: SimUnit, target: SimUnit): void {
+    if (attacker.hp <= 0 || attacker.building) return;
+    const shield = target.buffs.find((b) => b.group === FROST_ARMOR_GROUP && b.kind === "armor" && b.procAbility);
+    const def = shield?.procAbility ? this.abilities?.get(shield.procAbility) : undefined;
+    const lvl = def?.levelData[Math.max(0, Math.min(shield!.procRank ?? 1, def.levelData.length) - 1)];
+    if (!def || !lvl) return;
+    const time = debuffDuration(lvl, attacker);
+    if (!(time > 0)) return;
+    const worn = this.abilities?.buffFx?.(SLOWED_BUFF) ?? [];
+    this.applyBuffInternal(attacker, {
+      kind: "slow", group: "frostarmorchill", timeLeft: time, sourceId: target.id,
+      value: slowedMove(), value2: slowedAttack(), buffId: SLOWED_BUFF, art: worn[0]?.path ?? "", fx: worn,
+    });
+    if (def.buffSpecialArt) this.spellEffects.push({ art: def.buffSpecialArt, x: attacker.x, y: attacker.y, targetId: attacker.id, z: 0, attach: def.buffSpecialAttach });
+    this.recomputeStats(attacker);
+  }
+
   /** Land a melee strike. `w` is the slot it was swung with — a Gargoyle's ground claws and
    *  its air spit have different attack types, so the damage table must see the right one. */
   private dealDamage(attacker: SimUnit, target: SimUnit, w: SimWeapon, bonus = 0): void {
@@ -24440,6 +24954,15 @@ export class SimWorld {
     }
     // Thorns Aura: the target returns a fraction of the damage to the attacker.
     if (target.thorns > 0 && dealt > 0) this.landDamage(attacker, dealt * target.thorns, target.id, false);
+    // Spiked Barricades (`Rosp`): "Surrounds Orc buildings with spikes that damage enemy melee
+    // attackers" — the flat `rspi` per blow plus 1.31's `rspp` share of the blow itself. A
+    // building still going up has no spikes yet, and `[Aspi] targs1 = enemy`.
+    if (target.building && dealt > 0 && !w.ranged && target.building.constructionLeft <= 0 && this.hostile(target, attacker)) {
+      const upg = this.upgradeBonuses(target);
+      const back = upg.spikes + upg.spikesPct * raw;
+      if (back > 0) this.landDamage(attacker, back, target.id, false);
+    }
+    if (dealt > 0) this.applyFrostArmorChill(attacker, target); // Frost Armor: the struck shield slows the striker
     if (dealt > 0) this.applyPulverize(attacker, target); // Tauren passive: chance for a splash
     this.applyOrbEffect(attacker, target, orb, dealt); // the one orb this swing carried
     this.applyStrikePassives(attacker, target, w.attackType); // War Club's strikes, Freezing Breath
@@ -24459,7 +24982,10 @@ export class SimWorld {
   }
 
   /** Pulverize (Tauren passive Awar): dataA% chance that a landed attack also deals dataB
-   *  damage to enemies within dataC of the struck target. */
+   *  damage around the struck target — in full inside `War3 "Full Damage Radius"` (DataC,
+   *  250) and HALF between that and `War4 "Half Damage Radius"` (DataD, 350). The outer ring
+   *  used to be dropped altogether (issue #290). Who it reaches is the row's own `targs1 =
+   *  ground,enemy,neutral`, so not a flyer and not a building. */
   private applyPulverize(attacker: SimUnit, target: SimUnit): void {
     const lvl = this.passiveLevelData(attacker, "Awar");
     // Pulverize is granted by the Pulverize upgrade (Rows, Awar's Requires) — the ability
@@ -24468,10 +24994,13 @@ export class SimWorld {
     const chance = this.dataOf(lvl, 0, 25) / 100; // dataA — % chance
     if (chance <= 0 || this.rng() >= chance) return;
     const dmg = this.dataOf(lvl, 1, 60); // dataB — splash damage
-    const radius = this.dataOf(lvl, 2, 250) || 250; // dataC — splash radius
-    for (const t of this.unitsInAreaInternal(target.x, target.y, radius)) {
-      if (t === attacker || t.building || !this.hostile(attacker, t)) continue;
-      this.landDamage(t, dmg, attacker.id, false); // spell-style splash, ignores further armor
+    const full = this.dataOf(lvl, 2, 250) || 250; // dataC — Full Damage Radius
+    const half = Math.max(full, this.dataOf(lvl, 3, 0)); // dataD — Half Damage Radius
+    const flags = this.passiveTargetFlags(attacker, "Awar");
+    for (const t of this.unitsInAreaInternal(target.x, target.y, half)) {
+      if (t === attacker || !this.hostile(attacker, t) || !this.targsAdmit(t, flags)) continue;
+      const inner = Math.hypot(t.x - target.x, t.y - target.y) - t.radius <= full; // edge-to-centre, as the area scan measures
+      this.landDamage(t, inner ? dmg : dmg / 2, attacker.id, false); // spell-style splash, ignores further armor
     }
   }
 
@@ -25090,8 +25619,10 @@ export class SimWorld {
     // Both are rolled ONCE per attack, and a SPLASH blow is a share of an attack whose roll
     // was already made (applyAreaSplash → `missedSplash`): a Demon Hunter standing in a
     // Mortar Team's outer ring does not get to dodge the ground under him.
-    if (!splash && this.tryEvade(target)) return 0;
-    if (!splash && attacker && this.rollMiss(attacker)) return 0;
+    if (!splash && (this.tryEvade(target) || (attacker && this.rollMiss(attacker, target, ranged)))) {
+      this.noteMiss(target);
+      return 0;
+    }
     // The script's DAMAGING event: the raw blow, before every reduction below — Defend, the
     // Arcanite Shield, the damage table, armour. "Misses don't trigger any damage events", which
     // is why it sits after the two rolls above. The attack TYPE it may change is the one the
@@ -25336,10 +25867,41 @@ export class SimWorld {
    *  AbilityMetaData gives Ocr4 `maxVal=1`, unlike the crit chance next to it. */
   /** Does this attacker's swing go wide? The highest `miss` buff it wears decides — the
    *  chances do not add up, the same way two slows don't (see recomputeStats). */
-  private rollMiss(attacker: SimUnit): boolean {
+  private rollMiss(attacker: SimUnit, at?: SimUnit | { x: number; y: number }, ranged = false): boolean {
     let chance = 0;
     for (const b of attacker.buffs) if (b.kind === "miss") chance = Math.max(chance, b.value);
-    return chance > 0 && this.rng() < chance;
+    if (chance > 0 && this.rng() < chance) return true;
+    // …and the one miss that is nobody's spell: shooting UPHILL. A draw of its own, made only
+    // when the shot IS uphill, so a fight on level ground rolls exactly what it always did.
+    return !!at && this.shootsUphill(attacker, at, ranged) && this.rng() < dataNum("ChanceToMiss");
+  }
+
+  /**
+   * HIGH GROUND: is this a ranged shot from a lower cliff level up at a higher one?
+   *
+   * `ChanceToMiss` (Units\MiscData.txt, 0.25) had no reader, so holding a cliff carried no
+   * advantage. The condition is the official basics page's ("High Ground"): a ranged unit
+   * shooting up misses 25% of the time. Read as:
+   *
+   *  - a LEVEL, not a height — the sampler `cliffApart` already uses (more than half a level
+   *    apart, so two bodies on one ramp are level with each other), never rolling terrain;
+   *  - RANGED weapons only, every delivery of them (the caller's own `ranged`);
+   *  - a BUILDING is exempt at neither end (the page is about towers on ramps);
+   *  - a FLYER at either end is. No reachable source says so; it follows from the rule being
+   *    about the ground a unit STANDS on, which is `cliffApart`'s reading too.
+   */
+  private shootsUphill(attacker: SimUnit, at: SimUnit | { x: number; y: number }, ranged: boolean): boolean {
+    if (!ranged || !this.cliffLevelAt || attacker.flying || ("flying" in at && at.flying)) return false;
+    return this.cliffLevelAt(at.x, at.y) - this.cliffLevelAt(attacker.x, attacker.y) > CLIFF_STEP / 2;
+  }
+
+  /** The red "miss" the client floats over what was shot at — for EVERY miss, an evade and a
+   *  Curse as much as a cliff. Over the unit and riding it, or on the ground a shell was thrown
+   *  at. The word itself is the client's (`GlobalStrings.fdf` `MISS`): `text` stays empty and
+   *  the renderer fills it in, so a localized install prints its own. */
+  private noteMiss(at: SimUnit | { x: number; y: number } | undefined): void {
+    if (!at) return;
+    this.combatTexts.push({ kind: "miss", unitId: "id" in at ? at.id : 0, x: at.x, y: at.y, text: "", colorSlot: -1, forPlayer: -1 });
   }
 
   private tryEvade(target: SimUnit): boolean {
@@ -25350,16 +25912,30 @@ export class SimWorld {
     return chance > 0 && this.rng() < chance;
   }
 
-  /** Cleaving Attack (ANca): the attacker splashes dataA of its swing to other
-   *  enemies within a short radius of the struck target (armor-reduced). */
+  /** The Targets Allowed of the passive `passiveLevelData` answers for — the unit's own ability
+   *  of this code, else the carried item's. Empty (restricts nothing) when there is no row. */
+  private passiveTargetFlags(u: SimUnit, code: string): string[] {
+    const ab = u.abilities.find((a) => a.code === code && a.level >= 1);
+    const def = ab ? this.abilityDefOf(ab) : this.itemAbility(u, code)?.def;
+    return def?.targetFlags ?? [];
+  }
+
+  /** Cleaving Attack (ANca): the attacker splashes dataA of its swing to other enemies
+   *  around the struck target (armor-reduced).
+   *
+   *  The radius is the row's `Area1` (250). It used to be read out of DataD, a column this
+   *  row does not fill — only DataA is — so it was always the 200 fallback (issue #290). And
+   *  WHAT it may strike is the row's own `targs1 = ground,enemy,neutral`: no `air`, no
+   *  `structure`, asked of the row rather than restated here. */
   private applyCleave(attacker: SimUnit, target: SimUnit, rawDamage: number): void {
     const lvl = this.passiveLevelData(attacker, "ANca");
     if (!lvl) return;
     const frac = this.dataOf(lvl, 0); // dataA — cleave fraction
     if (frac <= 0) return;
-    const radius = this.dataOf(lvl, 3, 200) || 200; // dataD — cleave radius
+    const radius = lvl.area || 250;
+    const flags = this.passiveTargetFlags(attacker, "ANca");
     for (const t of this.unitsInAreaInternal(target.x, target.y, radius)) {
-      if (t === target || t === attacker || t.building || !this.hostile(attacker, t)) continue;
+      if (t === target || t === attacker || !this.hostile(attacker, t) || !this.targsAdmit(t, flags)) continue;
       this.landDamage(t, rawDamage * frac, attacker.id, false); // splash ignores further armor tables
     }
   }
@@ -26068,7 +26644,7 @@ export class SimWorld {
         for (const t of this.unitsInAreaInternal(u.x, u.y, radius)) {
           if (t.id === u.id || t.hp <= 0 || !this.hostile(src, t)) continue;
           const k = radius > 0 ? Math.min(1, Math.hypot(t.x - u.x, t.y - u.y) / radius) : 0;
-          this.landDamage(t, full * (1 - k * (1 - edge)), burn.sourceId, false);
+          this.landDamage(t, full * (1 - k * (1 - edge)) * this.spellTypeMult(t), burn.sourceId, false);
         }
         if (def.specialArt) this.spellEffects.push({ art: def.specialArt, x: u.x, y: u.y, targetId: 0, z: 0, sound: true });
       }
@@ -26215,7 +26791,7 @@ export class SimWorld {
       this.recentDeaths.push({ id: u.id, typeId: u.typeId, owner: u.owner, x: u.x, y: u.y, facing: u.facing, at: this.elapsed });
     }
     this.rollCreepDrops(u); // creeps scatter their dropped-item table on death
-    this.dropInventory(u); // a dying non-hero inventory-unit drops its held items
+    this.dropInventory(u); // a dying non-hero drops its held items; a hero only its drop-on-death ones
     // A carrier that dies SPILLS: the bodies it was hauling land where the wreck does. They
     // were never consumed — a Meat Wagon borrows corpses, it does not use them up — so
     // deleting them with it would destroy something that still belongs to the field. (The
@@ -26347,13 +26923,22 @@ export class SimWorld {
    *  A HERO is the exception, and it is the important one: a dead hero in WC3 keeps its
    *  whole inventory and walks back out of the altar still carrying it. Dropping a hero's
    *  items would hand the killer six free artifacts and is not how the game plays. Only
-   *  non-hero inventory units (the `AInv` ability on a normal unit) drop what they carry. */
+   *  non-hero inventory units (the `AInv` ability on a normal unit) drop what they carry —
+   *  and, from a hero, the items marked "Dropped When Carrier Dies" (ItemData `drop`, or a
+   *  script's `SetItemDropOnDeath`): the capture-the-flag flags, which is what lets the
+   *  enemy who killed the flag-bearer pick the flag up (issue #231).
+   *
+   *  An UNDROPPABLE item stays with the body either way (`mayLeaveInventory`, the rule
+   *  `SetItemDroppableBJHint` states for every door out of an inventory). */
   private dropInventory(u: SimUnit): void {
-    if (u.isHero) return; // items ride with the hero through death and revival
+    // An illusion's inventory is a PICTURE of the original's (docs/illusions.md) — the same
+    // items, by id. A copy that dies must not hand the real flag to its killer.
+    if (u.isIllusion) return;
     let n = 0;
     for (let i = 0; i < u.inventory.length; i++) {
       const held = u.inventory[i];
       if (!held) continue;
+      if (u.isHero && !this.itemDropsOnDeath(held)) continue; // rides with the hero through death and revival
       if (!this.mayLeaveInventory(held)) continue; // it goes down with the body, not onto the grass
       u.inventory[i] = null;
       const ang = (n * 2.399963) % (Math.PI * 2);
@@ -26519,8 +27104,8 @@ export class SimWorld {
     const shop = this.units.get(shopId);
     if (!u || !shop || !u.inventory[slot] || !this.canPawnAt(shop) || this.castLocked(u) || this.itemsLocked(u)) return false;
     if (!this.shopServes(shopId, u.owner)) return false; // an enemy's shop takes nothing of yours either
-    const def = this.itemReg?.get(u.inventory[slot]!.itemId);
-    if (!def?.pawnable) return false;
+    const held = u.inventory[slot]!;
+    if (!this.itemPawnable(held.itemId, held.id)) return false;
     u.pendingSell = { shopId, slot };
     u.pendingGive = null;
     u.pendingUse = null;
@@ -27069,11 +27654,9 @@ export class SimWorld {
         // screen alone, exactly as a mined load does.
         case "AIgo": this.stashOf(u.owner).gold += d(0); this.floatCredit("gold", d(0), u.owner, u, u.id); fired = true; break;
         case "AIlu": this.stashOf(u.owner).lumber += d(0); this.floatCredit("lumber", d(0), u.owner, u, u.id); fired = true; break;
-        case "AIhe": fired = this.itemRestore(u, ad, 0, -1); break;
-        case "AIma": fired = this.itemRestore(u, ad, -1, 0); break;
-        case "AIha": fired = this.itemRestore(u, ad, 0, -1); break;
-        case "AImr": fired = this.itemRestore(u, ad, -1, 0); break;
-        case "AIra": fired = this.itemRestore(u, ad, 0, 1); break;
+        case "AIhe": case "AIma": case "AIha": case "AImr": case "AIra":
+          fired = this.itemRestore(u, ad, ITEM_RESTORE[ad.code][0], ITEM_RESTORE[ad.code][1]);
+          break;
         // Healing Salve / Clarity Potion / Potion & Scroll of Rejuvenation — restore over
         // TIME, not at once. DataA is the total hit points and DataB the total mana the
         // effect is worth across `Dur1`, so the per-second rate is the total over the
@@ -27488,6 +28071,12 @@ export class SimWorld {
       // exactly this: `Notownportalhalls` = "There are no friendly Town Halls to Town Portal
       // to." Answered on the CLICK so the scroll keeps its charge, as the staves are.
       if (ad.code === "AItp") return this.nearestHall(u.owner, u.x, u.y) ? null : "Notownportalhalls";
+      // A restore with nothing to restore: `useItem` keeps the charge, and this is the line
+      // that says why ("Hero has full health.", "Already at full mana." — itemRestoreError).
+      // (Only for an item that IS that one restore: a map's item with a second ability may
+      // still have something to do, and useItem fires whichever of them can.)
+      const full = def.abilities.length === 1 ? this.itemRestoreError(u, ad) : null;
+      if (full !== null) return full;
       // The UNIT-AIMED items. Each is refused by its own row's `targs1` and `Rng1` through the
       // one shared test a spell goes through (targetError) — which also asks the rules the flag
       // list cannot express (TARGET_RULES: the wand's mana pool, Control Magic's summons, the
@@ -27592,10 +28181,39 @@ export class SimWorld {
     const mana = val(manaIdx);
     let did = false;
     for (const t of this.itemAreaTargets(u, ad)) {
-      if (hp > 0 && t.hp < t.maxHp) { t.hp = Math.min(t.maxHp, t.hp + hp); did = true; }
-      if (mana > 0 && t.mana < t.maxMana) { t.mana = Math.min(t.maxMana, t.mana + mana); did = true; }
+      let restored = false;
+      if (hp > 0 && t.hp < t.maxHp) { t.hp = Math.min(t.maxHp, t.hp + hp); did = true; restored = true; }
+      if (mana > 0 && t.mana < t.maxMana) { t.mana = Math.min(t.maxMana, t.mana + mana); did = true; restored = true; }
+      // …and the art, one burst per unit that actually gained something: a potion's
+      // AImaTarget/AIheTarget lands on the drinker, a scroll's on every unit it heals.
+      if (restored && ad.targetArt) this.spellEffects.push({ art: ad.targetArt, x: t.x, y: t.y, targetId: t.id, z: 0 });
     }
     return did;
+  }
+
+  /** Why a RESTORE item pressed now would restore nothing — the [Errors] line the game keeps
+   *  for each shape of it — or null when somebody in its reach is short of what it gives (or
+   *  `ad` is no restore). The same walk `itemRestore` makes, so the two cannot disagree: the
+   *  press that keeps its charge is exactly the press that is told why (issue #299).
+   *
+   *  Three lines, one per shape of row: `HPmaxed` "Hero has full health." for the life half
+   *  alone (`UnitHPmaxed` "Already at full health." when the carrier is no hero — the split
+   *  the spell path makes, castError), `Manamaxed` "Already at full mana." for the mana half
+   *  alone, `HPmanamaxed` "Already at full mana and health." for a row carrying both. */
+  private itemRestoreError(u: SimUnit, ad: AbilityDef): string | null {
+    const idx = ITEM_RESTORE[ad.code];
+    if (!idx) return null;
+    const lvl = ad.levelData[0];
+    const val = (i: number) => (i < 0 || lvl?.data[i] === undefined || Number.isNaN(lvl.data[i]) ? 0 : lvl.data[i]);
+    const hp = val(idx[0]);
+    const mana = val(idx[1]);
+    for (const t of this.itemAreaTargets(u, ad)) {
+      if ((hp > 0 && t.hp < t.maxHp) || (mana > 0 && t.mana < t.maxMana)) return null;
+    }
+    if (hp > 0 && mana > 0) return "HPmanamaxed";
+    if (mana > 0) return "Manamaxed";
+    if (hp > 0) return u.isHero ? "HPmaxed" : "UnitHPmaxed";
+    return null;
   }
 
   // === the WORLD-LEVEL item actives (issue #130) ==========================================
@@ -28441,11 +29059,84 @@ export class SimWorld {
     return this.itemReg?.get(held.itemId)?.droppable ?? true;
   }
 
+  /** Why the item in `slot` may not be dropped, handed over or sold — a commandstrings.txt
+   *  [Errors] key, or null when it may leave. The HUD asks before it spends the gesture, as it
+   *  asks `itemUseError` before a use (issue #299): the doors below all refuse an undroppable
+   *  item, and used to do it without a word.
+   *
+   *  The line is `Cantdrop` = "Item must remain in your inventory.", which sits in the file
+   *  beside `Cantpawn` and says what UI\TriggerStrings.txt says of SetItemDroppable ("cannot
+   *  be removed from a Hero's inventory"). Its near-namesake `Cantdropitem` = "Unable to drop
+   *  this item." is filed with `Canttakeitem` / `Cantuseitem`, the generic item-order
+   *  failures, and is not this rule's. (Read off the file's own grouping — not yet checked
+   *  against the running client.) */
+  itemLeaveError(unitId: number, slot: number): string | null {
+    const held = this.units.get(unitId)?.inventory[slot];
+    return held && !this.mayLeaveInventory(held) ? "Cantdrop" : null;
+  }
+
+  /**
+   * `SetItemDropOnDeath(item, flag)` — whether THIS item falls out of a dying hero's inventory
+   * (issue #231). Per-ITEM like `SetItemDroppable`, because common.j takes an `item`; only the
+   * override lives here, and an item nobody has called this on answers with its type's own
+   * `drop` column ("Dropped When Carrier Dies"). Read by `dropInventory` for heroes only — a
+   * non-hero carrier scatters what it holds regardless.
+   */
+  setItemDropOnDeath(id: number, flag: boolean): boolean {
+    if (!this.items.has(id) && !this.itemSnapshot(id)) return false;
+    this.itemDropOnDeathSet.set(id, flag);
+    return true;
+  }
+
+  /** The per-item `SetItemDropOnDeath` overrides — see there. Sparse, and dropped with the
+   *  item itself (`forgetItem`). */
+  private readonly itemDropOnDeathSet = new Map<number, boolean>();
+
+  /** Does this held item fall out of a dying HERO? The script's override, else the type's
+   *  own `drop` column. */
+  private itemDropsOnDeath(held: HeldItem): boolean {
+    const set = this.itemDropOnDeathSet.get(held.id);
+    if (set !== undefined) return set;
+    return this.itemReg?.get(held.itemId)?.dropOnDeath ?? false;
+  }
+
+  /**
+   * `SetItemPawnable(item, flag)` — whether a shop will BUY THIS ONE ITEM back (issue #230).
+   *
+   * Per-ITEM, like `SetItemDroppable` and for the same reason: common.j takes an `item`, not
+   * an item type, so a script may make one Claws of Attack unsellable and leave every other
+   * pair alone. Only the override lives here; an item nobody has called this on answers with
+   * its type's own `pawnable` column (`itemPawnable`). The handle keeps its own copy for
+   * `IsItemPawnable` — this is the one the SALE asks (pawnItem, issueSellItem, pawnPrice).
+   */
+  setItemPawnable(id: number, flag: boolean): boolean {
+    if (!this.items.has(id) && !this.itemSnapshot(id)) return false;
+    this.itemPawnableSet.set(id, flag);
+    return true;
+  }
+
+  /** The per-item `SetItemPawnable` overrides — see there. Sparse, and dropped with the item
+   *  itself (`forgetItem`). */
+  private readonly itemPawnableSet = new Map<number, boolean>();
+
+  /** Will a shop buy this item back? The script's per-item override when `entityId` names an
+   *  item it has spoken about, else the type's own `pawnable` column. With no `entityId` it is
+   *  the type alone (a price quoted off the row). */
+  itemPawnable(itemId: string, entityId?: number): boolean {
+    if (entityId !== undefined) {
+      const set = this.itemPawnableSet.get(entityId);
+      if (set !== undefined) return set;
+    }
+    return this.itemReg?.get(itemId)?.pawnable ?? false;
+  }
+
   /** An item entity is gone for good — drop anything remembered about it by id. Called from
    *  `RemoveItem` and nowhere else on purpose: `removeGroundItem` is ALSO how an item that was
    *  merely picked up leaves the ground, and the entity (and its flags) survive that. */
   private forgetItem(id: number): void {
     this.itemDroppable.delete(id);
+    this.itemPawnableSet.delete(id);
+    this.itemDropOnDeathSet.delete(id);
   }
 
   /** SetItemCharges. */
@@ -29270,6 +29961,33 @@ export class SimWorld {
     }
   }
 
+  /** `UnitWakeUp` (common.j; "This affects nocturnal sleep, not magical sleep",
+   *  UI\TriggerStrings.txt [UnitWakeUpBJHint]) — and so what blizzard.j's `EnableCreepSleepBJ(false)`
+   *  calls on every Neutral Hostile unit. Awake but not coming, as a creep that HEARD a shop being
+   *  used is (notifyCreepsOfShopUse): nothing here gives it a target, and its camp is not roused.
+   *  It does not stay up for the night either — the sleep rule still holds, so it dozes off again
+   *  once it is unprovoked — but not on the very next tick, or the native would be a no-op that
+   *  no script could observe: it gets the same CREEP_SLEEP_CALM a blow buys (`wokenAt`, campQuiet).
+   *  That calm is OURS, as CREEP_SLEEP_CALM itself is; no file says how soon a woken creep re-sleeps. */
+  wakeUnit(id: number): void {
+    const u = this.units.get(id);
+    if (!u || !u.asleep) return;
+    u.asleep = false;
+    u.wokenAt = this.elapsed;
+  }
+
+  /** `UnitAddSleep` — "Make Unit Sleep At Night" (UI\TriggerStrings.txt [UnitSetCanSleepBJ]): the
+   *  unit's `canSleep`, which a creep is seeded with off its UnitData row. Taking it away wakes the
+   *  unit now (tickCreep would on its next pass anyway), so `UnitIsSleeping` agrees at once. Only a
+   *  creep ever acts on it — "Units owned by players 1 though Max Player # never sleep"
+   *  ([UnitSetCanSleepBJHint]) — because only a creep runs tickCreep. */
+  setCanSleep(id: number, canSleep: boolean): void {
+    const u = this.units.get(id);
+    if (!u) return;
+    u.canSleep = canSleep;
+    if (!canSleep) u.asleep = false;
+  }
+
   /** Laying a new foundation notifies the creeps around it (MiscData
    *  BuildingPlacementNotifyRadius = 600) and they come to tear it down. The radius is
    *  measured from the building's edge, and it is quite separate from acquisition range —
@@ -29836,13 +30554,24 @@ export class SimWorld {
    * in pathTo; one that died or arrived simply lets it go. A search that lands is billed to
    * the allowance exactly as the one-frame search was, for what it actually spent.
    */
-  private pumpPathJob(): void {
+  /**
+   * Land the escalated path search in flight, now, rather than across the steps it was going to
+   * take (pumpPathJob). A SAVED GAME (docs/save-games.md) is the world written down, and a search
+   * half-way through is not something it can write: its working set is a scratch buffer and its
+   * walkability test a closure. The unit takes its route a few steps sooner than it would have —
+   * in the match that was saved and in the one loaded from it alike, which is what matters.
+   */
+  settleForSave(): void {
+    if (this.pathJob) this.pumpPathJob(Infinity);
+  }
+
+  private pumpPathJob(budget = PathSlicing.sliceExpansions): void {
     if (!this.pathJob && this.longSearchIn <= 0 && this.detourQueue.size > 0) this.serveDetourQueue();
     const job = this.pathJob;
     if (!job) return;
     simProfile.begin("sim.world.move.job");
     const before = job.search.expansions;
-    const done = job.search.run(PathSlicing.sliceExpansions);
+    const done = job.search.run(budget);
     simProfile.tally("pathExpansions", job.search.expansions - before);
     simProfile.end("sim.world.move.job");
     if (!done) return;
@@ -31097,6 +31826,12 @@ function launchPoint(u: SimUnit, lx: number, ly: number, lz: number): [number, n
  *  at the press, and where the caster stood then (a thrown wave's fallback origin). */
 type LiveSpellField = SpellFieldInit & { timer: number; done: number; team: number; flags: string[]; ox: number; oy: number };
 
+/** The share of a burst a body whose hull is `gap` from the centre takes: all of it inside
+ *  `Farea`, the slot's `Hfact` out to `Harea`, its `Qfact` out to `Qarea`, nothing beyond. */
+function ringShare(a: SplashRings, gap: number): number {
+  return gap <= a.full ? 1 : gap <= a.half ? a.halfFactor : gap <= a.quarter ? a.quarterFactor : 0;
+}
+
 /** An ARTILLERY slot — `weapTp` artillery or aline, the two kinds Liquipedia's Weapon Types
  *  page files under Artillery: the shot is thrown at an AREA rather than a unit ("they do not
  *  target units, but areas"), so it can be walked out from under, and the weapon brings the
@@ -31145,12 +31880,3 @@ function angleDiff(from: number, to: number): number {
   return diff;
 }
 
-// Deterministic RNG (plan §1.4: sim stays replayable) — Park–Miller LCG.
-function lcg(seed: number): () => number {
-  let s = seed % 2147483647;
-  if (s <= 0) s += 2147483646;
-  return () => {
-    s = (s * 16807) % 2147483647;
-    return (s - 1) / 2147483646;
-  };
-}

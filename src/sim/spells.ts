@@ -296,6 +296,9 @@ export interface SpellApi {
    *  `Ucb5 "Max Units Summoned"` cap, which is the only thing stopping a Crypt Lord
    *  turning a battlefield of corpses into an army. */
   countOwned(owner: number, typeId: string): number;
+  /** Seconds the caster's researched upgrades add to what its Raise Dead raises — the `rrai`
+   *  effect, Skeletal Mastery's "+<Rusl,base1> seconds" (SimWorld.sumUpgradeBonuses). */
+  raiseDeadBonus(caster: SimUnit): number;
 
   /** Mirror Image: run the caster-vanishes -> missiles -> illusions sequence (AOmi).
    *  Staged over time in the world, so the handler only kicks it off. */
@@ -377,6 +380,9 @@ export interface SimBuffInit {
   undispellable?: boolean;
   /** Laid by an AURA's refresh rather than cast. See SimBuff.aura. */
   aura?: boolean;
+  /** The ability (and rank) whose row a PROC of this buff reads. See SimBuff.procAbility. */
+  procAbility?: string;
+  procRank?: number;
 }
 
 /** The art half of an applyBuff: spread into a SimBuffInit (`...fx(def)`).
@@ -479,6 +485,15 @@ export interface SpellFieldInit {
   //                             takes (0.5 → half, Starfall's 0.35 → 35%). 0/absent = full.
   dot?: { dps: number; duration: number; heroDuration: number; group: string; art: string; buffId: string }; // per-wave
   //       burn left on everything the wave hits (Rain of Fire's "and N damage per second for 3 seconds").
+  /** A STUN laid on every non-building a wave hurts — Volcano's "causing N damage to each
+   *  target and stunning it for `Dur1` seconds" (2, `HeroDur1` 1 on a hero or a resistant
+   *  body, the `dur` rule). Re-laid by each wave, like `dot`. */
+  stun?: { duration: number; heroDuration: number; art: string; fx: BuffFx[]; buffId: string };
+  /** Two rings instead of one: the full `damagePerWave` inside `fullRadius` of the wave's
+   *  centre and `factor` × it from there out to `area` (measured to the body's edge, as the
+   *  area scan measures). Volcano's `Nvc6 "Half Damage Factor"`. The stun, the building
+   *  factor and everything else a wave does are the same in both rings. */
+  halfRing?: { fullRadius: number; factor: number };
   impactDelay?: number; // seconds between a wave's art SPAWNING and its damage landing. The shard
   //                       is a falling model, and WC3 hurts you when it hits the ground, not when
   //                       it appears in the sky. See SHARD_FALL.
@@ -680,6 +695,10 @@ function revealPlace(api: SpellApi, owner: number, team: number, x: number, y: n
 
 /** `FlareTarget.mdl` — what `[Xfla] Effectart` names, for a row whose effect object is missing. */
 const FLARE_TARGET_ART = "Abilities\\Spells\\Human\\Flare\\FlareTarget.mdx";
+/** One pass of the Drain models' Stand, in seconds — `ManaDrainCaster.mdx` and
+ *  `ManaDrainTarget.mdx` both carry `Stand [0, 1000]` (read off the install's models). How
+ *  long an instant press holds them before their Death (the Wand of Mana Stealing, `Aste`). */
+const MANA_DRAIN_STAND = 1;
 
 /**
  * A FLARE — the Mortar Team's `Afla` ("Launches a Dwarven flare above a target point, which
@@ -723,8 +742,12 @@ const SHARD_FALL = 0.8;
 const FLAMESTRIKE_PILLAR = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrike.mdx";
 const FLAMESTRIKE_EMBERS = "Abilities\\Spells\\Human\\FlameStrike\\FlameStrikeEmbers.mdx";
 
+/** The share of Volcano's `Area1` that takes FULL damage; the rest takes `Nvc6 "Half Damage
+ *  Factor"`. OURS — the row gives no radius for the ring (see the `ANvc` handler). */
+const VOLCANO_FULL_SHARE = 0.5;
+
 /** Effect duration on a target: heroes resist longer effects (herodur). */
-function dur(lvl: AbilityLevel, target: SimUnit): number {
+export function dur(lvl: AbilityLevel, target: SimUnit): number {
   // …and a RESISTANT unit takes the hero duration too — that is what Resistant Skin IS:
   // "effects last on resistant units as long as they would last on heroes" (Liquipedia).
   // Ensnare's 9 seconds become 3 on a Mountain Giant, a Tauren, an Avatar of Vengeance.
@@ -1164,6 +1187,9 @@ export function survivesDispel(b: { kind: BuffKind; group?: string; buffId?: str
  * what the frost sources share — and what a map's own frost ability names too.
  */
 export const SLOWED_BUFF = "Bfro";
+/** The buff group Frost Armor's shield is worn under — what a melee blow asks the struck unit
+ *  for (world.ts `applyFrostArmorChill`). */
+export const FROST_ARMOR_GROUP = "frostarmor";
 /**
  * Every buff row whose bearer is drawn CHILLED (rts.ts FROST_TINT): the generic Slowed buff
  * above, and Cold / Frost Arrows' own — AbilityData.slk gives `AHca` (the Ranger's Cold Arrows,
@@ -1410,6 +1436,15 @@ function keepAbilities(api: SpellApi, t: SimUnit): void {
   if (t.owner < 0 || t.abilities.every((a) => api.techMeets(t.owner, a.id))) t.mercenary = true;
 }
 
+/** Frost Armor's cast, shared by its two codes (`AUfu` autocast, `AUfa` plain) — see the
+ *  handlers' own comment for the row's columns. */
+const frostArmor: Handler = (api, caster, def, rank, ctx) => {
+  const t = api.getUnit(ctx.targetId);
+  if (!t || !api.ally(caster, t)) return;
+  const lvl = def.levelData[rank - 1];
+  api.applyBuff(t, { kind: "armor", group: FROST_ARMOR_GROUP, timeLeft: d(lvl, 0, 45), sourceId: caster.id, value: d(lvl, 1, 3), procAbility: def.id, procRank: rank, ...fx(def) });
+};
+
 export const SPELL_HANDLERS: Record<string, Handler> = {
   // Holy Light — heal a friendly living unit for dataA, or smite an enemy Undead
   // unit for dataA (the projectile/impact carries this on units with a missile;
@@ -1637,13 +1672,25 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       if (def.specialArt) api.emitEffect(def.specialArt, t.x, t.y, onUnit ? t.id : 0, undefined, def.specialAttach);
     };
     if (api.hostile(caster, t)) {
-      if (t.isSummon) { flash(false); api.spellDamage(t, 100000, caster.id); return; } // Purge destroys summons
-      // dataD = slow duration; heavy MOVE slow that recovers when it expires (no attack slow).
+      // `Prg3` "Summoned Unit Damage" — 400 (`ACpu` 200), the Ubertip's "Deals <Aprg,DataC1>
+      // damage to summoned units". It is a NUMBER: this used to be a flat 100000, which
+      // erased an Infernal that 400 leaves standing. A summon that survives is slowed like
+      // anything else; one that does not gets the flash where it stood.
+      if (t.isSummon) {
+        api.spellDamage(t, d(lvl, 2, 400), caster.id);
+        if (t.hp <= 0) { flash(false); return; }
+      }
+      // The slow lasts `Dur1` (15; `HeroDur1` 5 on a hero or a resistant body) — "Purged units
+      // will slowly regain their movement speed over <Aprg,Dur1> seconds". NOT DataD: that is
+      // `Prg4` "Unit Pause Duration", a real 0 on the Shaman's row, so reading it as the
+      // duration gave a slow that expired on the next tick — Purge never slowed anything
+      // (issue #286). Heavy MOVE slow, no attack slow; the speed coming back GRADUALLY over
+      // the duration is not modelled yet (it is flat, then gone).
       // The model ships the ensnare family's three SIZED sets ("Birth"/"… Medium"/"… Large"),
       // so the body's size rides on the buff exactly as a net's does (netFx, BuffFx.anim).
       const art = fx(def);
       const anim = api.bodySize(t);
-      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: d(lvl, 3, 3), sourceId: caster.id, value: 0.75, value2: 0, ...art, fx: art.fx.map((f) => ({ ...f, anim })) });
+      api.applyBuff(t, { kind: "slow", group: "purge", timeLeft: dur(lvl, t), sourceId: caster.id, value: 0.75, value2: 0, ...art, fx: art.fx.map((f) => ({ ...f, anim })) });
     } else flash(true);
     if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
   },
@@ -2181,11 +2228,14 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // damage is instant and uncapped by travel), so each one is dropped as a one-shot on the
   // unit it is meant for, which is where WC3's land too.
   //
-  // The BURST is not emitted here: it is the Warden's own spin-up, so it plays at the start
-  // of the wind-up with the gesture (world.ts CAST_START_ART), a Cast Point ahead of the
-  // blades it throws. Only the blades belong to this instant.
+  // The BURST is emitted here too, riding the Warden, and NOT at the start of the wind-up
+  // where it once was (world.ts CAST_START_ART): the wind-up can be interrupted — a stun
+  // landing in her 0.5 s Cast Point — and the burst then played over a cast that never
+  // happened, with no damage dealt, no mana spent and no cooldown started. Only a cast that
+  // completes reaches this handler, so the knives are seen exactly when they are thrown.
   AEfk: (api, caster, def, rank) => {
     const lvl = def.levelData[rank - 1];
+    if (def.effectArt) api.emitEffect(def.effectArt, caster.x, caster.y, caster.id);
     const hit = enemiesInArea(api, caster, def, caster.x, caster.y, lvl.area || 400);
     const per = d(lvl, 0, 75);
     const cap = d(lvl, 1, 0);
@@ -2555,7 +2605,9 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     // nothing and the spell was also silent (Silence1.wav resolves off this model).
     if (def.effectArt) api.emitEffect(def.effectArt, ctx.x, ctx.y, 0);
     for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, lvl.area || 300)) {
-      api.applyBuff(t, { kind: "silence", group: "silence", timeLeft: lvl.duration || 8, sourceId: caster.id, ...fx(def) });
+      // `dur`: 16/20/24 s on a unit and `HeroDur` 8/10/12 on a hero or a resistant body. It
+      // used to be `Dur` for everyone, so a hero was silenced twice as long as the row allows.
+      api.applyBuff(t, { kind: "silence", group: "silence", timeLeft: dur(lvl, t) || 8, sourceId: caster.id, ...fx(def) });
     }
   },
 
@@ -2595,7 +2647,13 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
       const ang = (i / 9) * Math.PI * 2;
       api.emitEffect(FLAMESTRIKE_EMBERS, ctx.x + Math.cos(ang) * ringR, ctx.y + Math.sin(ang) * ringR, 0);
     }
-    const total = caster.isHero && lvl.heroDuration > 0 ? lvl.heroDuration : lvl.duration || 9;
+    // The schedule is `Dur1` (9) and never `HeroDur1` (2.67): a hero duration is what an
+    // effect lasts ON a hero, and this is a fire on the ground. It used to be picked off the
+    // CASTER being a hero — which the Blood Mage always is — so the pillar burned for 0.89 s
+    // (three waves, 45 damage) where the Ubertip says "for 3 seconds" (nine, 135), and the
+    // whole spell for 2.67 s instead of 9 (issue #285). What 2.67 is FOR on this row is not
+    // stated anywhere we have read; nothing here uses it.
+    const total = lvl.duration || 9;
     const fullDur = total / 3; // the "3 seconds" full-damage pillar (Dur=9 → 3s)
     const fullInt = d(lvl, 1, 0.33) || 0.33; // Full Damage Interval
     const halfInt = d(lvl, 3, 1) || 1; // Half Damage Interval
@@ -2725,12 +2783,45 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
   },
 
-  // Volcano (Firelord, ult) — sustained eruption damaging the target area. Its damage type is
+  // Volcano (Firelord, ult) — a wave of molten rock every few seconds. Its damage type is
   // NORMAL (Hive 316271, and Tasyen's own test in that thread: "Vulkan DAMAGE_TYPE_NORMAL"),
   // so it reaches a spell-immune unit (FIELD_PIERCES_SPELL_IMMUNITY) and not an ethereal one.
+  //
+  // Columns Nvc1..Nvc6 (AbilityMetaData.slk), read against the row's own Ubertip — "Every
+  // <DataC1> seconds, a wave of molten rocks is hurled … causing <DataE1> damage to each
+  // target and stunning it for <Dur1> seconds. Buildings take <DataD1> times more damage …
+  // Lasts 35 seconds.":
+  //   DataA "Rock Ring Count"          3     presentation — not modelled
+  //   DataB "Wave Count"               8     ┐ a wave on the press and one every 5 s after:
+  //   DataC "Wave Interval"            5     ┘ 0, 5 … 35, which is the tooltip's 35 seconds
+  //   DataD "Building Damage Factor"   2
+  //   DataE "Full Damage Amount"       100
+  //   DataF "Half Damage Factor"       0.5   the outer ring's share — see below
+  //   Dur / HeroDur                    2 / 1 the stun (`[BNvc]`, the Thunder Clap stars)
+  // The handler used to read DataB — the wave COUNT — as its damage, twelve times a second
+  // apart: 96 damage in all where the row says eight waves of 100 (issue #283).
+  //
+  // WHERE the half-damage ring starts is OURS, and the one number here that is. The row
+  // states the factor and exactly one distance (`Area1` = 500); no column, no string and
+  // nothing we could find written about the spell says where full damage stops, and the
+  // real spell throws individual rocks whose landing pattern (DataA's rings) we do not
+  // model either. So the two zones are laid out the way every OTHER full/half pair in the
+  // data is — full damage inside, the factor outside, the named area the outer edge
+  // (Pulverize's `War3`/`War4`, a weapon's Farea/Harea) — with the boundary at
+  // VOLCANO_FULL_SHARE of `Area1`: full to 250, half from 250 to 500. Retune that constant,
+  // not the handler, if the client is ever measured.
   ANvc: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    api.addSpellField({ code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 500, damagePerWave: d(lvl, 1, 8), waves: 12, interval: 1, casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def), skipEthereal: true });
+    api.addSpellField({
+      code: def.code, x: ctx.x, y: ctx.y, area: lvl.area || 500,
+      damagePerWave: d(lvl, 4, 100),
+      waves: Math.max(1, Math.round(d(lvl, 1, 8))),
+      interval: d(lvl, 2, 5) || 5,
+      buildingReduction: d(lvl, 3, 2), // a SHARE of the wave, so 2 is the row's "2 times more"
+      halfRing: { fullRadius: (lvl.area || 500) * VOLCANO_FULL_SHARE, factor: d(lvl, 5, 0.5) },
+      stun: { duration: lvl.duration, heroDuration: lvl.heroDuration, ...fx(def) },
+      casterId: caster.id, art: fieldArt(def), loopSound: fieldLoop(def), skipEthereal: true,
+    });
   },
 
   // Earthquake (Far Seer, ult) — the ground itself comes apart. Columns Oeq1..Oeq4:
@@ -2748,7 +2839,12 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // slowed unit wears `[BOeq] Targetart` (StasisTotemTarget, overhead) through fx(def).
   AOeq: (api, caster, def, rank, ctx) => {
     const lvl = def.levelData[rank - 1];
-    const total = lvl.heroDuration || lvl.duration || 25;
+    // The FIELD runs `Dur1` (25) — the Ubertip's "Lasts <AOeq,Dur1> seconds", and the length
+    // of the channel that holds the Far Seer. `HeroDur1` (20) is what a hero duration always
+    // is: how long the effect lasts ON a hero, so it is the SLOW's, through `dur`. Reading it
+    // as the field's length cost the quake five of its twenty-five waves (1000 building
+    // damage for 1250) while the channel went on for all twenty-five (issue #289).
+    const total = lvl.duration || 25;
     const area = lvl.area || 250;
     api.addSpellField({
       code: def.code, x: ctx.x, y: ctx.y, area,
@@ -2762,7 +2858,7 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     });
     for (const t of enemiesInArea(api, caster, def, ctx.x, ctx.y, area)) {
       if (t.building) continue; // a building cannot be slowed; it is being knocked down instead
-      api.applyBuff(t, { kind: "slow", group: "quake", timeLeft: total, sourceId: caster.id, value: d(lvl, 2, 0.75), value2: 0, ...fx(def) });
+      api.applyBuff(t, { kind: "slow", group: "quake", timeLeft: dur(lvl, t) || total, sourceId: caster.id, value: d(lvl, 2, 0.75), value2: 0, ...fx(def) });
     }
   },
 
@@ -3194,14 +3290,17 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     if (mana > 0 || life > 0) api.missileBack(t, caster, def);
   },
 
-  // Frost Armor (Lich) — buff a friendly unit with +armour (dataB) for the
-  // duration (WC3 also slows melee attackers, which we don't model). Autocasts.
-  AUfu: (api, caster, def, rank, ctx) => {
-    const t = api.getUnit(ctx.targetId);
-    if (!t || !api.ally(caster, t)) return;
-    const lvl = def.levelData[rank - 1];
-    api.applyBuff(t, { kind: "armor", group: "frostarmor", timeLeft: lvl.duration || 60, sourceId: caster.id, value: d(lvl, 1, 3), ...fx(def) });
-  },
+  // Frost Armor (Lich; the creeps' `ACfa`/`ACf2`/`ACfu` on the same two codes) — "The shield
+  // adds <AUfu,DataB1> armor and slows melee units that attack it for <AUfu,Dur1> seconds.
+  // Lasts <AUfu,DataA1> seconds." (UndeadAbilityStrings [AUfu] Ubertip). So the row's TWO
+  // clocks are not where a buff's usually are: AbilityMetaData `Ufa1` "Armor Duration" is
+  // `DataA` (45 at every rank) and `Ufa2` "Armor Bonus" `DataB` (3/5/7), while `Dur`/`HeroDur`
+  // (4, the creeps' 5) is the length of the SLOW an attacker takes — read as the armour's it
+  // dropped the shield after four seconds (issue #284). The slow itself is laid at the blow
+  // (world.ts `applyFrostArmorChill`), off the ability and rank the shield remembers here.
+  AUfu: frostArmor,
+  // The same spell without the autocast toggle: `[AUfa]`, and the code behind the creeps' `ACfa`.
+  AUfa: frostArmor,
 
   // Far Sight (Far Seer) — "Reveals the area of the map that it is cast upon for <AOfs,Dur1>
   // seconds. Also reveals invisible units." (OrcAbilityStrings [AOfs]). Area1 is the radius
@@ -3391,12 +3490,21 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.emitLightning(def.lightning[0] ?? "LEAS", caster, t, d0, 0, drainTag(caster.id));
   },
 
-  // Death Pact (Death Knight) — sacrifice a friendly non-hero unit to heal the
-  // caster for its remaining hit points.
-  AUdp: (api, caster, def, _rank, ctx) => {
+  // Death Pact (Death Knight) — sacrifice a friendly non-hero unit and take its life.
+  // `Udp2 "Life Converted to Life"` (DataB) is 1 / 2 / 3 by rank — the Ubertip's "giving
+  // <AUdp,DataB1,%>% of its hit points", and classic.battle.net's Death Knight page: "100% /
+  // 200% / 300% conversion". The rank used to be ignored, so every rank healed 100%
+  // (issue #287).
+  //
+  // WHICH hit points — the sacrifice's maximum or what it has left — no source read for
+  // this states: the tooltip and the classic page both say only "its hit points". It is the
+  // MAXIMUM here, the reading Dark Ritual beside it makes of the same `Udp` column group.
+  // Unverified against the client; if it is measured otherwise, both change together.
+  AUdp: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t || !api.ally(caster, t) || t.isHero) return;
-    api.spellHeal(caster, t.maxHp);
+    const lvl = def.levelData[rank - 1];
+    api.spellHeal(caster, t.maxHp * d(lvl, 1, 1));
     // One model per end of the pact, as UndeadAbilityFunc [AUdp] names them:
     //   Casterart = …\Undead\DeathPact\DeathPactCaster.mdl   the life arriving, on the Death Knight
     //   Targetart = …\Undead\DeathPact\DeathPactTarget.mdl   the sacrifice, at its `origin`
@@ -3993,6 +4101,22 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Ubertip is what the reading follows, and DataA is taken as a flat 50 mana rather than as
   // a percentage of the target's pool. Flagged rather than guessed at silently: settling it
   // wants a measurement against the real client.
+  //
+  // It is SEEN at both ends and HEARD at the user's (ItemAbilityFunc [Aste]):
+  // `Casterart = …\Other\Drain\ManaDrainCaster.mdl` on the user's chest and
+  // `Targetart = …\Other\Drain\ManaDrainTarget.mdl` on the victim's — the Drain's own pair,
+  // the mana streaming out of one body and into the other. The SOUND rides the caster model:
+  // ManaDrainCaster.mdx parks one event, `SNDXAHDR`, on the first frame of its Birth (1133),
+  // and AnimLookups turns AHDR into the AnimSounds row `SiphonManaCaster` →
+  // `Abilities\Spells\Other\Drain\SiphonMana.wav`. The press's cast sound reaches it off the
+  // art (castFires → playSpellSound walks the row's arts' Birth events), so nothing is cued
+  // here — emitting `events` as well would play it twice.
+  //
+  // Both models are authored for a CHANNEL: a 134 ms Birth, a looping Stand [0, 1000] that is
+  // the only clip whose emitters are switched on (every KP2V track drops to 0 at 1500, the
+  // first frame of Death), and a Death [1500, 2500] in which what was thrown settles. A
+  // plain one-shot plays only the Birth — one particle — so they are HELD for one pass of
+  // their own Stand (1 s, read off the model) and then let die: Birth, Stand, Death.
   Aste: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
     if (!t) return;
@@ -4000,7 +4124,8 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     const stolen = api.burnMana(t, d(lvl, 0, 50));
     caster.mana = Math.min(caster.maxMana, caster.mana + stolen);
     api.emitLightning(def.lightning[0] ?? "", t, caster, undefined, undefined, undefined, true);
-    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id);
+    if (def.casterArt) api.emitEffect(def.casterArt, caster.x, caster.y, caster.id, MANA_DRAIN_STAND, def.casterAttach, { anim: "hold" });
+    if (def.targetArt) api.emitEffect(def.targetArt, t.x, t.y, t.id, MANA_DRAIN_STAND, def.targetAttach, { anim: "hold" });
   },
 
   // Wand of Shadowsight (`Ashs`) — "Gives the player vision of a target unit until that unit
@@ -4413,13 +4538,19 @@ function summonFromCorpse(api: SpellApi, caster: SimUnit, def: AbilityDef, rank:
   const [corpse] = api.claimCorpses(caster, def, caster.x, caster.y, corpseReach(def.code, lvl), 1);
   if (!corpse) return;
   const art = summonArt(def);
-  const life = lvl.heroDuration || lvl.duration || 0;
+  let life = lvl.heroDuration || lvl.duration || 0;
+  if (life > 0 && def.code === "Arai") life += api.raiseDeadBonus(caster);
   const n = Math.max(1, d(lvl, 0, 1));
+  const unit2 = (lvl.dataStr[3] || "").trim();
+  const n2 = unit2.length === 4 ? Math.max(0, d(lvl, 1, 0)) : 0;
   if (evicts && cap > 0) api.summonCapMake(caster.id, beetleTypes(def), cap, n);
   // …and they climb out of the body, so they land ON it (atPoint) rather than a step in
   // front of the caster — who, for Raise Dead, is 600 units away.
   for (let i = 0; i < n; i++) {
     api.requestSummon(unit, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, life, caster.id, art, true, o.bound);
+  }
+  for (let i = 0; i < n2; i++) {
+    api.requestSummon(unit2, corpse.x, corpse.y, corpse.facing, caster.owner, caster.team, life, caster.id, art, true, o.bound);
   }
 }
 
@@ -4547,7 +4678,9 @@ export interface AuraEffect {
 export const AURA_BUFFS: Record<string, (lvl: AbilityLevel) => AuraEffect[]> = {
   AHad: (lvl) => [{ kind: "armor", value: d(lvl, 0, 1.5) }], // Devotion — +armour
   AHab: (lvl) => [{ kind: "manaRegen", value: d(lvl, 0, 0.75) }], // Brilliance — +mana regen/sec
-  AOae: (lvl) => [{ kind: "haste", value: d(lvl, 0, 0.1), value2: d(lvl, 0, 0.1) }], // Endurance — +move & attack speed
+  // Endurance — `Oae1 "Movement Speed Increase (%)"` 0.10/0.20/0.30 and `Oae2 "Attack Speed
+  // Increase (%)"` 0.05/0.10/0.15. Two columns: reading DataA for both doubled the attack half.
+  AOae: (lvl) => [{ kind: "haste", value: d(lvl, 0, 0.1), value2: d(lvl, 1, 0.05) }],
   AUau: (lvl) => [
     { kind: "haste", value: d(lvl, 0, 0.1), value2: 0 }, // Unholy — +move speed
     { kind: "hpRegen", value: d(lvl, 1, 0.5) }, // …and hp regen

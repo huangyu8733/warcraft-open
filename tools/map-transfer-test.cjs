@@ -65,7 +65,7 @@ async function room(mapBytes) {
     const seen = [];
     host.onChange = (s) => seen.push(s.downloads[JOINER.id]);
     const progress = [];
-    const got = await fetchMap(joiner.mapWire(), PATH, (f, size) => progress.push([f, size]), new AbortController().signal);
+    const got = await fetchMap(joiner.mapWire(), PATH, (f, size) => progress.push([f, size]), new AbortController().signal, "sd");
     check("every byte arrived, in order", got.length === bytes.length && got.every((b, i) => b === bytes[i]), true);
     check("progress ends at 1 and knows the size", progress[progress.length - 1], [1, bytes.length]);
     check("the host counted the joiner as downloading, up to 100%", seen.includes(100) && seen[0] !== undefined, true);
@@ -78,18 +78,18 @@ async function room(mapBytes) {
   console.log("\nthe host serves its room's map and nothing else");
   {
     const { joiner } = await room(new Uint8Array(10));
-    const err = await fetchMap(joiner.mapWire(), "war3.mpq", () => {}, new AbortController().signal).catch((e) => e.message);
+    const err = await fetchMap(joiner.mapWire(), "war3.mpq", () => {}, new AbortController().signal, "sd").catch((e) => e.message);
     check("another path is refused", err, "The host only sends the map of its own game.");
   }
   {
     const { joiner } = await room(null);
-    const err = await fetchMap(joiner.mapWire(), PATH, () => {}, new AbortController().signal).catch((e) => e.message);
+    const err = await fetchMap(joiner.mapWire(), PATH, () => {}, new AbortController().signal, "sd").catch((e) => e.message);
     check("a host that cannot read its map says so", err, "The host could not read its map.");
   }
   {
     const { joiner } = await room(new Uint8Array(10));
     const ac = new AbortController();
-    const p = fetchMap(joiner.mapWire(), PATH, () => {}, ac.signal);
+    const p = fetchMap(joiner.mapWire(), PATH, () => {}, ac.signal, "sd");
     ac.abort();
     check("Cancel rejects at once", await p.catch((e) => e.name), "AbortError");
   }
@@ -99,7 +99,7 @@ async function room(mapBytes) {
     const bytes = new Uint8Array(MAP_CHUNK * 40);
     const { host, joiner, ht } = await room(bytes);
     const ac = new AbortController();
-    const p = fetchMap(joiner.mapWire(), PATH, (f) => { if (f > 0.2) ac.abort(); }, ac.signal).catch(() => {});
+    const p = fetchMap(joiner.mapWire(), PATH, (f) => { if (f > 0.2) ac.abort(); }, ac.signal, "sd").catch(() => {});
     await p;
     await tick();
     check("mid-download the host lists the joiner", JOINER.id in host.snapshot.downloads, true);

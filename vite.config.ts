@@ -9,6 +9,7 @@ import { matchLog } from "./tools/vite-plugin-match-log";
 import { perfLog, perfLogDefines } from "./tools/vite-plugin-perf-log";
 import { relay } from "./tools/vite-plugin-relay";
 import { replays } from "./tools/vite-plugin-replays";
+import { saves } from "./tools/vite-plugin-saves";
 import { simFingerprint } from "./tools/sim-fingerprint.mjs";
 
 // Static build, engine code only — no assets are ever bundled or hosted (see plan §0, §8).
@@ -65,7 +66,7 @@ const base = process.env.WARCRAFT_OPEN_BASE || "/";
 
 export default defineConfig({
   base,
-  plugins: [devInstall(), driveProxy(), mapSiteProxy(), perfLog(), matchLog(), replays(), relay()],
+  plugins: [devInstall(), driveProxy(), mapSiteProxy(), perfLog(), matchLog(), replays(), saves(), relay()],
   define: {
     ...perfLogDefines(),
     __OW3_VERSION__: JSON.stringify(version),

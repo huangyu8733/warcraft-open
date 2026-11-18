@@ -6,6 +6,7 @@ import { getPublishedMap } from "@/lib/db/queries/maps";
 import { mapFileName } from "@/lib/mapFile";
 import { listMapLanguageFiles } from "@/lib/mapLanguages";
 import { formatBytes, formatDate } from "@/lib/format";
+import { flavorLabel } from "@/components/site/MapCard";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +88,10 @@ export default async function MapDetailPage({
                 <dd>{map.version}</dd>
               </div>
             ) : null}
+            <div>
+              <dt>{dict.maps.flavor}</dt>
+              <dd>{flavorLabel(map.flavors, dict)}</dd>
+            </div>
             {map.file_size ? (
               <div>
                 <dt>{dict.maps.size}</dt>

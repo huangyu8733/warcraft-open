@@ -26,7 +26,7 @@ import { join } from "node:path";
 export const CHROMIUM_DIR = "Chromium";
 
 /** What is OURS at the top of the data folder — everything else there belongs to the engine. */
-const OURS = new Set(["settings.json", ".logs", "replays", CHROMIUM_DIR]);
+const OURS = new Set(["settings.json", ".logs", "replays", "saves", CHROMIUM_DIR]);
 
 /**
  * Point the engine at `<data>/Chromium` (moving an older install's files there first) and answer

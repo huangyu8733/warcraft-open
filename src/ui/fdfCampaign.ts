@@ -8,6 +8,7 @@ import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { arg, num, setProp, str } from "./mapBrowser";
+import { t as tr } from "../i18n";
 
 // The Campaign screen (issue #101), built from the game's own UI\FrameDef\Glue\CampaignMenu.fdf.
 //
@@ -201,6 +202,14 @@ export function mountCampaignScreen(
       rows.forEach((row, i) => {
         s.setEnabled(rowButton(i), row.entry.playable);
         if (row.entry.playable) wireRowText(s, i);
+        // An encrypted 3.0 DLC chapter (`data/campaigns.ts`): listed, but there is nothing to
+        // read, so it says why on hover instead of leaving a dead row with no explanation.
+        else if (row.entry.encrypted) {
+          const hint = tr("campaign.encrypted");
+          for (const frame of [s.frame(rowButton(i)), s.frame(rowLabel(i)), s.frame(rowDesc(i))]) {
+            if (frame) frame.title = hint;
+          }
+        }
       });
     } else {
       shown.forEach((_, i) => wireRowText(s, i));
@@ -272,7 +281,13 @@ function buildCampaignRoot(
   // The rows, into whichever of the two select frames this mode is.
   const container = state.chapters ? "MissionSelectFrame" : "CampaignSelectFrame";
   const built = state.chapters
-    ? buildRows(lib, rows.map(({ entry }) => ({ header: entry.header, name: entry.name, camera: !entry.playable })),
+    ? buildRows(lib, rows.map(({ entry }) => ({
+        header: entry.header,
+        name: entry.name,
+        // The film-camera marks a CINEMATIC (a movie or the model finale). An encrypted DLC
+        // chapter is a map that cannot be read — it keeps the mission arrow, disabled.
+        camera: !entry.playable && !entry.encrypted,
+      })),
         MISSION_PITCH, ROW_HEADER_FONT, ROW_NAME_FONT)
     : buildRows(lib, shown.map(({ campaign }) => ({ header: `${campaign.header}:`, name: campaign.name, camera: false })),
         CAMPAIGN_PITCH, CAMPAIGN_HEADER_FONT, CAMPAIGN_NAME_FONT);

@@ -35,6 +35,13 @@ export class PlacedIndex {
     return this.nextId++;
   }
 
+  /** Mark `id` as taken without handing it out. A SAVE GAME (game/saveState.ts) loads units
+   *  under the ids they had, and the counter has to clear them — otherwise the next trained
+   *  unit is given an id a loaded unit is already standing on. */
+  reserveUnitId(id: number): void {
+    if (id >= this.nextId) this.nextId = id + 1;
+  }
+
   /** Register the world positions of Neutral Passive entities (from the map's
    *  war3mapUnits.doo, player 15). trySeed matches rendered units to these and
    *  seeds them as non-hostile, yellow-ringed selectables. */

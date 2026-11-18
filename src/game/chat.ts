@@ -19,6 +19,9 @@
 // runs on (src/net/commandLink.ts): identity comes from the relay's own stamp, or a client
 // could speak as anybody.
 
+import { chatScopeEnabled, profanityFilterEnabled } from "../render/gameplayOptions";
+import { filterProfanity } from "./chatFilter";
+
 /** Who a message is addressed to. The `all`/`allies` pair is what the two send keys bind to
  *  (Enter and Ctrl+Enter); `private` is the F12 dialog's Send to Player. */
 export type ChatScope = "all" | "allies" | "observers" | "private";
@@ -56,6 +59,9 @@ export interface ChatWorld {
  */
 export function chatRecipients(line: ChatLine, world: ChatWorld): number[] {
   const { from, target } = line;
+  // Options → Gameplay → Communication: a channel that has been switched off is silent in both
+  // directions, so its line reaches nobody — the sender included.
+  if (!chatScopeEnabled(target.scope)) return [];
   const all = world.players();
   // A WATCHER's line reaches the other watchers and nobody else, whatever it was addressed to.
   // The bench is outside the game: an observer sees the whole map, so anything it says to a
@@ -212,7 +218,11 @@ export function formatChatLine(
   const tag = chatRecipientTag(line.target, strings);
   const said = paint(nameOf(line.from), colorOf(line.from));
   const dot = dotColorOf ? `${paint(CHAT_PLAYER_DOT, dotColorOf(line.from))} ` : "";
-  return `${tag ? `${tag} ` : ""}${dot}${said}: ${stripMarkup(line.text)}`;
+  // "Profanity Filter" is applied to the BODY at display time, after markup is stripped: a
+  // filter word can never be smuggled past it inside a colour code, and what a player typed is
+  // what the log/history still holds.
+  const body = stripMarkup(line.text);
+  return `${tag ? `${tag} ` : ""}${dot}${said}: ${profanityFilterEnabled() ? filterProfanity(body) : body}`;
 }
 
 /** A piece of a chat line in a colour, or bare when there is none to give it. */

@@ -53,6 +53,8 @@ const hooks = {
   getUnitX: (id) => (id === 1 ? 100 : 5000),
   getUnitY: (id) => (id === 1 ? 200 : 5000),
   isUnitIllusion: (id) => id === 1,
+  // Unit 1 rides in unit 2; nothing else is in a hold.
+  unitTransport: (id) => (id === 1 ? 2 : 0),
   unitRace: (id) => (id === 1 ? 'human' : 'orc'),
   isUnitIdType: (typeId, type) => typeId === 'Hamg' && type === 0,
   selectedUnits: (player) => (player === 0 ? [1] : []),
@@ -118,6 +120,18 @@ function HeroId takes nothing returns boolean
 endfunction
 function FootmanId takes nothing returns boolean
     return IsHeroUnitId('hfoo')
+endfunction
+function Loaded takes nothing returns boolean
+    return IsUnitLoaded(a)
+endfunction
+function CarrierNotLoaded takes nothing returns boolean
+    return IsUnitLoaded(b)
+endfunction
+function InItsTransport takes nothing returns boolean
+    return IsUnitInTransport(a, b)
+endfunction
+function InAnotherTransport takes nothing returns boolean
+    return IsUnitInTransport(b, a)
 endfunction
 function Illusion takes nothing returns boolean
     return IsUnitIllusion(a)
@@ -226,6 +240,10 @@ check('RACE_HUMAN matches a human', B('IsHuman'), true);
 check('…and RACE_ORC does not', B('IsOrc'), false);
 check('a hero type id is a hero', B('HeroId'), true);
 check('…and a Footman is not', B('FootmanId'), false);
+check('IsUnitLoaded: a unit riding in a hold is loaded (issue #298)', B('Loaded'), true);
+check('…and the transport carrying it is not', B('CarrierNotLoaded'), false);
+check('IsUnitInTransport: in the transport that holds it', B('InItsTransport'), true);
+check('…and not in some other unit', B('InAnotherTransport'), false);
 check('an illusion is one', B('Illusion'), true);
 check('…and the original is not', B('NotIllusion'), false);
 check('a selected unit is selected', B('Selected'), true);

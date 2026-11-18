@@ -42,9 +42,62 @@ const opt = (name) => {
 
 const EXTRACT = join(REPO, "Warcraft III", "ExtractedData", "merged");
 if (!fs.existsSync(join(EXTRACT, "Units", "UnitBalance.slk"))) {
-  console.log("skip  no extracted install (run `pnpm data:extract` on a 1.30.4 install)");
+  console.log("skip  no extracted install (run `pnpm data:extract`)");
   process.exit(0);
 }
+
+// --- the extraction may be NEWER than the base the patches are stated against ------------------
+// A 1.31.1 store (docs/casc.md, "1.31.1 — the Internet Archive's copy") is played as the 1.30.4
+// it came from: the mount puts every changed CELL back (src/vfs/downgrade.ts) and then lays the
+// patches over it. Without that step here, every patch written against 1.30.4 lands on tables
+// that already hold the later values, and the gate drowns in differences that are not patch
+// bugs. So mirror the mount: downgrade first.
+//
+// What the downgrade deliberately does NOT put back is wording (1.31 reworded tooltips, and
+// shipping Blizzard's text back would be shipping their bytes) and the ROWS later builds added.
+// A patch that `replace`s 1.30.4 wording or seeds a row with `$base` therefore cannot apply —
+// that is a property of the extraction, not of the patch, so it is reported as a note and the
+// run says how many there were (docs/casc.md, "What is NOT turned back").
+function extractedVersion() {
+  try {
+    const text = fs.readFileSync(join(REPO, "Warcraft III", ".build.info"), "latin1");
+    const [head, ...rows] = text.split(/\r?\n/).filter(Boolean);
+    const col = head.split("|").findIndex((c) => c.split("!")[0] === "Version");
+    const active = rows.find((r) => r.split("|")[1] === "1") ?? rows[0];
+    return active && col >= 0 ? active.split("|")[col] : null;
+  } catch {
+    return null;
+  }
+}
+const EXTRACT_VERSION = extractedVersion();
+// The JSON spells its paths the game's way (`Units\…`); index them the way every lookup here is
+// spelled (`patches.normalize`, lower-case with backslashes). Getting this wrong is silent: the
+// downgrade simply never runs and the notes below hide the fact that it should have.
+const DOWNGRADE = EXTRACT_VERSION?.startsWith("1.31.1")
+  ? new Map(
+      Object.entries(JSON.parse(fs.readFileSync(join(REPO, "src", "patches", "downgrade", "1.31.1.json"), "utf8")).files)
+        .map(([path, edits]) => [patches.normalize(path), edits]),
+    )
+  : null;
+/** The extraction's tables as the game would mount them — downgraded when it is a newer build. */
+function baseBytes(path) {
+  const bytes = install(path);
+  const edits = DOWNGRADE?.get(patches.normalize(path));
+  if (!edits || !bytes) return bytes;
+  const problems = [];
+  const out = patchTable(path, bytes, edits, problems);
+  for (const p of problems) fail(`downgrade ${path} [${p.row}] ${p.message}`);
+  return out;
+}
+/** Differences the extraction's own build makes unavoidable (see above). */
+const EXTRACT_DIFFERENCES = [
+  / has no ".*" to replace$/, // 1.30.4 wording, not a row/column typo
+  /removes a key ".*" the section does not have$/, // a key later builds dropped
+  /\$base on a (row|section) the file already has$/, // a row/section 1.31+ already ships
+];
+const unavoidable = (p) => DOWNGRADE !== null && EXTRACT_DIFFERENCES.some((re) => re.test(p.message));
+let expected = 0;
+const note = (msg) => { expected++; console.log(`note  ${msg}`); };
 
 /** Case-insensitive lookup into the extracted tree, like the archives it came out of. */
 function onDisk(p) {
@@ -105,7 +158,7 @@ const state = new Map(); // lower path → current bytes
 const seen = new Set();
 const read = (path) => {
   const key = path.toLowerCase();
-  if (!state.has(key)) state.set(key, install(path));
+  if (!state.has(key)) state.set(key, baseBytes(path));
   return state.get(key);
 };
 const target = opt("--level") ?? patches.LATEST_PATCH;
@@ -133,7 +186,11 @@ for (const patch of onDiskChain) {
       const problems = [];
       const before = new TextDecoder("windows-1252").decode(bytes);
       const after = patchTable(path, bytes, edits, problems);
-      for (const p of problems) fail(`${where}: ${p.file} [${p.row}] ${p.message}  — "${change.note}"`);
+      for (const p of problems) {
+        const line = `${where}: ${p.file} [${p.row}] ${p.message}  — "${change.note}"`;
+        if (unavoidable(p)) note(line);
+        else fail(line);
+      }
       // An edit that changes nothing is a misread row or a restated one.
       const { MappedData } = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist", "cjs", "utils", "mappeddata.js"));
       const was = new MappedData(before);
@@ -158,7 +215,7 @@ for (const patch of onDiskChain) {
 
 // --- 4. the chain the GAME folds matches the one applied step by step here ---------------------
 for (const path of seen) {
-  const direct = patchTable(path, install(path), patches.patchedEdits(path) ?? {}, [], true);
+  const direct = patchTable(path, baseBytes(path), patches.patchedEdits(path) ?? {}, [], true);
   const stepped = state.get(path.toLowerCase());
   const a = new TextDecoder("latin1").decode(direct);
   const b = new TextDecoder("latin1").decode(stepped);
@@ -180,7 +237,7 @@ const show = opt("--show");
 if (show) {
   const { MappedData } = require(join(REPO, "node_modules", "mdx-m3-viewer", "dist", "cjs", "utils", "mappeddata.js"));
   for (const path of seen) {
-    const was = new MappedData(new TextDecoder("windows-1252").decode(install(path))).getRow(show);
+    const was = new MappedData(new TextDecoder("windows-1252").decode(baseBytes(path))).getRow(show);
     const now = new MappedData(new TextDecoder("windows-1252").decode(state.get(path.toLowerCase()))).getRow(show);
     if (!was && !now) continue;
     console.log(`\n${path} [${show}]`);
@@ -200,6 +257,10 @@ if (dump) {
   ok(`wrote ${seen.size} patched tables to ${dump}`);
 }
 
+if (expected) {
+  console.log(`\n${expected} difference(s) the extraction itself makes: ${EXTRACT_VERSION} is newer than ${patches.BASE_PATCH},`);
+  console.log(`and the mount puts back its VALUES, not its wording or the rows it added (docs/casc.md).`);
+}
 if (failed) {
   console.error(`\n${failed} failure(s)`);
   process.exit(1);

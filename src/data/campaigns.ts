@@ -1,7 +1,10 @@
 import type { DataSource } from "../vfs/types";
+import { openCampaignArchive, type CampaignArchive } from "./campaignArchive";
 import { parseWar3Skins, skinValue, WAR3SKINS } from "./war3skins";
 import { isRoc, skinVersionSuffix } from "./edition";
+import { isHd } from "./flavor";
 import { decodeGameText } from "./text";
+import { parseFdf } from "../ui/fdf/parser";
 
 // The campaign index (issue #101) — what the Campaign screen is a view of.
 //
@@ -41,6 +44,32 @@ import { decodeGameText } from "./text";
 export const CAMPAIGN_INDEX = "UI\\CampaignStrings_exp.txt";
 /** Reign of Chaos's — `CampaignFile_V0`. */
 export const ROC_CAMPAIGN_INDEX = "UI\\CampaignStrings.txt";
+/**
+ * 3.0's campaign indexes, one per art line. They replace the two above (which 3.0 no longer
+ * ships) and differ in the maps they name: Reforged's are the HD `.w3x` chapters under
+ * `Campaign/Reforged/`, Classic's the SD `.w3m` copies under `Campaign/Classic/`. The format is
+ * otherwise the one documented above — same `CampaignList`, same `MissionN` rows — except that
+ * `Header`/`Name` are GlobalStrings KEYS ("CAMP_CHAPTER_1") rather than the words themselves.
+ */
+export const REFORGED_CAMPAIGN_INDEX = "UI\\CampaignInfoReforged.txt";
+export const CLASSIC_CAMPAIGN_INDEX = "UI\\CampaignInfoClassic.txt";
+/**
+ * 3.0's DLC campaigns, one index per DLC: `CampaignInfoDLC01.txt` is Forsaken Kingdom's
+ * (`[HumanRE]` / `[UndeadRE]`, `Expansion="DLC01"`). The install carries no list of them, so
+ * the mounted archives are asked for the pattern; the file name's number orders them after
+ * the base campaign list, which is where the reference client puts the DLC.
+ */
+const DLC_CAMPAIGN_INDEX = /^UI\\CampaignInfoDLC\d+\.txt$/i;
+/**
+ * A DLC chapter map's extension. `.w3xd` is 3.0's DLC container, and it is NOT a map archive:
+ * the file has no signature and Blizzard ships it encrypted so the campaign cannot be pulled
+ * out of CASC and played for free. The engine can list it but cannot read it, so entries that
+ * name one are marked `encrypted` rather than `playable` (see `parseEntry`).
+ */
+const ENCRYPTED_MAP = /\.w3xd$/i;
+
+/** The game's own string table — `CampaignInfo*.txt` names its rows through it. */
+const GLOBAL_STRINGS = "UI\\FrameDef\\GlobalStrings.fdf";
 
 /**
  * The map the main menu's **Credits** button plays.
@@ -57,16 +86,30 @@ export const ROC_CAMPAIGN_INDEX = "UI\\CampaignStrings.txt";
  * The dll spells all four under `maps\campaign\`, but the install puts the expansion's two
  * under `Maps\FrozenThrone\Campaign\` with the rest of the TFT campaign — so those are the
  * paths here, the install's own spelling rather than the string in the binary.
+ *
+ * 3.0 MOVED them: every campaign map now lives under `Maps\Campaign\Classic\<edition>\`, and
+ * the old `Maps\FrozenThrone\Campaign\` / `Maps\Campaign\*.w3m` paths are gone (verified
+ * against the 3.0.1 install: all four `vfs.exists` false). The maps themselves are the same
+ * files, re-saved by the 3.0 editor — w3i v39 / editor build 7003 — which is also what keeps
+ * them on the HD side of the flavour check (`compat/mapFormat.ts`), so the Reforged client can
+ * still play them. The DLC-era credits roll (`WebUI\Credits\*.jpg`, `ETC_Credits.avi`) is a
+ * 3.0 client feature this engine does not have; the map is what the button has always played.
  */
 export function creditsMap(): string {
+  if (isHd()) {
+    return isRoc()
+      ? "Maps\\Campaign\\Classic\\ROC\\WarCraftIIICredits.w3m"
+      : "Maps\\Campaign\\Classic\\TFT\\War3XRegularCreditsIce.w3x";
+  }
   return isRoc()
     ? "Maps\\Campaign\\WarCraftIIICredits.w3m"
     : "Maps\\FrozenThrone\\Campaign\\War3XRegularCreditsIce.w3x";
 }
 
 /** The racial cursor a campaign screen wears. From the file's own header comment:
- *  "Human = 0, Orc = 1, Undead = 2, Night Elf = 3." */
-export const CURSOR_RACES = ["Human", "Orc", "Undead", "NightElf"] as const;
+ *  "Human = 0, Orc = 1, Undead = 2, Night Elf = 3." — and 3.0's DLC index adds 4 for the
+ *  Forsaken (`[UndeadRE] Cursor=4`, and the install ships UI\Cursor\ForsakenCursor). */
+export const CURSOR_RACES = ["Human", "Orc", "Undead", "NightElf", "Forsaken"] as const;
 export type CursorRace = (typeof CURSOR_RACES)[number];
 
 /** One entry of a campaign's mission list, or one of its three cinematics — both are the
@@ -92,6 +135,9 @@ export interface CampaignEntry {
   mission: boolean;
   /** The file is a MAP this engine can start. False for the movies and for the model finale. */
   playable: boolean;
+  /** The file is a 3.0 DLC `.w3xd` — an encrypted container no reader here can open. It is
+   *  listed so the campaign is visible, but it is never offered as playable. */
+  encrypted: boolean;
 }
 
 export interface Campaign {
@@ -113,11 +159,20 @@ export interface Campaign {
   ambientSound: string | null;
   /** The campaign's chapters, in file order. */
   missions: CampaignEntry[];
+  /** Every chapter is an encrypted 3.0 DLC map (`CampaignEntry.encrypted`). Such a campaign is
+   *  listed as a catalogue entry: it is never gated behind the campaign before it, and its
+   *  chapters are all shown (disabled) rather than hidden behind progress that cannot happen. */
+  encrypted: boolean;
   /** Intro / Open / End cinematics, in the order the screen lists them (open first, at the
    *  top of the list, and end last — they bracket the missions). Empty keys are dropped. */
   intro: CampaignEntry | null;
   open: CampaignEntry | null;
   end: CampaignEntry | null;
+  /** The downloadable `.w3n` this campaign's chapters were unlocked from, when the install has
+   *  one (see `attachCampaigns`). Its bytes are where a chapter map is read from — the index's
+   *  own `.w3xd` is encrypted and unreadable — and where the campaign's shared object data and
+   *  imported art live. */
+  archive?: CampaignArchive;
 }
 
 /** Read and parse the current edition's campaign index out of the mounted install. Returns []
@@ -126,16 +181,103 @@ export async function loadCampaigns(vfs: DataSource): Promise<Campaign[]> {
   const skins = vfs.exists(WAR3SKINS)
     ? parseWar3Skins(new TextDecoder("latin1").decode(await vfs.read(WAR3SKINS)))
     : new Map<string, Map<string, string>>();
-  const file = skinValue(skins, "Default", "CampaignFile" + skinVersionSuffix())
-    ?? (isRoc() ? ROC_CAMPAIGN_INDEX : CAMPAIGN_INDEX);
-  if (!vfs.exists(file)) return [];
-  const src = decodeGameText(await vfs.read(file));
+  // The war3skins key first (1.30 and older), then the edition's unversioned index, then 3.0's
+  // per-art index. 3.0's war3skins has no `CampaignFile` entry at all, and neither
+  // `CampaignStrings*` file survives there, so the last candidate is what actually answers.
+  const file = [
+    skinValue(skins, "Default", "CampaignFile" + skinVersionSuffix()),
+    isRoc() ? ROC_CAMPAIGN_INDEX : CAMPAIGN_INDEX,
+    isHd() ? REFORGED_CAMPAIGN_INDEX : CLASSIC_CAMPAIGN_INDEX,
+  ].find((candidate): candidate is string => !!candidate && vfs.exists(candidate));
+  // 3.0's DLC campaigns are SEPARATE index files (CampaignInfoDLC01.txt, and one per DLC
+  // after it). They are appended to the base list in DLC-number order, which is where the
+  // reference client shows them — after the four base campaigns.
+  const dlc = vfs
+    .list()
+    .filter((path) => DLC_CAMPAIGN_INDEX.test(path))
+    .sort((a, b) => dlcNumber(a) - dlcNumber(b));
+  const files = file ? [file, ...dlc] : dlc;
+  if (!files.length) return [];
   // war3skins spells the backdrop `.mdl` (the World Editor's own spelling); the archives ship
   // the compiled `.mdx`. Same swap as everywhere else a data file names a model
   // (render/dayNight.ts, mapViewer.ts) — without it the campaign screen has no background.
-  return parseCampaigns(src, (key) =>
-    skinValue(skins, "Default", key + skinVersionSuffix())?.replace(/\.mdl$/i, ".mdx") ?? null,
-  isRoc() ? "RoC." : "");
+  // The unversioned lookup is what 3.0 answers: its war3skins dropped the `_V0`/`_V1` twins
+  // along with the second edition, so `HumanBackdrop` is the only spelling there is.
+  const resolveBackground = (key: string): string | null =>
+    (skinValue(skins, "Default", key + skinVersionSuffix()) ?? skinValue(skins, "Default", key))
+      ?.replace(/\.mdl$/i, ".mdx") ?? null;
+  const resolveText = await loadCampaignStrings(vfs);
+  const out: Campaign[] = [];
+  for (const path of files) {
+    const src = decodeGameText(await vfs.read(path));
+    // The `RoC.` key prefix belongs to Reign of Chaos's OWN index, never to a DLC one.
+    out.push(...parseCampaigns(src, resolveBackground, path === file && isRoc() ? "RoC." : "", resolveText));
+  }
+  await attachCampaigns(vfs, out);
+  return out;
+}
+
+/**
+ * Unlock the DLC campaigns whose chapters the install ALSO holds as a `.w3n`.
+ *
+ * 3.0's DLC index names encrypted `.w3xd` containers (see ENCRYPTED_MAP), so on the install
+ * alone those campaigns are catalogue entries that can never be played. The same campaigns are
+ * distributed as `.w3n` files — a whole campaign in one archive, chapter maps and all — and the
+ * `Maps\Download\` folder is where a player's own copies live. When one is there, every chapter
+ * the index names it by is unlocked: the index keeps the campaign's place in the list and the
+ * chapter titles the client shows, while the archive supplies the map bytes.
+ */
+const DOWNLOADED_CAMPAIGN = /^Maps\\Download\\[^\\]+\.w3n$/i;
+
+async function attachCampaigns(vfs: DataSource, campaigns: Campaign[]): Promise<void> {
+  const paths = vfs.list().filter((path) => DOWNLOADED_CAMPAIGN.test(path));
+  if (!paths.length) return;
+  for (const path of paths) {
+    let archive: CampaignArchive | null = null;
+    try {
+      archive = openCampaignArchive(await vfs.read(path), path);
+    } catch (err) {
+      console.warn(`[campaign] ${path} could not be read:`, err);
+    }
+    if (!archive) {
+      console.warn(`[campaign] ${path} is not a readable .w3n campaign archive — ignored`);
+      continue;
+    }
+    for (const c of campaigns) {
+      let unlocked = 0;
+      for (const mission of c.missions) {
+        if (!mission.encrypted || !archive.find(mission.file)) continue;
+        mission.encrypted = false;
+        mission.playable = true;
+        unlocked++;
+      }
+      if (!unlocked) continue;
+      c.archive = archive;
+      // Only once EVERY chapter is read: a campaign still holding one encrypted chapter is a
+      // catalogue entry, not a playable one.
+      if (!c.missions.some((mission) => mission.encrypted)) c.encrypted = false;
+      // A DLC is not gated behind the campaigns before it — it is its own shelf, and the
+      // player who downloaded it has bought it.
+      c.defaultOpen = true;
+      console.info(`[campaign] ${path} unlocked ${unlocked} chapter(s) of ${c.key}`);
+    }
+  }
+}
+
+/** The number in `CampaignInfoDLC01.txt`, for ordering the DLC list. */
+function dlcNumber(path: string): number {
+  const m = /dlc(\d+)\.txt$/i.exec(path);
+  return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+}
+
+/** `UI\CampaignInfo*.txt` (3.0) names its rows with GlobalStrings keys; the older indexes write
+ *  the words out. Filling the table covers both — a literal name is not a key, so it passes
+ *  through untouched. Empty without an install (or on an install whose GlobalStrings we cannot
+ *  read), which simply leaves those keys showing. */
+async function loadCampaignStrings(vfs: DataSource): Promise<(key: string) => string> {
+  if (!vfs.exists(GLOBAL_STRINGS)) return (key) => key;
+  const strings = parseFdf(decodeGameText(await vfs.read(GLOBAL_STRINGS))).strings;
+  return (key) => strings.get(key) ?? key;
 }
 
 /** The parse itself, split out so it can be run headlessly over the raw file. */
@@ -144,30 +286,40 @@ export function parseCampaigns(
   resolveBackground: (key: string) => string | null,
   /** Prepended to every campaign's key — `RoC.` for Reign of Chaos's file (see the header). */
   keyPrefix = "",
+  /** Turns a Header/Name into words — 3.0 stores GlobalStrings keys there (see above). */
+  resolveText: (key: string) => string = (key) => key,
 ): Campaign[] {
   const sections = parseSections(src);
+  // Section names are matched CASE-INSENSITIVELY: 3.0's DLC index spells its `CampaignList`
+  // entries `HumanRe`/`UndeadRe` while the sections above them are `[HumanRE]`/`[UndeadRE]`.
+  const byName = new Map([...sections].map(([name, body]) => [name.toLowerCase(), body]));
   const list = splitValues(sections.get("Index")?.get("CampaignList") ?? "")
     .map(unquote)
     .filter((s) => s.length > 0); // TFT leaves the RoC campaigns' slots empty
 
   const out: Campaign[] = [];
   for (const key of list) {
-    const s = sections.get(key);
+    const s = sections.get(key) ?? byName.get(key.toLowerCase());
     if (!s) continue;
     const bg = unquote(s.get("Background") ?? "");
+    const missions = parseMissions(s, resolveText);
     out.push({
       key: keyPrefix + key,
-      header: unquote(s.get("Header") ?? key),
-      name: unquote(s.get("Name") ?? ""),
+      header: resolveText(unquote(s.get("Header") ?? key)),
+      name: resolveText(unquote(s.get("Name") ?? "")),
       defaultOpen: (s.get("DefaultOpen") ?? "0").trim() === "1",
       background: bg ? resolveBackground(bg) : null,
       fog: parseFog(s),
       cursor: CURSOR_RACES[clampCursor(s.get("Cursor"))],
       ambientSound: unquote(s.get("AmbientSound") ?? "") || null,
-      missions: parseMissions(s),
-      intro: parseEntry(s.get("IntroCinematic")),
-      open: parseEntry(s.get("OpenCinematic")),
-      end: parseEntry(s.get("EndCinematic")),
+      missions,
+      // 3.0's DLC campaigns: every chapter is an encrypted `.w3xd`, so nothing in this
+      // campaign can be finished — which is why the menus must neither gate it behind the
+      // campaign before it nor hide its chapters behind progress that can never happen.
+      encrypted: missions.length > 0 && missions.every((m) => m.encrypted),
+      intro: parseEntry(s.get("IntroCinematic"), resolveText),
+      open: parseEntry(s.get("OpenCinematic"), resolveText),
+      end: parseEntry(s.get("EndCinematic"), resolveText),
     });
   }
   return out;
@@ -191,7 +343,12 @@ export function campaignRows(c: Campaign): CampaignEntry[] {
 function parseSections(src: string): Map<string, Map<string, string>> {
   const out = new Map<string, Map<string, string>>();
   let section = new Map<string, string>();
-  for (const raw of src.split(/\r?\n/)) {
+  // 1.31.1 ships the index with a UTF-8 BOM. `trim()` does not remove U+FEFF, and with it in
+  // front `[Index]` never matches — the whole campaign list came out empty. Both spellings are
+  // handled: the decoded BOM, and the three latin1 characters it becomes when a caller reads
+  // the file byte-per-char (`tools/campaign-index-test.cjs` does).
+  const text = src.replace(/^(\uFEFF|\u00EF\u00BB\u00BF)/, "");
+  for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("//")) continue;
     const head = /^\[(.+)\]$/.exec(line);
@@ -208,10 +365,10 @@ function parseSections(src: string): Map<string, Map<string, string>> {
 
 /** `Mission0`, `Mission1`, … in order, stopping at the first gap (the file numbers them
  *  contiguously; a gap means the campaign ended, not that we should keep scanning to 128). */
-function parseMissions(s: Map<string, string>): CampaignEntry[] {
+function parseMissions(s: Map<string, string>, resolveText: (key: string) => string): CampaignEntry[] {
   const out: CampaignEntry[] = [];
   for (let i = 0; ; i++) {
-    const entry = parseEntry(s.get(`Mission${i}`));
+    const entry = parseEntry(s.get(`Mission${i}`), resolveText);
     if (!entry) break;
     out.push({ ...entry, mission: true });
   }
@@ -221,12 +378,20 @@ function parseMissions(s: Map<string, string>): CampaignEntry[] {
 /** `"Header","Name","File"` — plus, on one Bonus-campaign row, a fourth field
  *  (`Mission1=…,"…OrcX02.w3x",1`, the chapter that continues across OrcX02_02…_10). It
  *  selects nothing we present, so it is read and dropped rather than guessed at. */
-function parseEntry(value: string | undefined): CampaignEntry | null {
+function parseEntry(value: string | undefined, resolveText: (key: string) => string): CampaignEntry | null {
   if (!value) return null;
   const parts = splitValues(value).map(unquote);
   if (parts.length < 3 || !parts[2]) return null;
   const file = parts[2];
-  return { header: parts[0], name: parts[1], file, mission: false, playable: /\.w3[mx]$/i.test(file) };
+  const encrypted = ENCRYPTED_MAP.test(file);
+  return {
+    header: resolveText(parts[0]),
+    name: resolveText(parts[1]),
+    file,
+    mission: false,
+    playable: !encrypted && /\.w3[mx]$/i.test(file),
+    encrypted,
+  };
 }
 
 function parseFog(s: Map<string, string>): Campaign["fog"] {

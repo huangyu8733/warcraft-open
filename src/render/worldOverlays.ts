@@ -1,6 +1,7 @@
 import { worldLayer } from "../ui/stage";
 import { wc3ToHtml } from "../ui/wc3Text";
 import type { Options } from "../data/options";
+import { heroStatusFrames, showGoldMineCounter, showHeroLevel } from "./gameplayOptions";
 
 // The floating world overlays: a status bar above every visible unit, and the hover
 // slab under the cursor. Both are DOM, both live in the world layer (ui/stage.ts),
@@ -534,6 +535,8 @@ export class WorldOverlays {
     const maxW = minW * STATBAR_MAX_W;
     const barH = Math.max(STATBAR_MIN_H, Math.round(g.clientH * STATBAR_H_FRAC));
     const teamStyle = healthBarStyle() === "team"; // frame-constant: one read, not one per bar
+    const heroFrames = heroStatusFrames();
+    const levelShown = showHeroLevel();
     const abilPx = Math.max(ABIL_ICON_MIN, Math.min(ABIL_ICON_MAX, Math.round(barH * ABIL_ICON_SCALE)));
 
     let n = 0;
@@ -715,18 +718,21 @@ export class WorldOverlays {
           cd.hidden = false;
         }
       }
-      // Hero level badge to the left of the bars.
-      if (last.level !== s.level) {
-        last.level = s.level;
-        if (s.level !== null) {
+      // Hero level badge to the left of the bars. Two Gameplay switches meet here: the status
+      // bar itself (`heroFrames`) can be turned off — the hero then wears an ordinary bar —
+      // and the level number can be hidden on its own (`heroLevel`), leaving the framed panel.
+      const shownLevel = heroFrames && levelShown ? s.level : null;
+      if (last.level !== shownLevel) {
+        last.level = shownLevel;
+        if (shownLevel !== null) {
           bar.level.hidden = false;
-          bar.level.textContent = String(s.level);
+          bar.level.textContent = String(shownLevel);
         } else {
           bar.level.hidden = true;
         }
         // A hero's badge and bars are one framed panel, not two pieces side by side (see
         // .unit-hpbar.is-hero) — and a pool slot can pass from a hero to a footman.
-        bar.root.classList.toggle("is-hero", s.level !== null);
+        bar.root.classList.toggle("is-hero", heroFrames && s.level !== null);
       }
       if (last.hidden) {
         last.hidden = false;
@@ -796,6 +802,15 @@ export class WorldOverlays {
    * foreshortened radius, which is what keeps it on the body at every zoom.
    */
   syncCrewLabels(specs: readonly CrewLabelSpec[]): void {
+    if (!showGoldMineCounter()) {
+      for (const label of this.crewLabels) {
+        if (!label.last.hidden) {
+          label.last.hidden = true;
+          label.root.hidden = true;
+        }
+      }
+      return;
+    }
     this.sampleGeom();
     const g = this.frameGeom;
     let n = 0;

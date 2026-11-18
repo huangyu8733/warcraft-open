@@ -266,6 +266,10 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   usr2: w2(n, (w, v) => { w.spillRadius = v; }),
   udl1: w1(n, (w, v) => { w.damageLoss = v; }),
   udl2: w2(n, (w, v) => { w.damageLoss = v; }),
+  // "Maximum Number of Targets" (`targCount`) — a bouncing missile's count, the aimed body
+  // included (WeaponSlotDef.targetCount).
+  utc1: w1(n, (w, v) => { w.targetCount = v; }),
+  utc2: w2(n, (w, v) => { w.targetCount = v; }),
   // AREA splash — the three concentric rings an artillery shot lands in (`Farea`/`Harea`/
   // `Qarea`) and what the burst may CATCH (`splashTargs`, which is not the same list as what
   // the shot may be aimed at). A custom tower given an area of effect had none of it: 42 of
@@ -355,7 +359,7 @@ export const UNIT_SETTERS: Record<string, (d: UnitDef, v: Val) => void> = {
   // heals in daylight is a map rewriting this, not `uhpr`.
   uhrt: (d, v) => { d.regenType = toRegenType(s(v)); },
   umpi: (d, v) => { d.manaStart = n(v); }, // the mana a caster is BORN with, not its maximum
-  umpr: (d, v) => { d.manaRegen = n(v); }, // mana/sec for a NON-hero caster
+  umpr: (d, v) => { d.manaRegen = n(v); }, // mana/sec of the type (a hero adds its Intelligence regen)
   usid: (d, v) => { d.sightDay = n(v); },
   usin: (d, v) => { d.sightNight = n(v); },
   // "Stats - Death Time (seconds)". Gameplay, not just art: it is how long a dying unit goes
@@ -479,7 +483,6 @@ export const UNIT_FIELD_NOTES: Record<string, string> = {
   // rather than adding a field. Left for that change, not for this one.
   udu1: "dmgUp1 — every one of the 837 stock rows leaves it empty", udu2: "dmgUp2 — likewise empty on every stock row",
   umh1: "missiles always home (MissileHoming)", umh2: "missiles always home (MissileHoming)",
-  utc1: "no multi-target attacks (targCount1)", utc2: "no multi-target attacks (targCount2)",
 
   // Movement / pathing we do not model yet.
   umas: "maxSpd — no speed clamp of either kind is applied yet, per-type or global",
@@ -1167,7 +1170,11 @@ const ITEM_SETTERS: Record<string, (d: ItemDef, v: Val) => void> = {
   iusa: (d, v) => { d.usable = bool(v); },
   iper: (d, v) => { d.perishable = bool(v); },
   ipow: (d, v) => { d.powerup = bool(v); },
-  idrp: (d, v) => { d.droppable = bool(v); },
+  // Two codes, two columns (Units\UnitMetaData.slk): `idrp` is `drop` — "Dropped When Carrier
+  // Dies" — and `idro` is `droppable`. `idrp` used to be routed onto `droppable`, so a map that
+  // ticked "drop on death" made the item undroppable instead and never touched `idro` at all.
+  idrp: (d, v) => { d.dropOnDeath = bool(v); },
+  idro: (d, v) => { d.droppable = bool(v); },
   isel: (d, v) => { d.sellable = bool(v); }, // "can be sold by a shop" (JASS IsItemSellable)
   ipaw: (d, v) => { d.pawnable = bool(v); },
   iprn: (d, v) => { d.pickRandom = bool(v); },

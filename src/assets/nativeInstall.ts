@@ -1,5 +1,6 @@
 import type { PickedInstall, InstallFiles } from "./opfs";
 import type { DownloadProgress, GameFilesSource } from "./downloadInstall";
+import { flavor, type GameFlavor } from "../data/flavor";
 import {
   fetchCasc, fetchInstallAnsi, fetchInstallFile, lazyMapFile,
   type FileUrl, type InstallManifest,
@@ -23,11 +24,22 @@ import {
 /** What `electron/preload.cjs` exposes. Absent in a browser, which is how the gate tells the
  *  two boots apart. */
 interface NativeBridge {
-  installPath(): Promise<InstalledFolder>;
-  pickInstall(): Promise<string | null>;
-  forgetInstall(): Promise<void>;
+  installPath(flavor?: GameFlavor): Promise<InstalledFolder>;
+  pickInstall(flavor?: GameFlavor): Promise<string | null>;
+  forgetInstall(flavor?: GameFlavor): Promise<void>;
+  /** Which data / asset line this window is on. Absent on a shell older than the split. */
+  flavor?: {
+    get(): Promise<GameFlavor>;
+    set(flavor: GameFlavor): Promise<unknown>;
+  };
+  /**
+   * Open a game window on `flavor`, leaving the launcher where it is. This is what makes the two
+   * lines independent: each has its own window, its own mount, and its own running game, so the
+   * classic and the Reforged client can be up at the same time. Absent on an older shell.
+   */
+  openGame?(flavor: GameFlavor): Promise<boolean>;
   /** Absent on a shell older than "Download game files". */
-  downloadInstall?(sources: GameFilesSource[], onProgress: (p: DownloadProgress) => void): Promise<string | null>;
+  downloadInstall?(sources: GameFilesSource[], onProgress: (p: DownloadProgress) => void, flavor?: GameFlavor): Promise<string | null>;
   /** The load gate's Cancel: abort that transfer mid-flight. Absent with it. */
   cancelDownload?(): void;
   servers(): Promise<Array<{ id: string; url: string }>>;
@@ -74,6 +86,15 @@ export interface UpdateState {
 const bridge = (): NativeBridge | null =>
   (window as unknown as { ow3native?: NativeBridge }).ow3native ?? null;
 
+/**
+ * Tell the shell which line this window is on before it serves a byte or answers for a folder.
+ * The `ow3-install://` handler reads the line on every request, so this has to land first — and
+ * a shell older than the split simply has no call to make, which is the SD behavior it already had.
+ */
+async function syncNativeFlavor(): Promise<void> {
+  await bridge()?.flavor?.set(flavor()).catch(() => {});
+}
+
 /** Watch the updater. A no-op in a browser, which updates by being reloaded. Like the beacon's,
  *  this ASKS as well as subscribing: the check finishes seconds after launch and this is called
  *  when the menu appears, which is a minute later. */
@@ -102,6 +123,20 @@ export const setNativeVsync = async (on: boolean): Promise<void> => { await brid
 export const relaunchNative = (): void => void bridge()?.relaunch?.();
 /** Quit the desktop app entirely (electron/main.mjs `ow3:quit`). */
 export const quitNative = (): void => void bridge()?.quit?.();
+
+/**
+ * Start a game in a WINDOW OF ITS OWN, on `flavor`, and leave this launcher as it is.
+ *
+ * The two lines cannot share a page — `data/*` parses its tables once per renderer — and they
+ * should not have to: a window each is what lets a player keep the classic game up while the
+ * Reforged one loads, or run both at once. False when the shell predates the split, which is the
+ * caller's cue to fall back to starting in this page.
+ */
+export async function openGameWindow(f: GameFlavor = flavor()): Promise<boolean> {
+  const open = bridge()?.openGame;
+  if (!open) return false;
+  return (await open(f)) !== false;
+}
 
 export const downloadUpdate = (): void => void bridge()?.update?.download();
 export const installUpdate = (): void => void bridge()?.update?.install();
@@ -159,24 +194,27 @@ export interface InstalledFolder {
   version: string | null;
 }
 
-export async function rememberedInstall(): Promise<InstalledFolder> {
-  return (await bridge()?.installPath()) ?? { path: null, valid: false, present: false, version: null };
+export async function rememberedInstall(f: GameFlavor = flavor()): Promise<InstalledFolder> {
+  await syncNativeFlavor();
+  return (await bridge()?.installPath(f)) ?? { path: null, valid: false, present: false, version: null };
 }
 
 /** Open the OS folder picker. Null if the player cancelled, or picked something that is not a
  *  Warcraft III folder — the shell checks that where the disk is, rather than letting a mount
  *  fail three steps later. */
-export async function pickNativeInstall(): Promise<string | null> {
-  return (await bridge()?.pickInstall()) ?? null;
+export async function pickNativeInstall(f: GameFlavor = flavor()): Promise<string | null> {
+  await syncNativeFlavor();
+  return (await bridge()?.pickInstall(f)) ?? null;
 }
 
 /** "Download game files" in the desktop app (electron/download.mjs): the shell asks for a folder
  *  once and tries `sources` in order (src/assets/downloadInstall.ts). Null if the player
  *  cancelled the folder dialog. */
-export async function downloadNativeInstall(sources: GameFilesSource[], onProgress: (p: DownloadProgress) => void): Promise<string | null> {
+export async function downloadNativeInstall(sources: GameFilesSource[], onProgress: (p: DownloadProgress) => void, f: GameFlavor = flavor()): Promise<string | null> {
   const native = bridge();
   if (!native?.downloadInstall) throw new Error("This version of the app cannot download. Update it first.");
-  return native.downloadInstall(sources, onProgress);
+  await syncNativeFlavor();
+  return native.downloadInstall(sources, onProgress, f);
 }
 
 /** The load gate's Cancel during that download (electron/download.mjs). A no-op where there is
@@ -186,8 +224,9 @@ export function cancelNativeDownload(): void {
   bridge()?.cancelDownload?.();
 }
 
-export async function forgetNativeInstall(): Promise<void> {
-  await bridge()?.forgetInstall();
+export async function forgetNativeInstall(f: GameFlavor = flavor()): Promise<void> {
+  await syncNativeFlavor();
+  await bridge()?.forgetInstall(f);
 }
 
 /** Put a downloaded map where Warcraft III keeps them: `<install>\Maps\Download\`. The shell owns
@@ -236,9 +275,12 @@ export async function deleteDownloadedMap(name: string): Promise<boolean> {
   return remove(name);
 }
 
-/** `local` is the scheme's host and means nothing: a `standard` scheme needs an origin, and
- *  there is only ever one install. */
-const fileUrl: FileUrl = (path) => `ow3-install://local/file?path=${encodeURIComponent(path)}`;
+/** The scheme's host NAMES THE LINE — `ow3-install://hd/manifest.json` is the Reforged folder,
+ *  `…://sd/…` the classic one. A `standard` scheme needs an origin, and this is the one piece of
+ *  it that carries meaning: the launcher opens a window per line, so two lines can be mounted in
+ *  two windows at once and the handler must not answer both from one folder. */
+const installHost = (): GameFlavor => flavor();
+const fileUrl: FileUrl = (path) => `ow3-install://${installHost()}/file?path=${encodeURIComponent(path)}`;
 
 /**
  * Read the remembered folder into the same `PickedInstall` the browser's picker produces, so
@@ -250,12 +292,16 @@ const fileUrl: FileUrl = (path) => `ow3-install://local/file?path=${encodeURICom
  * megabytes on a list — where the browser's picker, whose `File`s are handles, spends none.
  */
 export async function loadNativeInstall(): Promise<PickedInstall> {
-  const res = await fetch("ow3-install://local/manifest.json");
+  await syncNativeFlavor(); // the scheme handler resolves the root by this window's line
+  const res = await fetch(`ow3-install://${installHost()}/manifest.json`);
   if (!res.ok) throw new Error(`The install could not be read (${res.status}).`);
   const manifest = (await res.json()) as InstallManifest;
 
   const files: InstallFiles = new Map();
   for (const path of manifest.maps) files.set(path, lazyMapFile(fileUrl, path));
+  // …and the downloadable campaigns (data/campaigns.ts), also lazy: the Campaign screen reads
+  // them, and a `.w3n` is tens of megabytes that a player without one never spends.
+  for (const path of manifest.campaigns ?? []) files.set(path, lazyMapFile(fileUrl, path));
   // The maps' own sidecars beside them, if the folder has any (i18n/mapLanguage.ts,
   // voice/mapVoice.ts). They key `InstallFiles` like every other loose file; the map list asks
   // `installMaps`, which drops them.

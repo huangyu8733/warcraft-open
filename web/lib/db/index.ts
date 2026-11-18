@@ -27,6 +27,11 @@ function open(): DatabaseSync {
   if (!columns.some((column) => column.name === "category")) {
     db.exec("ALTER TABLE maps ADD COLUMN category TEXT NOT NULL DEFAULT 'other'");
   }
+  // `maps.flavors`（支持的版本）same story; maps that predate the column were playable on
+  // both lines, so they come forward as `sd,hd`.
+  if (!columns.some((column) => column.name === "flavors")) {
+    db.exec("ALTER TABLE maps ADD COLUMN flavors TEXT NOT NULL DEFAULT 'sd,hd'");
+  }
   return db;
 }
 

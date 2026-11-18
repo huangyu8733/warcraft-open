@@ -1,6 +1,6 @@
 import type { DataSource } from "../../vfs/types";
 import { modalOver } from "../modal";
-import { blpToCanvas } from "../../render/blputil";
+import { vfsImage } from "../../render/blputil";
 import { wc3StripMarkup, wc3ToHtml } from "../wc3Text";
 import { gameFontStack, gameFontsReady, onGameFontsReady } from "../gameFont";
 import type { FdfFrame } from "./parser";
@@ -231,13 +231,14 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     if (blpCache.has(path)) return blpCache.get(path)!;
     // The skin table is inconsistent about the extension — `GoldIcon` ends in `.blp` and
     // `ConsoleTexture01` does not (`UI\Console\Human\HumanUITile01`). The engine does not
-    // care; neither should we, or the entire console strip resolves to nothing.
-    const bytes = opts.vfs.rawBytes(path) ?? (/\.\w{3,4}$/.test(path) ? null : opts.vfs.rawBytes(`${path}.blp`));
+    // care; neither should we, or the entire console strip resolves to nothing. On HD the
+    // same names are DDS files, so the reader tries the extensionless name, `.dds`, `.blp`,
+    // in that order, and decodes by magic.
     // `reviveDeadAlpha` is the UI chrome's own quirk: the night elf and undead button faces
     // are painted textures shipped with an all-zero alpha channel, and the game draws them
     // (see render/blputil.ts). It has to be asked for at DECODE time — a canvas premultiplies,
     // so by the time a backdrop is composed the colour is already gone.
-    const canvas = bytes ? blpToCanvas(bytes, { reviveDeadAlpha: true }) : null;
+    const canvas = vfsImage(opts.vfs, path, { reviveDeadAlpha: true });
     blpCache.set(path, canvas);
     return canvas;
   };

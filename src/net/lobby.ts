@@ -1,5 +1,7 @@
 import { DEFAULT_RELAY_PORT, RELAY_PATH, type StartMatch, type GameMessage, type HostInfo, type PeerInfo, type RoomInfo, type ServerMessage } from "./protocol";
 import { edition } from "../data/edition";
+import { flavor } from "../data/flavor";
+import { gameVersion } from "../data/gameVersion";
 import type { Transport } from "./transportTypes";
 import { localStorageStore, reconnectPlan, type RejoinSession, type SessionStore } from "./reconnect";
 import { answerMapGet, chunkCount, type MapGet, type MapPart, type MapWire } from "./mapTransfer";
@@ -438,7 +440,7 @@ export class LanLobby {
       if (!entry?.connected || !entry.transport) throw new Error(t("lan.serverSilent"));
       this.promote(on);
     }
-    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers, edition: edition(), speed });
+    this.transport?.send({ t: "create", name, playerName, mapName, mapPath, maxPlayers, observers, edition: edition(), speed, flavor: flavor(), gameVersion: gameVersion() ?? undefined });
   }
 
   /** Every place a game could be announced right now: the connection we stand on, then each
@@ -482,8 +484,19 @@ export class LanLobby {
   join(key: string, playerName: string): void {
     const room = this.state.rooms.find((r) => r.key === key);
     if (!room) return;
+    // A second check, on the way IN as well as on the list: the row may be stale, and the relay
+    // checks again. SD and HD are different data, not a preference (SD-HD双版本方案.md §6).
+    const line = room.flavor ?? "sd";
+    if (line !== flavor()) {
+      this.set({ error: t("lan.otherFlavor") });
+      return;
+    }
+    if (line === "hd" && room.gameVersion !== gameVersion()) {
+      this.set({ error: t("lan.hdVersion", { required: room.gameVersion ?? "?", local: gameVersion() ?? "?" }) });
+      return;
+    }
     if (room.source) this.promote(room.source);
-    this.transport?.send({ t: "join", roomId: room.id, playerName });
+    this.transport?.send({ t: "join", roomId: room.id, playerName, flavor: flavor(), gameVersion: gameVersion() ?? undefined });
   }
 
   /**
@@ -775,7 +788,7 @@ export class LanLobby {
     // Its own flag, not `reconnecting`: that one also answers every game list that arrives with
     // a rejoin of its own (`tryRejoin`), and a second `join` in flight is refused.
     this.reclaiming = true;
-    this.transport.send({ t: "join", roomId: s.roomId, playerName: s.playerName, token: s.token });
+    this.transport.send({ t: "join", roomId: s.roomId, playerName: s.playerName, token: s.token, flavor: flavor(), gameVersion: gameVersion() ?? undefined });
   }
 
   /** Host only: let a dropped player's held seat go now — the "Waiting for players..."
@@ -793,7 +806,7 @@ export class LanLobby {
     return {
       ask: (msg) => {
         const host = this.state.peers.find((p) => p.host)?.id;
-        if (host !== undefined) this.send(msg, host);
+        if (host !== undefined) this.send({ ...msg, flavor: flavor() }, host);
       },
       listen: (fn) => { this.onMapPart = fn; },
       arrived: (path) => {
@@ -808,7 +821,7 @@ export class LanLobby {
   private serveMap(from: number, msg: MapGet): void {
     const room = this.state.room;
     if (this.state.phase !== "hosting" || !room || this.handedToMatch) return;
-    void answerMapGet(this.mapSource?.(room.mapPath) ?? null, room.mapPath, msg).then((part) => {
+    void answerMapGet(this.mapSource?.(room.mapPath) ?? null, room.mapPath, msg, flavor()).then((part) => {
       if (this.state.phase !== "hosting" || this.handedToMatch) return;
       if (!this.state.peers.some((p) => p.id === from)) return; // gone while the piece was read
       this.send(part, from);

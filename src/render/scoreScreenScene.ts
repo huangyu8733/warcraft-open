@@ -1,8 +1,11 @@
 import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
+import ddsHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/dds/handler";
 import { UI_HEIGHT, UI_WIDTH } from "../ui/fdf/layout";
 import type { DataSource } from "../vfs/types";
+import { isHd } from "../data/flavor";
+import { hdTexturePaths } from "../vfs/tileset";
 
 // The SCORE SCREEN's art (issue #199) — every piece of it a real MDX out of the player's install,
 // named by `UI\FrameDef\Glue\ScoreScreen.fdf`'s own MODEL frames and by `UI\war3skins.txt`.
@@ -107,9 +110,18 @@ export class ScoreScreenScene {
     canvas.height = canvas.clientHeight || window.innerHeight;
     const viewer = new ViewerClass(canvas);
     viewer.on("error", (e) => console.error("[scorescreen]", e));
-    this.solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
-    viewer.addHandler(mdxHandler, this.solver, false);
+    const hd = isHd();
+    this.solver = (src) => {
+      if (typeof src !== "string") return src;
+      if (!hd) return this.vfs.read(src);
+      for (const path of hdTexturePaths(src, true)) {
+        if (this.vfs.exists(path)) return this.vfs.read(path);
+      }
+      return undefined;
+    };
+    viewer.addHandler(mdxHandler, this.solver, hd);
     viewer.addHandler(blpHandler);
+    if (hd) viewer.addHandler(ddsHandler); // Reforged art (P3-4)
     const scene = viewer.addScene();
     scene.color.set([0, 0, 0]);
     this.viewer = viewer;

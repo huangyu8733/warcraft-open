@@ -21,6 +21,10 @@ export interface MapGet {
   k: "mapget";
   path: string;
   chunk: number;
+  /** The joiner's data / asset line (src/data/flavor.ts). Absent from an older client, which is
+   *  read as SD — the only line that existed when it was written. A host on the other line
+   *  refuses rather than sending a map the joiner can never load. */
+  flavor?: "sd" | "hd";
 }
 
 /** Host → joiner: one piece, with the whole file's size so the joiner knows how many to ask for.
@@ -32,6 +36,9 @@ export interface MapPart {
   size: number;
   data?: string;
   error?: string;
+  /** The host's own line, so a joiner that asked on the wrong one can stop at the first answer
+   *  rather than assembling a map it cannot open. Absent from an older host, read as SD. */
+  flavor?: "sd" | "hd";
 }
 
 /** Joiner → host: the whole map is in — the host stops counting it as downloading, and its seat
@@ -93,11 +100,14 @@ function bytesOf(file: File): Promise<Uint8Array> {
 
 /**
  * The host's answer to one `mapget`. `file` is the room's map, or null when the host cannot read
- * it; `roomPath` is the path the room advertised, the only one this ever serves.
+ * it; `roomPath` is the path the room advertised, the only one this ever serves; `hostFlavor` is
+ * the line the host is on, which every answer states and a request from the other one is refused
+ * over (SD and HD maps cannot be mixed — SD-HD双版本方案.md §7.3).
  */
-export async function answerMapGet(file: File | null, roomPath: string, msg: MapGet): Promise<MapPart> {
-  const refuse = (error: string): MapPart => ({ k: "mappart", path: msg.path, chunk: msg.chunk, size: 0, error });
+export async function answerMapGet(file: File | null, roomPath: string, msg: MapGet, hostFlavor: "sd" | "hd"): Promise<MapPart> {
+  const refuse = (error: string): MapPart => ({ k: "mappart", path: msg.path, chunk: msg.chunk, size: 0, error, flavor: hostFlavor });
   if (msg.path !== roomPath) return refuse("The host only sends the map of its own game.");
+  if (msg.flavor && msg.flavor !== hostFlavor) return refuse("The host's game is on a different version line.");
   if (!file) return refuse("The host could not read its map.");
   let bytes: Uint8Array;
   try {
@@ -108,7 +118,7 @@ export async function answerMapGet(file: File | null, roomPath: string, msg: Map
   if (bytes.length > MAX_MAP_BYTES) return refuse("The map is too large to send.");
   const n = Math.floor(msg.chunk);
   if (!(n >= 0 && n < chunkCount(bytes.length))) return refuse("No such part of the map.");
-  return { k: "mappart", path: msg.path, chunk: n, size: bytes.length, data: toBase64(bytes.subarray(n * MAP_CHUNK, (n + 1) * MAP_CHUNK)) };
+  return { k: "mappart", path: msg.path, chunk: n, size: bytes.length, flavor: hostFlavor, data: toBase64(bytes.subarray(n * MAP_CHUNK, (n + 1) * MAP_CHUNK)) };
 }
 
 /** What `fetchMap` needs of the lobby: a way to ask the host, and a way to hear its answers. */
@@ -130,6 +140,9 @@ export function fetchMap(
   /** How much is in, and the whole map's size in bytes. */
   onProgress: (fraction: number, size: number) => void,
   signal: AbortSignal,
+  /** The joiner's own line. A piece from the other one ends the download — the same refusal the
+   *  host makes, kept here too because the relay cannot see inside game traffic. */
+  expectFlavor: "sd" | "hd",
 ): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     let out: Uint8Array | null = null;
@@ -164,6 +177,7 @@ export function fetchMap(
     signal.addEventListener("abort", onAbort);
     wire.listen((part) => {
       if (part.path !== path || !pending.has(part.chunk)) return; // a stale answer, or not ours
+      if (part.flavor && part.flavor !== expectFlavor) return finish(new Error("The host's game is on a different version line."));
       if (part.error || part.data === undefined) return finish(new Error(part.error ?? "The host refused to send the map."));
       if (!out) {
         if (!(part.size > 0 && part.size <= MAX_MAP_BYTES)) return finish(new Error("The host's map is not a size a map can be."));

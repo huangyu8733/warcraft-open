@@ -35,6 +35,13 @@
 //     Hotkeys:     [ Legacy  ]                   (ours)
 //     [x] Show hotkeys on command buttons        (ours)
 //
+// The SOUND panel loses one row and gains none: "Sound Provider:" and its pulldown GO. In the
+// game it picked the device the engine mixed through (DirectSound, Miles, EAX); a browser has
+// exactly one, Web Audio, so the pulldown could only ever stand empty and greyed. The manifest
+// retires both frames and hands their anchor to "Environmental Effects", which closes up to the
+// -0.005 checkbox-to-checkbox gap under Subtitles — with the pulldown gone, the last two boxes
+// are no longer a group of their own.
+//
 // The two re-anchorings are the manifest's `repoint`, because an FDF panel is a chain of rows
 // and those two rows are the game's own frames: only their SetPoints change, so their labels
 // come along without being restated here.
@@ -279,10 +286,37 @@ Frame "GLUETEXTBUTTON" "GamepadButton" INHERITS WITHCHILDREN "StandardButtonTemp
 }
 
 // ---------------------------------------------------------------------------------------------
-// Gameplay panel: "Voice Control", between "Show hotkeys on command buttons" and "Detect
-// Gamepad". Push-to-talk on the "." key: hold it, say a command ("train three footmen",
-// "attack move here", "group one"), let go. Nothing in 1.30.4 listens, so the row is ours, and
-// so is everything behind it (src/voice/, docs/voice-control.md).
+// Gameplay panel: "UI Theme:" (src/data/uiTheme.ts), between "Show hotkeys on command buttons"
+// and the Voice Control row. The game skins the interface by the player's RACE and offers no
+// control to change it; this row lets the player pick any section the install's own war3skins
+// `[Main] Skins` line names (Human / Orc / NightElf / Undead / Forsaken), or follow their race.
+//
+// Built exactly as the Healthbars row above it — a `StandardInfoTextTemplate` label with an
+// `OptionsPopupMenuBackdropTemplate` hung off its right edge — so the two pulldowns are the same
+// control. The entries themselves are filled at bind time from the INSTALL's skin table
+// (ui/fdfOptions.ts), because only the mounted install knows which skins it ships.
+Frame "TEXT" "UiThemeLabel" INHERITS "StandardInfoTextTemplate" {
+    SetPoint TOPLEFT, "ShowHotkeysCheckBox", BOTTOMLEFT, 0.0, -0.02,
+    Text "COLON_UI_THEME",
+}
+
+Frame "BACKDROP" "UiThemeBackdrop" INHERITS "OptionsPopupMenuBackdropTemplate" {
+    SetPoint LEFT, "UiThemeLabel", RIGHT, 0.01, 0.0,
+
+    Frame "POPUPMENU" "UiThemeMenu" INHERITS WITHCHILDREN "OptionsPopupMenuTemplate" {
+        SetPoint TOPLEFT, "UiThemeBackdrop", TOPLEFT, 0.012, -0.013,
+
+        PopupMenuFrame "UiThemePopupMenuMenu",
+        Frame "MENU" "UiThemePopupMenuMenu" INHERITS WITHCHILDREN "StandardPopupMenuMenuTemplate" {
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Gameplay panel: "Voice Control", between the "UI Theme:" row and "Detect Gamepad". Push-to-talk
+// commands on the "." key: hold it, say a command ("train three footmen", "attack move here",
+// "group one"), let go. Nothing in 1.30.4 listens, so the row is ours, and so is everything
+// behind it (src/voice/, docs/voice-control.md).
 //
 // ONE ROW, TWO FACES. The recogniser needs a speech model that is not on the machine until the
 // player asks for it (src/voice/model.ts), and a checkbox that cannot do anything is a lie — so
@@ -292,12 +326,12 @@ Frame "GLUETEXTBUTTON" "GamepadButton" INHERITS WITHCHILDREN "StandardButtonTemp
 // is the checkbox. src/ui/voiceOptions.ts shows one face or the other.
 //
 // `VoiceControlBand` is the row's own box — the button's height (`StandardButtonTemplate`'s
-// 0.031), hung off the hotkeys box where "Detect Gamepad" used to hang (-0.008) — and both faces
-// sit on it, so "Detect Gamepad" under it never moves when the model arrives.
+// 0.031) — and both faces sit on it, so "Detect Gamepad" under it never moves when the model
+// arrives. It hangs off the theme row's backdrop, because that is now the row above it.
 Frame "FRAME" "VoiceControlBand" {
     Width 0.25,
     Height 0.031,
-    SetPoint TOPLEFT, "ShowHotkeysCheckBox", BOTTOMLEFT, 0.0, -0.008,
+    SetPoint TOPLEFT, "UiThemeBackdrop", BOTTOMLEFT, 0.0, -0.008,
 }
 
 Frame "TEXT" "VoiceControlRowLabel" INHERITS "StandardInfoTextTemplate" {

@@ -1,6 +1,8 @@
 import type { Options } from "../data/options";
 import { stageAspect } from "../ui/stage";
 import { setFixedMenuAspect } from "../ui/widescreen";
+import { applyWindowMode, type WindowMode } from "../ui/displayMode";
+import { applyFrameLimits } from "./frameLimit";
 
 // The Video panel, wired to the engine (issue #81 follow-up).
 //
@@ -47,6 +49,9 @@ export interface VideoSettings {
    *  `LOW_PERF_FORCED`). Carried so the renderer can ask the MODE rather than infer it from a
    *  rung a player might equally have chosen by hand. */
   lowPerf: boolean;
+  /** "Anti-Aliasing" — read when the WebGL context is created, so a change reaches the next
+   *  page load rather than the current frame. */
+  antialias: boolean;
 }
 
 /**
@@ -118,6 +123,7 @@ const DEFAULTS: VideoSettings = {
   occlusion: true,
   gamma: 50,
   lowPerf: false,
+  antialias: true,
 };
 
 let current: VideoSettings = { ...DEFAULTS };
@@ -313,6 +319,7 @@ export function applyVideoOptions(options: Options): void {
     occlusion: opts.occlusion !== "off",
     gamma: typeof opts.gamma === "number" ? opts.gamma : DEFAULTS.gamma,
     lowPerf,
+    antialias: opts.antialiasing !== false,
   };
   const b = bridge();
   b.particleScale = PARTICLE_SCALE[current.particles];
@@ -327,6 +334,13 @@ export function applyVideoOptions(options: Options): void {
   // arrives here, live, with the rest (ui/widescreen.ts). Not part of Low Performance Mode: the
   // shape of the menus is the player's, like the resolution.
   setFixedMenuAspect(options.menus43 === true);
+  // "Window Mode" is the one monitor row a page can honour (ui/displayMode.ts), and the two
+  // frame caps are the runtime half of render/frameCap.ts.
+  const mode: WindowMode = options.windowMode === "borderless" || options.windowMode === "fullscreen"
+    ? options.windowMode
+    : "windowed";
+  applyWindowMode(mode);
+  applyFrameLimits(options);
 }
 
 // ---------------------------------------------------------------------------

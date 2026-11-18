@@ -20,6 +20,9 @@
      wholesale by applyGameFont() once the archives are mounted; the FDF frames set
      the stack inline (uiFont() in ui/fdf/render.ts), the widgets read it from here. */
   --ui-font: var(--game-font);
+  /* The Reforged front end's own face (`Fonts\BLQ55Web.ttf`, registered as MasterFont by
+     applyGameFont); until an install supplies it the classic stack stands in. */
+  --hd-font: var(--game-font);
 }
 
 * { box-sizing: border-box; }
@@ -690,6 +693,10 @@ body.in-game .menu-panel { display: none; }
      itself. This is the placeholder chrome's fixed strip; the skinned rule below
      overrides it with the real art's resolution-dependent height. */
   --console-h: 172px;
+  /* Options → Gameplay → "HUD Scale". The world layer is a sibling, so bars and crew
+     counts keep their size while the interface grows around its bottom centre. */
+  transform: scale(var(--hud-scale, 1));
+  transform-origin: 50% 100%;
 }
 /* The real console is sized off the STAGE, so it grows with the window: at 1080p it is
    ~317px tall, not 172. Anything anchored to a fixed pixel offset instead of this ends up
@@ -1970,15 +1977,14 @@ body.hud-widget-skinned .obs-sel-bar .obs-bar-fill.progress { background: var(--
   pointer-events: none; /* only the buttons take the mouse */
   z-index: 4;
 
-  /* ONE size drives the widget: hud.ts hands us --hero-slot (the slot's width) and every
-     other length here is a fraction of it, so the icon and the bars under it are exactly as
-     wide as each other and the whole bar rescales from that single number. The denominators
-     are the reference shot's own pixels (72-wide bars, 17 tall, 1 px under the icon, 8 px
-     between slots) — the proportions are the client's even where the size isn't. */
+  /* ONE size drives the widget: hud.ts hands us --hero-slot (the icon's width) and every
+     other length here is a fraction of it. The denominators are the reference shot's own
+     pixels (69-wide button, 72-wide bars, 17 tall, 1 px under the icon, 8 px between slots)
+     — the proportions are the client's exactly. */
   --hero-btn: var(--hero-slot); /* the icon is square and fills the slot's width */
-  --hero-bars-w: var(--hero-slot); /* …and the HP/mana block is exactly as wide */
-  --hero-bars: calc(var(--hero-slot) * 17 / 72);
-  --hero-bar-gap: calc(var(--hero-slot) / 72); /* icon bottom → bars top */
+  --hero-bars-w: calc(var(--hero-slot) * 72 / 69); /* …the HP/mana block is a sliver wider */
+  --hero-bars: calc(var(--hero-slot) * 17 / 69);
+  --hero-bar-gap: calc(var(--hero-slot) / 69); /* icon bottom → bars top */
   --hero-gap: calc(var(--hero-slot) * 8 / 72); /* between two slots: NOT measured (see hud.ts) */
 }
 /* …and the box the skill-point effect is placed against: it hangs off the SLOT rather than
@@ -3095,14 +3101,24 @@ body.hud-widget-skinned .hud-cargo-slot {
    the SAME distance inside its frame's gold above as below — measured off the screenshot,
    all seven agree to 0.2 px (they did not: the six sat 1.3 px high against the big one).
    The FDF hangs the whole thing across the bottom of the info panel: SimpleInfoPanelBuildingDetail's SimpleBuildQueueBackdrop is BOTTOMLEFT→BOTTOMRIGHT
-   with Height 0.1 of that panel's 0.115 — 87%. The texture is 2:1 and that box is
-   0.2017 : 0.1, which is 2.017:1, so it lands almost exactly unstretched. */
+   with Height 0.1 of that panel's 0.115 — 87%. It only LOOKS like it spans the whole info
+   socket because that socket is 2.017:1 at its nominal size; in this console the inventory
+   crest eats the socket's right end (see the width note below), so the widget stops there and
+   takes 2:1 from that width instead. */
 body.hud-widget-skinned .hud-progress-wrap {
   position: absolute;
   left: 0;
-  right: 0;
   bottom: 0;
-  height: 87%;
+  /* The queue backdrop does NOT span the whole info socket: the socket's right end
+     (CONSOLE_INVENTORY_COVER x = 0.4732 of the console, vs the info zone's x + w = 0.5039)
+     is where the inventory crest begins, and that crest is an OPAQUE painting — stretched
+     under it, the six painted frames ran out from under the crest and slot 7 was sliced
+     in half at the crest's left edge. The queue is 2:1 (256x128), so it stops at the crest
+     and takes its height from that width: 0.1710 / 0.2017 = 84.78% wide, 84.78% ×
+     (238.67 / 136.08) / 2 = 74.35% tall (the info box is the same 4:3 console's fraction,
+     so the pair holds at every scale). */
+  width: 84.78%;
+  height: 74.35%;
   display: block;
   margin: 0;
   background: var(--hud-queue-border) 0 0 / 100% 100% no-repeat;
@@ -3174,6 +3190,9 @@ body.hud-widget-skinned .hud-progress {
   top: 31%;
   width: auto;
   height: 13%;
+  /* The two closing bevels below are painted by the WRAP's pseudo-elements, which have to land
+     over this bar and over its fill — hence a stacking context of its own under them. */
+  z-index: 1;
   background: none;
   border: none;
   border-radius: 0;
@@ -3195,6 +3214,37 @@ body.hud-widget-skinned .hud-progress-fill {
   border-radius: 0;
   background: var(--hud-buildbar-fill) 0 0 / 100% 100% no-repeat;
   box-shadow: none;
+}
+/* The bar is closed at BOTH ends by the frame's own bevel — 8 of the texture's 256 columns, a
+   32nd of the art. The frame above is ONE stretched background, so its closing bevels are
+   whatever the first and last texels of the file happen to hold; when an end is flat the bar
+   reads as cut off there, which is the reported defect (建造中的进度条两头平切). So the two
+   ends are drawn here instead of trusted: both are the art's LEFT bevel — the two ends of the
+   art are twins, so that is the shape it means — the right one mirrored, each in a box exactly
+   1/32 of the bar wide with the art blown up to the bar's own width, which puts the bevel at
+   the same scale the frame draws it.
+   On the WRAP's pseudo-elements and not the bar's: the bar's ::after is the frame and must stay
+   over the fill, and a cap has to sit over the fill too — that is what keeps the bar closed
+   when a build reaches 100%. The wrap is the same box (the bar's 30.4% / 6% / 31% / 13% all
+   resolve against it) and the z-indexes here lift the caps over the bar as a whole. */
+body.hud-widget-skinned .hud-progress-wrap::before,
+body.hud-widget-skinned .hud-progress-wrap::after {
+  content: "";
+  position: absolute;
+  top: 31%;
+  width: 1.99%; /* 3.125% of the bar (8/256), the bar being the wrap's other 63.6% */
+  height: 13%;
+  background: var(--hud-buildbar-border) 0 0 / 3200% 100% no-repeat;
+  pointer-events: none;
+}
+body.hud-widget-skinned .hud-progress-wrap::before {
+  left: 30.4%;
+  z-index: 2;
+}
+body.hud-widget-skinned .hud-progress-wrap::after {
+  right: 6%;
+  z-index: 3;
+  transform: scaleX(-1);
 }
 /* The six queue slots, INSIDE their own frames: each hole is texture x 12 + 40n … 42 + 40n,
    y 75…104 for the first and 76…105 for the other five (above). The row spans the whole
@@ -3778,121 +3828,9 @@ body.in-game .fdf-screen.fdf-ingame {
   opacity: 1;
 }
 
-/* --- "Change Game Folder" (ui/fdfMainMenu.ts) ----------------------------------
-   The one control on the main menu about the INSTALL rather than the game. Fixed
-   beside the language switch for the same reason — an FDF rebuild on resize cannot
-   take it with it, and the screen removes it so it never follows the player in game.
-   A quiet link with a frame, so it reads as a control on a screen otherwise made
-   entirely of the game's own buttons. */
-.change-install {
-  position: fixed;
-  left: 18px;
-  bottom: 44px;
-  z-index: 45;
-  padding: 4px 9px;
-  border: 1px solid rgba(196, 154, 58, 0.55);
-  border-radius: 2px;
-  background: rgba(0, 0, 0, 0.35);
-  font: inherit;
-  font-size: 13px;
-  color: #c9c2ad;
-  text-shadow: 1px 1px 0 #000;
-  cursor: pointer;
-}
-
-.change-install:hover {
-  color: var(--ow3-gold);
-  border-color: var(--ow3-gold);
-}
-
-/* --- Launcher: the load-files gate (issue #54) ---------------------------------
-   Shown BEFORE the main menu, because the menu is built from the game's own files and
-   this is what asks for them. Zero-asset by necessity (no install is mounted yet), so it
-   is dressed as a battle-platform front page instead of a lone button on black: a scenic
-   backdrop, the platform's name and the language to speak across the top, one obvious way
-   in, and what the player is agreeing to beside it. Everything here is our own DOM over a
-   generated painting; the game's art takes over as soon as an install is mounted. */
-.launcher {
-  position: fixed;
-  inset: 0;
-  z-index: 6;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  /* STATED, because it is INHERITED. The launcher is mounted into #ui, which is
-     `pointer-events: none` so the map under the HUD stays clickable — and a page that inherits
-     that hit-tests nothing at all: every button on it is inert, hover included, which is
-     exactly how this screen read as broken. */
-  pointer-events: auto;
-  font-family: var(--ow3-font);
-  color: #e8e2d0;
-  background: radial-gradient(120% 80% at 50% 0%, #16233b 0%, #0a0f18 55%, #05070c 100%);
-}
-
-/* The scenic half. The gradient is the whole of the fallback: with the painting missing or
-   still downloading, the screen is a dark blue field, never a white hole. */
-.launcher-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    linear-gradient(180deg, rgba(5, 7, 12, 0.42) 0%, rgba(5, 7, 12, 0.78) 58%, rgba(5, 7, 12, 0.97) 100%),
-    url("https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=epic%20dark%20fantasy%20battlefield%20at%20dusk%2C%20two%20armies%20clashing%20in%20the%20distance%2C%20dramatic%20storm%20clouds%2C%20gold%20embers%2C%20cinematic%20wide%20landscape%2C%20moody%20blue%20and%20amber%2C%20painterly%20digital%20art%2C%20no%20text&image_size=landscape_16_9");
-  background-size: cover;
-  background-position: center 32%;
-}
-
-.launcher-top {
-  width: 100%;
-  max-width: 1180px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 26px 32px 0;
-}
-
-.launcher-brand {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-
-/* The product's own mark: the SAME picture the tab, the home screen and the desktop app wear
-   (public/icon-512.png, derived from art/warcraft-open-logo.png by tools/make-icon.mjs), so the
-   launcher and the icon are one face. The gold ring is the game's own chrome, and the gradient
-   underneath is only what shows for the instant the image is still arriving. */
-.launcher-mark {
-  width: 52px;
-  height: 52px;
-  flex: none;
-  border-radius: 10px;
-  background: url("/icon-512.png") center / cover no-repeat,
-    linear-gradient(150deg, #f0d27a, #b8862e 55%, #6b4a12);
-  box-shadow: 0 0 0 1px rgba(216, 180, 90, 0.55), 0 6px 18px rgba(0, 0, 0, 0.5);
-}
-
-.launcher-name {
-  margin: 0;
-  font-size: 24px;
-  letter-spacing: 0.06em;
-  color: var(--ow3-gold);
-  text-shadow: 0 2px 8px #000;
-}
-
-.launcher-tagline {
-  margin: 3px 0 0;
-  font-size: 11px;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: #9aa3b6;
-}
-
-/* The language choice (src/i18n/switch.ts): a list of every language, not a toggle — this is
-   the screen a player arrives at before they can read anything. */
+/* --- Launcher language choice (src/i18n/switch.ts) -----------------------------
+   The launcher's own list (Chinese / English — the only two it translates; the other
+   ten Reforged languages live in the game's Options). */
 .language-picker {
   display: inline-flex;
   align-items: center;
@@ -3988,155 +3926,39 @@ body.in-game .fdf-screen.fdf-ingame {
   color: var(--ow3-gold);
 }
 
-/* The stage: the way in on the left, what it means on the right — a launcher's play column
-   and its notes column. Stacked on a narrow window. */
-.launcher-stage {
-  width: 100%;
-  max-width: 1180px;
-  margin: auto 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.85fr);
-  gap: 22px;
-  align-items: stretch;
-  padding: 40px 32px;
-}
-
-@media (max-width: 860px) {
-  .launcher-stage {
-    grid-template-columns: 1fr;
-    padding: 24px 18px 34px;
-  }
-  .launcher-top {
-    padding: 20px 18px 0;
-  }
-  .launcher-foot {
-    padding: 0 18px 18px;
-  }
-}
-
-.launcher-hero {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 34px 34px 30px;
-  text-align: left;
-}
-
-.launcher-kicker {
-  margin: 0;
-  font-size: 11px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--ow3-gold);
-  opacity: 0.85;
-}
-
-.launcher-headline {
-  margin: 0;
-  font-size: clamp(30px, 4.2vw, 46px);
-  line-height: 1.08;
-  color: #f4efe1;
-  text-shadow: 0 3px 16px rgba(0, 0, 0, 0.85);
-}
-
-.launcher-lead {
-  margin: 0;
-  max-width: 58ch;
-  font-size: 14px;
-  line-height: 1.65;
-  color: #c9d0de;
+/* --- "Change Game Folder" (ui/fdfMainMenu.ts) ----------------------------------
+   The one control on the main menu about the INSTALL rather than the game. Fixed
+   beside the language switch for the same reason — an FDF rebuild on resize cannot
+   take it with it, and the screen removes it so it never follows the player in game.
+   A quiet link with a frame, so it reads as a control on a screen otherwise made
+   entirely of the game's own buttons. */
+.change-install {
+  position: fixed;
+  left: 18px;
+  bottom: 44px;
+  z-index: 45;
+  padding: 4px 9px;
+  border: 1px solid rgba(196, 154, 58, 0.55);
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  font: inherit;
+  font-size: 13px;
+  color: #c9c2ad;
   text-shadow: 1px 1px 0 #000;
+  cursor: pointer;
 }
 
-/* Play, then the two download links: the things a launcher puts side by side. The links read
-   quieter on purpose — picking a folder is still THE way in. */
-.launcher-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px;
-  margin-top: 8px;
-  width: 100%;
-}
-
-.launcher-actions .ow3-glue-btn--lg {
-  min-width: 208px;
-}
-
-.launcher-download .ow3-glue-btn__glow {
-  opacity: 0.3;
-}
-
-.launcher-download-hint {
-  margin: -4px 0 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #8d97ab;
-}
-
-.launcher-progress {
-  width: 100%;
-  max-width: 540px;
-}
-
-.launcher-progress .ow3-progress__label {
-  margin-top: 6px;
-  font-size: 13px;
-}
-
-.launcher-status {
-  min-height: 16px;
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--ow3-text-dim);
-  text-shadow: 1px 1px 0 #000;
-}
-.launcher-status:empty { display: none; }
-.launcher-status.error { color: #ff6a55; }
-
-.launcher-side {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 26px 26px 24px;
-}
-
-.launcher-side-title {
-  margin: 0;
-  font-size: 14px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.change-install:hover {
   color: var(--ow3-gold);
-}
-
-.launcher-points {
-  margin: 0;
-  padding-left: 18px;
-  display: grid;
-  gap: 10px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #c2c9d6;
-}
-
-.launcher-points li::marker { color: var(--ow3-gold); }
-
-.launcher-foot {
-  width: 100%;
-  max-width: 1180px;
-  padding: 0 32px 22px;
-  font-size: 12px;
-  color: #6f7a8c;
+  border-color: var(--ow3-gold);
 }
 
 /* --- Desktop front page (src/ui/home.ts) --------------------------------------
    The packaged app's first screen, laid out like the site's home: a sticky top bar, a side
-   nav, a full-height hero and a map shelf. It REPLACES the load gate on the
-   desktop only — the browser still lands on the gate, where picking a folder is also the
-   gesture that opens its autoplay gate. Everything here is zero-asset until the install is
-   mounted, so the hero's picture must never be the only thing holding the screen up. */
+   nav, a full-height hero and a map shelf. The browser lands here too, where the Launch
+   press is also the gesture that opens its folder picker and autoplay gate. Everything here
+   is zero-asset until the install is mounted, so the hero's picture must never be the only
+   thing holding the screen up. */
 .home {
   position: fixed;
   inset: 0;
@@ -4216,6 +4038,128 @@ body.in-game .fdf-screen.fdf-ingame {
   gap: 12px;
   margin-left: auto;
 }
+
+/* The browser launcher's "?" (src/ui/gestureHelp.ts) and the sheet it opens. The button wears
+   the language picker's gold rim; the sheet is a fixed backdrop + panel, appended to <body>
+   because the top bar is backdrop-filtered and would otherwise be its containing block. */
+.gesture-help { display: inline-flex; }
+
+.gesture-help__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(216, 180, 90, 0.45);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ow3-gold);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.gesture-help__button:hover,
+.gesture-help__button:focus-visible {
+  color: #fff;
+  border-color: #c9a338;
+  background: rgba(255, 203, 46, 0.12);
+}
+
+.gesture-help__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(3, 5, 10, 0.72);
+}
+
+.gesture-help__panel {
+  width: min(560px, 100%);
+  max-height: 84vh;
+  overflow: auto;
+  padding: 22px 24px;
+  background: linear-gradient(180deg, #161d30, #0a0f1a);
+  border: 1px solid rgba(216, 180, 90, 0.35);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+
+.gesture-help__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.gesture-help__title {
+  margin: 0;
+  font-size: 18px;
+  color: #f1e6c4;
+}
+
+.gesture-help__close {
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: #b9b3a1;
+  font: inherit;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.gesture-help__close:hover { color: #fff; }
+
+.gesture-help__panel p,
+.gesture-help__steps li {
+  font-size: 14px;
+  line-height: 1.65;
+  color: #b9b3a1;
+}
+
+.gesture-help__heading {
+  margin: 16px 0 6px;
+  font-size: 14px;
+  color: #e7d9ae;
+}
+
+.gesture-help__steps {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.gesture-help__note {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.gesture-help__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+/* "Don't show again" — a quiet text button on the footer's left, away from the primary one. */
+.gesture-help__never {
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: #9aa3b6;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.gesture-help__never:hover { color: #e8e2d0; }
 
 .home-body {
   flex: 1;
@@ -4383,22 +4327,59 @@ body.in-game .fdf-screen.fdf-ingame {
 
 .home-actions .ow3-glue-btn--lg { min-width: 200px; }
 
-.home-install {
-  margin: 18px 0 0;
-  max-width: 760px;
-  font-size: 13px;
-  line-height: 1.5;
+/* The two lines the launcher can boot — classic (SD) and Reforged (HD). One row each: they
+   remember separate game folders, so each carries its own state, Launch and Change Folder
+   (src/ui/home.ts). */
+.home-editions {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  max-width: 780px;
+}
+
+.home-edition {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 16px;
+  border: 1px solid rgba(198, 168, 106, 0.26);
+  background: rgba(6, 9, 16, 0.55);
+  text-align: left;
+}
+
+.home-edition.is-locked { opacity: 0.55; }
+
+.home-edition-info { flex: 1 1 auto; min-width: 0; }
+
+.home-edition-head { display: flex; align-items: center; gap: 10px; }
+
+.home-edition-name {
+  color: var(--ow3-gold);
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.home-edition-state {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
   color: var(--ow3-text-dim);
   text-shadow: 1px 1px 0 #000;
   overflow-wrap: anywhere;
 }
 
-.home-install.is-error { color: #ff6a55; }
+.home-edition-state.is-error { color: #ff6a55; }
 
-.home-progress {
-  width: 100%;
-  max-width: 540px;
-  margin-top: 18px;
+.home-edition-actions { display: flex; flex: 0 0 auto; gap: 10px; }
+
+.home-edition-actions .ow3-glue-btn-wrap { flex: 0 0 auto; }
+.home-edition-actions .ow3-glue-btn { min-width: 132px; }
+
+@media (max-width: 720px) {
+  .home-edition { flex-direction: column; align-items: stretch; }
+  .home-edition-actions .ow3-glue-btn-wrap { flex: 1 1 0; }
+  .home-edition-actions .ow3-glue-btn { min-width: 0; width: 100%; }
 }
 
 .home-status {
@@ -4491,10 +4472,11 @@ body.in-game .fdf-screen.fdf-ingame {
 }
 
 .home-map-toolbar {
+  /* 分类与支持版本各占一行：两组筛选项在宽屏下并排会挤成一条，读起来像同一组。 */
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
   margin-bottom: 18px;
 }
 
@@ -4516,6 +4498,11 @@ body.in-game .fdf-screen.fdf-ingame {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* 第二组筛选项（支持版本）：单独一行，与分类行用间距分开。 */
+.home-map-chips--flavor {
+  padding-top: 2px;
 }
 
 .home-map-chip {
@@ -5171,14 +5158,14 @@ body.in-game .fdf-screen.fdf-ingame {
 .fdf-checked.fdf-disabled > .fdf-check-face { opacity: 0; }
 .fdf-checked.fdf-disabled > .fdf-check-disabled-face { opacity: 1; }
 
-/* FlashQuestDialogButton: the Quests button pulses gold until the log is opened. */
-.hud-menu-btn.hud-quests-flash {
-  animation: hud-quests-flash 0.9s ease-in-out infinite alternate;
+/* FlashQuestDialogButton: the game's own sparks chase round the Quests button until the log
+   is opened (ui/questButtonFx.ts). The canvas sizes itself in percentages of the button. */
+.console-quest-fx {
+  position: absolute;
+  pointer-events: none;
+  z-index: 3;
 }
-@keyframes hud-quests-flash {
-  from { color: inherit; box-shadow: none; }
-  to { color: #ffcc00; box-shadow: 0 0 7px 1px rgba(255, 204, 0, 0.55) inset, 0 0 6px rgba(255, 204, 0, 0.4); }
-}
+.console-quest-fx[hidden] { display: none; }
 
 /* --- F9 Quest Log (QuestDialog.fdf). The chrome is all the file's; these style only what
    the engine supplies: the icon inside its plate, the requirement lines, and the selected
@@ -5746,7 +5733,6 @@ body.in-game .fdf-screen.fdf-ingame {
    The in-game FDF panels — the script's dialogs and leaderboards (7.19) — are built from
    the same FDF machinery but must survive it, hence the opt-out class. */
 body.in-game .fdf-screen:not(.fdf-ingame):not(.fdf-loading),
-body.in-game .launcher,
 body.in-game .home { display: none; }
 
 /* A HIGHLIGHT frame the SCREEN drives (the loading roster's "this player is ready" band).
@@ -6182,3 +6168,234 @@ body.in-game .home { display: none; }
 .voice-tag.voice-tag-foe { color: #ff8a7a; box-shadow: 0 0 0 1px rgba(255, 90, 70, 0.35); }
 /* An ITEM on the ground: the colour of the purple orb, so it reads as loot, not a body. */
 .voice-tag.voice-tag-item { color: #c9a7ff; box-shadow: 0 0 0 1px rgba(170, 120, 255, 0.4); }
+
+/* --- the launch progress screen -----------------------------------------------------------
+   Mounting an install — the launcher's Launch press, or the `?dev` boot — means fetching and
+   parsing it before any screen exists, so this covers that wait in the game's own loading
+   language: Reforged's frozen battlefield, a forged rail, and a gold bar fed by
+   src/ui/bootSplash.ts. The picture is an original one under `public/boot/` — no install bytes
+   are mounted yet, so it cannot come from the archives. */
+.ow-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 13vh;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(3, 5, 9, 0.5) 0%, rgba(3, 5, 9, 0.1) 36%, rgba(3, 5, 9, 0.74) 100%),
+    radial-gradient(ellipse at 50% 46%, transparent 38%, rgba(2, 3, 6, 0.6) 100%),
+    url("/boot/reforged-bg.jpg") center / cover no-repeat,
+    #05070c;
+  color: #e9e3d3;
+  font-family: var(--game-font);
+  opacity: 1;
+  transition: opacity 460ms ease;
+}
+.ow-boot.is-gone { opacity: 0; pointer-events: none; }
+/* A slow ember pulse over the still, so the screen breathes while the fetch runs. */
+.ow-boot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 62%, rgba(255, 150, 60, 0.1), transparent 55%);
+  animation: ow-boot-ember 5s ease-in-out infinite;
+}
+.ow-boot-card {
+  position: relative;
+  z-index: 1;
+  width: min(760px, 56vw);
+  padding: 0;
+  text-align: center;
+}
+.ow-boot-logo {
+  display: block;
+  height: clamp(104px, 17vh, 186px);
+  width: auto;
+  margin: 0 auto 14px;
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.85));
+}
+.ow-boot-title {
+  margin: 0 0 14px;
+  font-size: clamp(22px, 2.4vw, 32px);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, #ffefb8, #e5bb5c 55%, #8d6a2a);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.9));
+}
+/* The word sits INSIDE the rail, centred over the fill, exactly as `LoadingBarText` does. */
+.ow-boot-message {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: #ffd428;
+  font-size: clamp(12px, 1.15vw, 15px);
+  font-variant: small-caps;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 1px 2px #000, 0 0 8px rgba(0, 0, 0, 0.9), 1px 1px 1px #000, -1px -1px 1px #000;
+}
+/* 3.0's own loading rail, straight from `WebUI\LoadingScreen\`: the forged border plate is
+   nine-sliced so its caps keep their shape, the hollow carries the dark track, and the fill is
+   `loadingscreen-fill-flat` with the blue end-cap glow at its leading edge. The art is extracted
+   from the local CASC into `public/boot/webui/` (git-ignored, like the wordmark); without it the
+   bar degrades to the plain track. */
+.ow-boot-bar {
+  position: relative;
+  height: 38px;
+  border: 0;
+  /* No background of its own: the plate's transparent corners must let the picture through,
+     and the dark channel is drawn by `.ow-boot-track` inside the plate's hollow. */
+  border-image: url("/boot/webui/Loading-BarBorder_4k.png") 28 68 fill stretch;
+  border-image-width: 11px 30px;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.75));
+}
+.ow-boot-track {
+  position: absolute;
+  inset: 11px 30px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #020304, #0a0f16 55%, #010203);
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.95), inset 0 1px 2px #000;
+}
+.ow-boot-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1.5%;
+  background: url("/boot/webui/loadingscreen-fill-flat.png") left center / auto 100% repeat-x;
+  box-shadow: 0 0 12px rgba(60, 170, 255, 0.5);
+  transition: width 260ms linear;
+}
+/* The blue glow that marks where the rail has reached (3.0's `loadingscreen-bar-endcap`). */
+.ow-boot-fill::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  right: -11px;
+  bottom: -8px;
+  width: 22px;
+  background: url("/boot/webui/loadingscreen-bar-endcap_4k.png") center / contain no-repeat;
+  pointer-events: none;
+}
+.ow-boot-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  transform: translateX(-100%);
+  animation: ow-boot-sheen 2.4s linear infinite;
+}
+/* --- Classic (SD) launch: the classic front end's own loading screen -------------------------
+   The parchment map, the TFT wordmark and the loading rail all come from the developer's own
+   1.30 install by `tools/extract-boot-classic.mjs` into `public/boot/classic/` (git-ignored:
+   Blizzard art is never committed). The 1024x768 parchment is shown WHOLE and letterboxed, the
+   classic client's own framing on a wide window. Without the art the field stays black and the
+   drawn wordmark keeps the screen readable; the rail then shows only its dark trough and the
+   fill has nothing to paint, which is what a fresh clone gets. */
+.ow-boot--sd {
+  background: url("/boot/classic/classic-loading-bg.png") center / contain no-repeat, #000;
+  padding-bottom: 29vh;
+}
+.ow-boot--sd::after { background: none; animation: none; }
+.ow-boot--sd .ow-boot-card {
+  width: min(600px, 46vw);
+}
+.ow-boot--sd .ow-boot-logo {
+  height: clamp(84px, 15vh, 168px);
+  margin: 0 auto 20px;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.6));
+}
+.ow-boot--sd .ow-boot-title {
+  margin: 0 0 clamp(22px, 3.4vh, 38px);
+  font-family: "Friz Quadrata TT", "Palatino Linotype", Georgia, serif;
+  font-size: clamp(30px, 3.5vw, 46px);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: none;
+  background: linear-gradient(180deg, #fff4c8 0%, #e2b75a 46%, #8a6524 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.95));
+}
+/* `UI\Glues\Loading\LoadBar\LoadBar.mdx`'s own pieces: the tapered border plate is nine-sliced
+   (32px caps, 7px/8px rims), the trough is `Loading-BarBackground`, the fill is the blue
+   `Loading-BarFill`, the glass sheen lies over both, and `Loading-BarGlow` is the head. */
+.ow-boot--sd .ow-boot-bar {
+  height: 46px;
+  border: 0;
+  border-image: url("/boot/classic/Loading-BarBorder.png") 7 32 8 32 fill stretch;
+  border-image-width: 7px 32px 8px 32px;
+  background: none;
+  box-shadow: none;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.55));
+}
+.ow-boot--sd .ow-boot-track {
+  inset: 7px 32px 8px;
+  background: #040506 url("/boot/classic/Loading-BarBackground.png") repeat;
+  box-shadow: inset 0 0 4px #000;
+}
+.ow-boot--sd .ow-boot-fill {
+  background: url("/boot/classic/Loading-BarFill.png") left center / auto 100% repeat-x;
+  box-shadow: none;
+}
+.ow-boot--sd .ow-boot-fill::before { display: none; }
+/* The glow is an opaque black plate with the blue head painted on it, so it is screened over
+   the bar rather than laid on top of it (the classic renderer adds it the same way). */
+.ow-boot--sd .ow-boot-fill::after {
+  content: "";
+  top: 50%;
+  right: 0;
+  bottom: auto;
+  left: auto;
+  width: 150px;
+  height: 64px;
+  transform: translate(26%, -50%);
+  background: url("/boot/classic/Loading-BarGlow.png") right center / contain no-repeat;
+  mix-blend-mode: screen;
+  animation: none;
+}
+.ow-boot--sd .ow-boot-track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: url("/boot/classic/Loading-BarGlass.png") center / 100% 100% no-repeat;
+  opacity: 0.5;
+  pointer-events: none;
+}
+/* The phase line sits ABOVE the rail, in the classic front end's gold-on-black lettering. */
+.ow-boot--sd .ow-boot-message {
+  left: 0;
+  right: 0;
+  top: auto;
+  bottom: calc(100% + 10px);
+  height: 1.4em;
+  align-items: flex-end;
+  color: #f2d998;
+  font-variant: normal;
+  font-size: clamp(12px, 1.05vw, 14px);
+  letter-spacing: 0.2em;
+  text-shadow: 0 1px 2px #000, 1px 1px 1px #000, -1px -1px 1px #000, 0 0 8px rgba(0, 0, 0, 0.8);
+}
+@keyframes ow-boot-sheen { to { transform: translateX(100%); } }
+@keyframes ow-boot-ember { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .ow-boot::after,
+  .ow-boot-fill::after {
+    animation: none;
+  }
+}

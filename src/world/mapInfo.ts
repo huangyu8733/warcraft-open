@@ -1,6 +1,6 @@
 import { MpqDataSource } from "../vfs/mpq";
 import { readW3i } from "../compat/w3i";
-import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
+import { mapFlavor, readMapFormat, UNKNOWN_FORMAT, type MapFlavor, type MapFormatProfile } from "../compat/mapFormat";
 import { raceFromW3i, type Race } from "../data/races";
 import { parseWts } from "../jass/wts";
 import { localizeWtsTable } from "../i18n/campaignZh";
@@ -199,6 +199,9 @@ export interface MapInfo {
    *  Custom Game list is the only thing that acts on it, and it acts on `unsupportedReason`
    *  rather than on the versions themselves. */
   format: MapFormatProfile;
+  /** Which game line the file belongs to — `mapFlavor(format)` (P4). The list greys a row
+   *  whose flavor is not this client's, and the load door refuses it before any art is read. */
+  flavor: MapFlavor;
 }
 
 /** w3i flags — see PlayerSlot.team. */
@@ -218,9 +221,10 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
     loading: { screen: -1, model: "", title: "", subtitle: "", text: "" },
     classification,
     format,
+    flavor: mapFlavor(format),
   };
   const w3iBytes = mpq.rawBytes("war3map.w3i");
-  if (!w3iBytes) return { ...empty, format: UNKNOWN_FORMAT };
+  if (!w3iBytes) return { ...empty, format: UNKNOWN_FORMAT, flavor: mapFlavor(UNKNOWN_FORMAT) };
 
   // TOLERANT, not all-or-nothing (src/compat/w3i.ts): a w3i that stops early still names its
   // tileset, its flags and its slots, and a protected map — five of the eight in a stock
@@ -304,6 +308,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
     },
     classification,
     format,
+    flavor: mapFlavor(format),
   };
 }
 

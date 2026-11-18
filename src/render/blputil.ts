@@ -1,8 +1,11 @@
 import { BlpImage } from "mdx-m3-viewer/dist/cjs/parsers/blp/image";
+import { DdsImage } from "mdx-m3-viewer/dist/cjs/parsers/dds/image";
 import TgaImage from "mdx-m3-viewer/dist/cjs/parsers/tga/image";
+import { isHd } from "../data/flavor";
+import { hdTexturePaths } from "../vfs/tileset";
 
-// Decode BLP1 bytes into DOM-usable images (plan §10: HUD chrome/icons come
-// from the real game files when an install is mounted).
+// Decode BLP1 / BLP2, DDS (Reforged) and TGA bytes into DOM-usable images (plan §10: HUD
+// chrome/icons come from the real game files when an install is mounted).
 
 export interface BlpOptions {
   /** Draw a PAINTED texture whose alpha channel is entirely zero as opaque — the night elf
@@ -42,6 +45,70 @@ export function tgaToCanvas(bytes: Uint8Array): HTMLCanvasElement | null {
   } catch {
     return null;
   }
+}
+
+/** The DDS twin of `blpToCanvas`: Reforged's UI chrome and icons are DDS, including the
+ *  command-button faces that used to be `BTN*.blp`. */
+export function ddsToCanvas(bytes: Uint8Array, opts: BlpOptions = {}): HTMLCanvasElement | null {
+  try {
+    const image = new DdsImage();
+    image.load(bytes);
+    const data = image.getMipmap(0);
+    const pixels = new ImageData(new Uint8ClampedArray(data.data), data.width, data.height);
+    if (opts.reviveDeadAlpha) reviveDeadAlpha(pixels);
+    const canvas = document.createElement("canvas");
+    canvas.width = data.width;
+    canvas.height = data.height;
+    canvas.getContext("2d")!.putImageData(pixels, 0, 0);
+    return canvas;
+  } catch {
+    return null;
+  }
+}
+
+/** Decode whatever the install handed us, by magic rather than by the name the FDF used. */
+export function imageToCanvas(bytes: Uint8Array, opts: BlpOptions = {}): HTMLCanvasElement | null {
+  if (bytes.length >= 4 && bytes[0] === 0x44 && bytes[1] === 0x44 && bytes[2] === 0x53 && bytes[3] === 0x20) {
+    return ddsToCanvas(bytes, opts);
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x42 && bytes[1] === 0x4c && bytes[2] === 0x50) {
+    return blpToCanvas(bytes, opts);
+  }
+  return tgaToCanvas(bytes);
+}
+
+/** Where one UI image may live, most likely first. SD keeps its BLP; HD prefers the DDS the
+ *  Reforged store uses for the same name (and for extensionless war3skins keys). */
+export function imageCandidates(path: string, hd = isHd()): string[] {
+  const m = /\.(blp|dds|tga)$/i.exec(path);
+  const stem = m ? path.slice(0, -m[0].length) : path;
+  const ext = m?.[1]?.toLowerCase();
+  let names: string[];
+  if (!ext) names = hd ? [path, `${path}.dds`, `${path}.blp`] : [path, `${path}.blp`];
+  else if (ext === "tga") names = hd ? [`${stem}.dds`, `${stem}.blp`, path] : [`${stem}.blp`, path];
+  else names = [path];
+  const out: string[] = [];
+  for (const name of names) for (const candidate of hdTexturePaths(name, hd)) if (!out.includes(candidate)) out.push(candidate);
+  return out;
+}
+
+/** Read and decode the first image candidate the install actually has. */
+export function vfsImage(
+  vfs: { rawBytes(path: string): Uint8Array | null | undefined },
+  path: string,
+  opts: BlpOptions = {},
+): HTMLCanvasElement | null {
+  for (const candidate of imageCandidates(path)) {
+    const bytes = vfs.rawBytes(candidate);
+    if (!bytes) continue;
+    const canvas = imageToCanvas(bytes, opts);
+    if (canvas) return canvas;
+  }
+  return null;
+}
+
+export function imageToDataUrl(bytes: Uint8Array, opts: BlpOptions = {}): string | null {
+  return imageToCanvas(bytes, opts)?.toDataURL() ?? null;
 }
 
 /**

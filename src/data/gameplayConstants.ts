@@ -135,6 +135,11 @@ export const MISC_GAME = {
   MaxUnitSpeed: 400,
   MinBldgSpeed: 25,
   MaxBldgSpeed: 400,
+  /** "Movement - Speed Bonuses Stack" (MiscMetaData `msbs`, a bool). 0 on the melee tables:
+   *  a hero carrying two Boots of Speed moves as fast as with one — the LARGEST carried
+   *  `AIms` bonus counts and the rest are dead weight (SimWorld.itemBonuses, issue #282).
+   *  The custom data sets say 1 (MISC_GAME_CUSTOM). */
+  MoveSpeedBonusesStack: 0,
 
   // --- frost (Frost Armor, Frost Attack) ------------------------------------
   FrostMoveSpeedDecrease: 0.5,
@@ -364,7 +369,7 @@ export const MISC_GAME_V0 = {
  * four `*Cluster` rows — are ones `MISC_GAME` does not model at all; Reign of Chaos's custom
  * copy is the older snapshot there.)
  *
- * Three rows, and the damage one is why this exists: **Spells hitting HERO armour is 0.70 on the
+ * Four rows, and the damage one is why this exists: **Spells hitting HERO armour is 0.70 on the
  * expansion's melee tables and 0.75 everywhere else**, so a chapter graded by the melee number
  * was quietly taking five percentage points off every spell aimed at a hero.
  *
@@ -380,6 +385,9 @@ export const MISC_GAME_CUSTOM = {
   // Hiring from a shop is SILENT on a custom map: 600 is the melee file's, and it is the radius
   // within which creeps hear the transaction (SimWorld.notifyCreepsOfShopUse).
   UnitSaleAggroRange: 0,
+  // Boots of Speed STACK on a custom map (both custom copies say 1 against the melee files' 0),
+  // so a chapter's hero with two pairs really is +120 (SimWorld.itemBonuses).
+  MoveSpeedBonusesStack: 1,
 } as const;
 
 /** The engine's food ceiling for the edition the client is on — 100, or Reign of Chaos's 90. */
@@ -502,10 +510,10 @@ function parseLike(raw: string, base: unknown): Shaped | null {
 export const MISC_UNREAD: ReadonlySet<string> = new Set([
   "AbilSaleAggroRange", "AgiMoveBonus", "ConstructionLifeDrainRate", "DisplayEnemyInventory",
   "AttackHalfAngle", "BuildingAngle", "BuildingUnblightRadius", "BulletDeathTime", "CancelTime",
-  "ChanceToMiss", "CloseEnoughRange", "CreepCampPathingCellDistance", "DecayTime", "EffectDeathTime",
+  "CloseEnoughRange", "CreepCampPathingCellDistance", "DecayTime", "EffectDeathTime",
   "FogFlashTime", "FollowItemRange", "FollowRange", "GoldMineMaxGold", "GoldMineOwnDuration",
   "InvisSpeed", "MaxCollisionRadius", "RallyZOffset", "ReactionDelay",
-  "RootAngle", "ScaledAnimTime", "SelectionCircleBaseZ", "SpellCastRangeBuffer", "StructureDecayTime",
+  "RootAngle", "ScaledAnimTime", "SelectionCircleBaseZ", "StructureDecayTime",
   "StructureFollowRange", "TradingIncLarge", "TradingIncSmall",
 ]);
 
@@ -799,6 +807,13 @@ export const TEXT_TAG = {
   BountyTextVelocity: [0, 0.03, 100],
   BountyTextLifetime: 3,
   BountyTextFadeStart: 2,
+
+  /** "// missile 'miss' text tag data" — the red "miss" over a shot that went wide (an evade,
+   *  a Curse, a shot up a cliff). Pure red, three seconds, fading from the first. */
+  MissTextColor: [255, 255, 0, 0],
+  MissTextVelocity: [0, 0.03, 100],
+  MissTextLifetime: 3,
+  MissTextFadeStart: 1,
 } as const;
 
 /**
@@ -814,6 +829,7 @@ export const MISC_UI = {
   GoldTextHeight: 0.024,
   LumberTextHeight: 0.024,
   BountyTextHeight: 0.024,
+  MissTextHeight: 0.024,
 } as const;
 
 /** The word the Custom Game screen puts against "Map Size", from `GLUE.*MapRange`. */
@@ -887,6 +903,20 @@ export const CAMERA = {
   DEFAULT_ROTATION: 90,
   /** bj_CAMERA_DEFAULT_FARZ — far clip plane. */
   DEFAULT_FARZ: 5000,
+  /**
+   * `UI\MiscData.txt` [Camera] `NearZ=100,100,100,100,100,100,60` — the NEAR clip plane, one
+   * entry per zoom stop and every stop the same. Blizzard.j has no `bj_` for it because no
+   * script is expected to move it.
+   *
+   * It is not a rendering detail: the campaign's cinematics are AUTHORED against it. A
+   * camera object is placed by eye in the editor, where anything within 100 units of the lens
+   * is simply not drawn, so nothing stops an author parking the eye in a wall — and they did.
+   * Prologue02's `gg_cam_Victory_Alternate_C` (the "I'm fine, little brother" two-shot) has
+   * its eye ~70 units behind a Barred Wall doodad at (-5120, -2752). With the game's near
+   * plane the wall is cut away and the shot is two orcs in a prison yard; with a near plane
+   * of 16 it is the inside of that wall.
+   */
+  NEARZ: 100,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -1015,12 +1045,29 @@ export function etherealHealBonus(): number {
   return gameNum("EtherealHealBonus");
 }
 
-/** The share of a hit that `armor` points of armour absorb: `n·k / (1 + k·n)`, with
- *  k = DefenseArmor. Diminishing returns, so armour never reaches 100%. Negative
- *  armour (Acid Bomb, Faerie Fire) falls out of the same formula as extra damage. */
+/** Below this, more negative armour changes nothing: the amplification stops at
+ *  2 − 0.94²⁰ ≈ ×1.71. In no install file and NOT on the classic basics page either, which
+ *  gives the formula below and no floor — the −20 is Liquipedia's "Armor" page alone, and
+ *  ours to keep honest until the real client's armour slab has been read past it (#292). */
+const NEGATIVE_ARMOR_FLOOR = -20;
+
+/** The share of a hit that `armor` points of armour absorb, k = DefenseArmor.
+ *
+ *  Positive: `n·k / (1 + k·n)` — diminishing returns, so armour never reaches 100%.
+ *
+ *  Negative (Acid Bomb, Faerie Fire, Corruption) is a DIFFERENT curve, not the same one
+ *  run backwards. The official classic basics page states it
+ *  (classic.battle.net/war3/basics/armorandweapontypes.shtml): "For negative Armor, it is
+ *  damage increase = 2-0.94^(-armor)", with the worked example "A negative armor of 10
+ *  increases damage by 46.1%". So the answer here is `−(1 − (1 − k)^(−n))`, floored at
+ *  NEGATIVE_ARMOR_FLOOR. It bends the other way — each further point is worth less — where
+ *  we used to return the linear `n·k` (×1.60 at −10, ×2.20 at −20, and no floor at all),
+ *  which made stacked armour reduction over-kill. The page writes 0.94; it is 1 −
+ *  DefenseArmor, so a map that edits the constant moves both branches together. */
 export function armorDamageReduction(armor: number): number {
   const k = gameNum("DefenseArmor");
-  return (armor * k) / (1 + k * Math.max(0, armor));
+  if (armor >= 0) return (armor * k) / (1 + k * armor);
+  return -(1 - Math.pow(1 - k, -Math.max(armor, NEGATIVE_ARMOR_FLOOR)));
 }
 
 /** Expand one of the `f(x) = A·f(x-1) + B·x + C` tables out to `maxLevel`, where the

@@ -1,8 +1,11 @@
 import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
+import ddsHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/dds/handler";
 import { separateAlphaBlend } from "./loadingScene";
 import type { DataSource } from "../vfs/types";
+import { isHd } from "../data/flavor";
+import { hdTexturePaths } from "../vfs/tileset";
 
 // The Battle.net PROGRESS BAR — the bar the game's own "Downloading Update" box fills while it
 // fetches a patch (`UI\FrameDef\Glue\MainMenu.fdf` `BattleNetPatchDialog`, sprite
@@ -70,9 +73,19 @@ export class ProgressBarScene {
 
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource) {
     const viewer = new ViewerClass(canvas, { alpha: true });
-    const solver: Solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
-    viewer.addHandler(mdxHandler, solver, false);
+    const hd = isHd();
+    const solve: Solver = (src) => {
+      if (typeof src !== "string") return src;
+      if (!hd) return this.vfs.read(src);
+      for (const path of hdTexturePaths(src, true)) {
+        if (this.vfs.exists(path)) return this.vfs.read(path);
+      }
+      return undefined;
+    };
+    this.solve = solve;
+    viewer.addHandler(mdxHandler, solve, hd);
     viewer.addHandler(blpHandler);
+    if (hd) viewer.addHandler(ddsHandler); // Reforged art (P3-4)
     // See-through, over the dialog's own backdrop — the load bar's update-overlay treatment
     // (render/loadingScene.ts), for the same glow layer.
     viewer.startFrame = (): void => {
@@ -88,12 +101,14 @@ export class ProgressBarScene {
     this.scene = scene;
   }
 
+  /** Model-internal textures, with the HD `.dds` spellings tried before the SD ones (P3-2). */
+  private solve: Solver;
+
   /** Read the bar out of the install. Resolves false when it is not there — the dialog still
    *  stands, with its percentage doing the job alone. */
   async load(): Promise<boolean> {
     if (!this.vfs.exists(PROGRESS_BAR_MODEL)) return false;
-    const solver: Solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
-    const model = (await this.viewer.load(await this.vfs.read(PROGRESS_BAR_MODEL), solver)) as MdxModel | null;
+    const model = (await this.viewer.load(await this.vfs.read(PROGRESS_BAR_MODEL), this.solve)) as MdxModel | null;
     const birth = model?.sequences.findIndex((s) => /^birth$/i.test(s.name)) ?? -1;
     if (!model || birth < 0) return false;
     const instance = model.addInstance();

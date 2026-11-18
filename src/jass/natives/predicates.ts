@@ -66,12 +66,29 @@ export function registerPredicateNatives(rt: Runtime): void {
   });
   // `IsUnitRace(u, RACE_HUMAN)` — the unit's own race column, matched against the `race`
   // constant's index. The names are `UnitData.slk`'s own spellings, which is what the bridge
-  // hands back, so the mapping lives here rather than being re-spelled in the sim.
-  const RACES = ["", "human", "orc", "undead", "nightelf", "demon", "other", "creep"];
+  // hands back, so the mapping lives here rather than being re-spelled in the sim. The INDEX is
+  // common.j's: RACE_HUMAN..RACE_DEMON = ConvertRace(1..5) and RACE_OTHER = ConvertRace(7) —
+  // there is no race 6, so slot 6 is empty (issue #229: "other" sat at 6 and RACE_OTHER was
+  // compared against a "creep" no unit has).
+  //
+  // UnitData.slk also spells `creeps`, `critters`, `naga` and `commoner`, which no common.j
+  // constant names. Which of them (if any) the real engine folds into RACE_OTHER is unverified
+  // against the client, so they match NOTHING here rather than a guessed constant.
+  const RACES = ["", "human", "orc", "undead", "nightelf", "demon", "", "other"];
+  const raceIndexOf = (name: string): number => (name ? RACES.indexOf(name) : -1);
   def(rt, "IsUnitRace", (c, a) => {
     const id = simOf(c, a[0]);
     if (id === undefined) return jBool(false);
-    return jBool((c.rt.hooks?.unitRace?.(id) ?? "") === (RACES[c.rt.enumIndex(a[1])] ?? ""));
+    const index = raceIndexOf(c.rt.hooks?.unitRace?.(id) ?? "");
+    return jBool(index > 0 && index === c.rt.enumIndex(a[1]));
+  });
+  // `GetUnitRace` answers from the same table, so `GetUnitRace(u) == RACE_X` and
+  // `IsUnitRace(u, RACE_X)` can never disagree. A race no constant names (and a dead handle)
+  // reads as index 0, the same "no race" `GetPlayerRace` hands back for an empty slot.
+  def(rt, "GetUnitRace", (c, a) => {
+    const id = simOf(c, a[0]);
+    const index = id === undefined ? -1 : raceIndexOf(c.rt.hooks?.unitRace?.(id) ?? "");
+    return c.rt.enumHandle("Race", Math.max(0, index));
   });
   def(rt, "IsHeroUnitId", (c, a) =>
     jBool(c.rt.hooks?.isUnitIdType?.(intToRawcode(asInt(a[0])), UNIT_TYPE_HERO) ?? false));
@@ -81,6 +98,18 @@ export function registerPredicateNatives(rt: Runtime): void {
   def(rt, "IsUnitIllusion", (c, a) => {
     const id = simOf(c, a[0]);
     return jBool(id === undefined ? false : c.rt.hooks?.isUnitIllusion?.(id) ?? false);
+  });
+  // IsUnitLoaded / IsUnitInTransport — "Unit is loaded into a transport" (IsUnitLoadedBJ,
+  // IsUnitInTransportBJ). The sim keeps ONE roster for every hold (a Zeppelin, a ship, a
+  // Burrow), and the passenger names its host, so both are a read of that.
+  def(rt, "IsUnitLoaded", (c, a) => {
+    const id = simOf(c, a[0]);
+    return jBool(id === undefined ? false : (c.rt.hooks?.unitTransport?.(id) ?? 0) !== 0);
+  });
+  def(rt, "IsUnitInTransport", (c, a) => {
+    const id = simOf(c, a[0]);
+    const host = simOf(c, a[1]);
+    return jBool(id !== undefined && host !== undefined && c.rt.hooks?.unitTransport?.(id) === host);
   });
   def(rt, "IsUnitSelected", (c, a) => {
     const id = simOf(c, a[0]);
@@ -160,6 +189,10 @@ export function registerPredicateNatives(rt: Runtime): void {
     return false;
   };
   def(rt, "IsPointInRegion", (c, a) => jBool(inRegion(c, a[0], asNum(a[1]), asNum(a[2]))));
+  def(rt, "IsLocationInRegion", (c, a) => {
+    const p = loc(c, a[1]);
+    return jBool(!!p && inRegion(c, a[0], p.x, p.y));
+  });
   def(rt, "IsUnitInRegion", (c, a) => {
     const id = simOf(c, a[1]);
     if (id === undefined) return jBool(false);

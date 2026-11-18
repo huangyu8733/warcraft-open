@@ -4,6 +4,7 @@ import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { findFrame, setProp, str } from "./mapBrowser";
 import { isRoc } from "../data/edition";
+import { flavor, isHd } from "../data/flavor";
 import { setGameTip } from "./gameTip";
 import { t } from "../i18n";
 import { createLanguageSwitch } from "../i18n/switch";
@@ -43,7 +44,11 @@ export async function mountFdfMainMenu(
     // glue script hides it), but the little search-region button (magnifying glass)
     // next to Online is kept — the developer wants it shown even without region logic.
     // Both it and Online itself are DISABLED for now (see OFFLINE_BUTTONS).
-    hidden: ["RealmSelect"],
+    //
+    // Reforged has no Reign of Chaos data line (data/edition.ts fixes it to TFT), so the
+    // edition emblem beside Single Player is hidden rather than left as a switch to nowhere
+    // (P3-6).
+    hidden: ["RealmSelect", ...(isHd() ? ["EditionButton"] : [])],
     // Wider buttons than the 4:3-authored FDF, to fill the widescreen chain panel
     // (text stays its FDF size — only the widget widens).
     buttonWidthScale: 1.35,
@@ -112,7 +117,7 @@ export async function mountFdfMainMenu(
  * thing on this menu that has to RELOAD: the menu, its strings and all its art were built from
  * the install that is mounted now, and only the boot path can mount another one.
  */
-function createChangeInstall(): HTMLButtonElement {
+export function createChangeInstall(): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "change-install";
@@ -130,7 +135,7 @@ async function changeInstall(): Promise<void> {
     return;
   }
   try {
-    if (!(await pickInstall())) return; // cancelled: nothing to say, the old install stays mounted
+    if (!(await pickInstall(flavor()))) return; // cancelled: nothing to say, the old install stays mounted
   } catch (err) {
     console.warn("[Warcraft Open] the picked folder could not be read:", err);
     return;

@@ -4,6 +4,7 @@ import { keepDownloadedMap } from "../assets/downloadedMaps";
 import type { LanLobby } from "../net/lobby";
 import type { DataSource } from "../vfs/types";
 import { t } from "../i18n";
+import { flavor } from "../data/flavor";
 
 // "Downloading Map" — a LAN game's map, fetched from its host when the joiner's install lacks it
 // (net/mapTransfer.ts), in the box the game used for downloads: `BattleNetPatchDialog`
@@ -103,7 +104,7 @@ export async function showMapDownload(opts: MapDownloadOptions): Promise<{ key: 
         dialog.setInfo(line(opts.mapName, opts.hostName, total));
       }
       dialog.setProgress(fraction);
-    }, abort.signal);
+    }, abort.signal, flavor());
     if (!running) return closed;
     const kept = await keepDownloadedMap(opts.mapPath, bytes);
     if (!running) return closed;

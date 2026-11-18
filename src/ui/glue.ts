@@ -65,6 +65,13 @@ export interface GlueScreenDef {
    * named here plays its own Birth/Stand instead, under its own fog (render/menuScene.ts).
    */
   backdrop?: { path: string; fog: { r: number; g: number; b: number; start: number; end: number } };
+  /**
+   * An HD (Reforged 3.0) screen: it brings its own full-window picture and has no panel chrome
+   * at all. `chrome` is unread while this is set, exactly as it is for a backdrop screen — the
+   * classic chain panels belong to the FDF front end, and a 3.0 screen never shows them even
+   * when the 3D menu behind it still exists (ui/hd/screen.ts).
+   */
+  noChrome?: boolean;
   /** Build the FDF screen. Fading it in is the manager's job, not the screen's. */
   mount(): Promise<FdfScreen>;
   /**
@@ -89,6 +96,17 @@ export class GlueManager {
   private current: FdfScreen | null = null;
   /** Whether the screen on screen is a backdrop one — it decides what leaving it does. */
   private backdropUp = false;
+  /** Whether the panel chrome is standing (i.e. the current screen did not opt out of it). */
+  private chromeUp = false;
+  /** Whether the screen on display opted out of the chrome — a 3.0 (Reforged) screen. */
+  private noChromeUp = false;
+  /**
+   * A 3.0 screen taken off `current` but still standing over the classic 3D menu underneath,
+   * waiting for something opaque (the next screen, or the loading screen) to cover it. These
+   * screens own the whole window and wear their own picture, so there is nothing to uncover
+   * between two of them — and uncovering the classic menu is exactly the flash this avoids.
+   */
+  private held: FdfScreen | null = null;
   private busy = false;
   /** The black the screen crosses through on a scene swap; built on first use. */
   private fade: HTMLElement | null = null;
@@ -109,6 +127,7 @@ export class GlueManager {
     // Putting a first screen up re-opens the stack, which is the one thing that lifts the gate
     // `leave` deliberately left closed behind it (see there).
     this.busy = false;
+    this.releaseHeld();
     this.current?.dispose();
     const next = await def.mount();
     this.current = next;
@@ -138,19 +157,33 @@ export class GlueManager {
     return this.toBlack(false, WORLD_FADE_MS);
   }
 
+  /** Take down the 3.0 screen `leave` held up — the loading screen covers the window now. */
+  releaseHeld(): void {
+    this.held?.dispose();
+    this.held = null;
+  }
+
   /** Bring `def`'s background in — a campaign backdrop, or the panel chrome's Birth — and
    *  say how long it takes. Restoring the menu's own background when a backdrop screen is
    *  what we are LEAVING happens here too, so the two can never get out of step. */
   private async arrive(def: GlueScreenDef): Promise<number> {
+    this.noChromeUp = !!def.noChrome;
     if (def.backdrop) {
       await this.scene?.showBackdrop(def.backdrop.path, def.backdrop.fog);
       this.backdropUp = true;
+      this.chromeUp = false;
       def.onArrived?.();
       return 0; // the backdrop's own Birth runs behind the screen; the DOM doesn't wait on it
     }
     if (this.backdropUp) this.scene?.restoreMenuBackground();
     this.backdropUp = false;
+    if (def.noChrome) {
+      this.chromeUp = false;
+      def.onArrived?.();
+      return 0; // no panel model to play — the screen's own fade carries the arrival
+    }
     const birth = this.scene?.playChromeBirth(def.chrome, def.sides?.()) ?? 0;
+    this.chromeUp = !!this.scene;
     def.onArrived?.();
     return birth;
   }
@@ -185,12 +218,18 @@ export class GlueManager {
       next.setInteractive(false); // not clickable until it has landed — but not greyed either
       next.element.style.visibility = "hidden"; // …and unseen until the old screen has left
 
+      // A 3.0 screen (noChrome) has no panel chrome AND its own opaque picture: what leaves is
+      // its CONTENTS, not the window. Tearing the element down before the next screen arrives
+      // uncovered the classic 3D menu still running underneath (ui/hd screens mount over it),
+      // so a Reforged menu button blinked the classic client for the beat between screens.
+      // Hold it until its replacement covers it; classic screens still leave exactly as before.
       if (leaving) {
         // The chrome leaves at the same moment, and tells us how long it takes. A backdrop
-        // screen has no chrome to send away — only its contents fade.
-        const death = this.backdropUp ? 0 : this.scene?.playChromeDeath() ?? 0;
+        // screen or a 3.0 screen has no chrome to send away — only its contents fade.
+        const death = this.backdropUp || !this.chromeUp ? 0 : this.scene?.playChromeDeath() ?? 0;
         await leaving.animatePanels("out", death || NO_CHROME_OUT_MS);
-        leaving.dispose();
+        if (def.noChrome) this.held = leaving;
+        else leaving.dispose();
       }
 
       // Black comes down only ONCE THE OLD SCREEN HAS GONE. The panel chrome's Death and the
@@ -206,6 +245,7 @@ export class GlueManager {
 
       this.current = next;
       next.element.style.visibility = "";
+      this.releaseHeld(); // covered now — same task, so the classic scene never paints through it
       const birth = await this.arrive(def);
       // Lift the black the MOMENT the new scene exists, and let the screen's contents fade up
       // over it rather than after it. A backdrop's Birth is a camera move — NightElf_Exp sweeps
@@ -220,6 +260,7 @@ export class GlueManager {
       return next;
     } catch (err) {
       console.error("[Warcraft Open] couldn't open that menu:", err);
+      this.releaseHeld();
       leaving?.setAllDisabled(false); // give the player their screen back
       if (wentBlack) await this.toBlack(false); // never leave the player staring at black
       return null;
@@ -247,6 +288,7 @@ export class GlueManager {
       this.current?.dispose();
       this.current = null;
       this.backdropUp = false;
+      this.chromeUp = false;
       await rebuild();
       const next = await def.mount();
       this.current = next;
@@ -284,9 +326,13 @@ export class GlueManager {
     if (this.busy || !leaving) return;
     this.busy = true;
     leaving.setAllDisabled(true);
-    const death = this.backdropUp ? 0 : this.scene?.playChromeDeath() ?? 0;
+    const death = this.backdropUp || !this.chromeUp ? 0 : this.scene?.playChromeDeath() ?? 0;
     await leaving.animatePanels("out", death || NO_CHROME_OUT_MS);
-    leaving.dispose();
+    // Same reason as `goTo`'s hold: a 3.0 screen IS the window, so dropping it before the
+    // loading screen is built leaves the classic 3D menu showing. Keep it up; the loading
+    // screen releases it once it covers the window (main.ts `showLoadingScreen`).
+    if (this.noChromeUp) this.held = leaving;
+    else leaving.dispose();
     this.current = null;
   }
 
@@ -312,6 +358,7 @@ export class GlueManager {
   dispose(): void {
     this.current?.dispose();
     this.current = null;
+    this.releaseHeld();
     this.fade?.remove();
     this.fade = null;
   }

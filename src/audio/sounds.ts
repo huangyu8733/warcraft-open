@@ -72,6 +72,18 @@ const ABILITY_TABLE = "UI\\SoundInfo\\AbilitySounds.slk"; // spell sounds, by la
 const DIALOG_TABLE = "UI\\SoundInfo\\DialogSounds.slk"; // campaign dialogue lines
 // (SoundLabel → WAVs + 3D metadata is AnimSounds.slk — already loaded under the "anim" tag.)
 
+/**
+ * 3.0's AbilitySounds.slk has one row whose `Filenames` lost the separator between folder and
+ * file: `Abilities/Spells/Items/AIamTomes.flac` — the `PowerupSound` chime shared by every tome
+ * and powerup row. The art is `Abilities\Spells\Items\AIam\Tomes.ogg`.
+ */
+const SOUND_FILE_FIXES = new Map([
+  ["abilities/spells/items/aiamtomes.flac", "Abilities\\Spells\\Items\\AIam\\Tomes.ogg"],
+  // The classic credits reel asks for `MainScreenMusic.mp3`; the install's track is
+  // `Mainscreen.mp3` (the same theme under its file name).
+  ["sound/music/mp3music/mainscreenmusic.mp3", "Sound\\Music\\mp3Music\\Mainscreen.mp3"],
+]);
+
 // A sound LABEL lives in ONE namespace spanning every SoundInfo table — a script's
 // SetSoundParamsFromLabel(snd, "N03Tyrande01") means DialogSounds, and
 // SetSoundParamsFromLabel(snd, "HeroDeathKnightPissed") means UnitAckSounds, with no
@@ -191,6 +203,22 @@ const CHANNEL_VOICES = 16;
  *  buffer's footprint is `length × channels × 4`. */
 const AUDIO_BUFFER_BUDGET = 192 * 1024 * 1024;
 
+/** Footprint of what the loading screen holds for the match (`warmUnits`). A classic install's
+ *  clips are WAVs, so a melee map's four races plus its creeps comes to ~80 MB — the cache has to
+ *  cover that or the clips past the cap are read again on their first play (the hitch the warm
+ *  exists to remove). 128 MiB leaves room for a campaign map without being unbounded. */
+const AUDIO_BYTES_BUDGET = 128 * 1024 * 1024;
+
+/** What `warmUnits` needs to know about a unit TYPE to find every clip it can emit. Mirrors the
+ *  UnitDef columns, so the preload can hand registry rows straight in. */
+export interface UnitSoundDef {
+  model: string;
+  soundSet: string;
+  weaponSound: string;
+  lumberSound: string;
+  armorSound: string;
+}
+
 /** A reserved slot on a channel. `src` is null until the clip's buffer finishes decoding
  *  (the reservation is taken synchronously, playback starts later); `dead` marks a voice
  *  preempted before it ever started, so the decode callback knows not to play it. */
@@ -254,6 +282,12 @@ interface ModelSounds {
    *  the ability's own, uppercased (`SNDXAEFK` on HeroWarden.mdx is `[AEfk]` Fan of Knives),
    *  and a model that carries several of them must be asked for the right one. */
   abilityByCode: Map<string, Clip>;
+  /** The S events, keyed by code — the SPELL sounds a model plays as a clip of its own passes
+   *  over them, which nothing else in this table can stand for. HealBottleMissile.mdx is why:
+   *  its throw is `SNDxSHSL` on Birth (→ "HealingSprayLaunch" → HealingSprayBirth1.wav) and its
+   *  burst `SNDXSHSI` on Death (→ "HealingSprayImpact" → HealingSprayDeath1.wav), and a bottle
+   *  thrown at the GROUND never makes the weapon HIT that voices a missile's `impact` list. */
+  spellByCode: Map<string, Clip>;
   /** WHEN each event fires, in model-global milliseconds, keyed by the same 4-char code.
    *  The MDX writes an event object's tracks on the one timeline its sequences are intervals
    *  on, so an event and the clip it belongs to can be paired by containment — which is how a
@@ -331,11 +365,36 @@ interface Table {
   index: Map<string, string>;
 }
 
+/** What this class needs from a parsed MDX — a scene's own model object satisfies it, so a
+ *  model the renderer already loaded can be read here without touching the file again. */
+export interface ParsedModel {
+  sequences: ReadonlyArray<{ name: string; interval: ArrayLike<number> }>;
+  /** MDX event objects. The PARSER names each one "SNDXAREP"; the viewer's runtime emitter
+   *  splits that into `type` ("SND") and the four-character `id` ("AREP"). Accept either. */
+  eventObjects: ReadonlyArray<{
+    name?: string;
+    type?: string;
+    id?: string;
+    tracks: ArrayLike<number>;
+  }>;
+}
+
 export class SoundBoard {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private tables = new Map<string, Table | null>();
   private buffers = new Map<string, Promise<AudioBuffer | null>>();
+  /** Compressed audio the loading screen fetched (`warmUnits`), keyed by the name the TABLES
+   *  give — which is what `decode` is called with — so the first ack or clang of the match
+   *  decodes from memory instead of going back to the archive. The PCM that comes out of it is
+   *  still the LRU above that is bounded; this only skips the read. */
+  private audioBytes = new Map<string, Uint8Array>();
+  private audioBytesTotal = 0;
+  /** Models the scenes have already parsed, keyed like the sound cache. On an HD mount the
+   *  bytes behind a model may be gone by the time a unit first swings, and re-reading the file
+   *  is not an option `resolveModelSounds` can take — but the renderer parsed it to draw the
+   *  unit, so hand that parse over. See registerModel. */
+  private sceneModels = new Map<string, ParsedModel>();
   /** Decoded-PCM footprint in bytes per cached path, once resolved — the LRU's eviction
    *  ledger for the budget above (AUDIO_BUFFER_BUDGET). Absent while a path is still being
    *  decoded or failed, which is exactly what makes it "not yet worth shedding". */
@@ -650,6 +709,12 @@ export class SoundBoard {
   playMissile(missileArt: string, kind: "launch" | "impact", at?: SoundPos): void {
     if (!missileArt) return;
     const ms = this.resolveModelSounds(missileArt);
+    // A LAUNCH is the missile's Birth starting, so the SPELL events parked in it play too, beside
+    // the M/A throw below: HealBottleMissile.mdx keys `SNDXANSM` (StrongDrinkMissile1.wav, the
+    // bottle's whoosh) AND `SNDxSHSL` (HealingSprayBirth1.wav) on the same frame, 2033. Its
+    // impact half is played where the burst is (mapViewer.impactProjectile), not here: this
+    // method's impact is a weapon HIT's, and a bottle thrown at the ground never makes one.
+    if (kind === "launch") this.playModelSpellEventsIn(missileArt, "birth", at);
     const clips = kind === "launch" ? ms.launch : ms.impact;
     if (clips.length) {
       this.playPool(clips[(Math.random() * clips.length) | 0], "impact", at);
@@ -703,6 +768,140 @@ export class SoundBoard {
    *  and neither does the Wisp. Paired with the clip's own interval by unitAnims.eventCycle. */
   repairBlowTimes(modelArt: string): number[] {
     return (modelArt ? this.resolveModelSounds(modelArt).eventTimes.get(REPAIR_EVENT) : undefined) ?? [];
+  }
+
+  /**
+   * Hand over the model a scene has already parsed.
+   *
+   * A unit's attack, hammer and death sounds are SND event objects written INSIDE its MDX, and
+   * `resolveModelSounds` reads them out of the file. That works off `rawBytes`, which an HD
+   * mount answers with null for lazy art — and even the copy `read()` leaves behind can be gone
+   * by the time a unit first swings (see CascDataSource.modelBytes). The renderer had to parse
+   * exactly the same file to draw the unit, so the scene passes that parse in here and no file
+   * is touched a second time.
+   */
+  registerModel(path: string, model: ParsedModel | null | undefined): void {
+    if (!path || !model || !model.eventObjects) return;
+    this.sceneModels.set(path.toLowerCase(), model);
+  }
+
+  /**
+   * The sound half of the map's loading-screen preload.
+   *
+   * Resolves every clip these unit types can emit — their voice lines, their death cry, the
+   * clang of each of their weapons and their harvest axe against every material the match has,
+   * and the SND events their own models carry (fire, hammer, birth, death) — checks each one is
+   * actually in this install, and fetches the bytes so the first play is a decode rather than an
+   * archive read.
+   *
+   * The FETCH is part of the loading screen and is NOT left to the background: a clip whose
+   * bytes are not held is read again on its first play, which is exactly the hitch this exists
+   * to remove. The byte BUDGET stays (64 MiB) — past it a clip is left lazy rather than
+   * evicting the ones already held. Put the unit types already on the field FIRST: theirs are
+   * the clips that fit.
+   *
+   * @param onProgress called with 0..1 as each clip's bytes are resolved (the bar's last share).
+   * @returns how many clips were found, how many their bytes were held for, and the paths that
+   *          resolved to no file at all — which is a real gap in the install, not a slow one.
+   */
+  async warmUnits(
+    defs: readonly UnitSoundDef[], onProgress?: (p: number) => void,
+  ): Promise<{ clips: number; held: number; missing: string[] }> {
+    // Every material a weapon can ring off: the four the combat table always has, plus whatever
+    // this map's units are made of (a Stone golem's armour is a row of its own).
+    const materials = new Set<string>(["Flesh", "Metal", "Stone", "Wood"]);
+    for (const d of defs) if (d.armorSound && d.armorSound !== "_") materials.add(d.armorSound);
+    const paths = new Set<string>();
+    const add = (clip: Clip | null | undefined): void => {
+      if (clip) for (const p of clip.paths) paths.add(p);
+    };
+    for (const d of defs) {
+      if (d.soundSet) {
+        for (const category of VOICE_CATEGORIES) add(this.resolve("ack", d.soundSet + category));
+        add(this.resolve("anim", d.soundSet + "Death"));
+      }
+      for (const m of materials) {
+        if (d.weaponSound && d.weaponSound !== "_") add(this.resolve("combat", d.weaponSound + m));
+        if (d.lumberSound && d.lumberSound !== "_") add(this.resolve("combat", d.lumberSound + m));
+      }
+      if (d.model) {
+        const model = this.resolveModelSounds(d.model);
+        for (const list of [model.attack, model.launch, model.impact, model.ability, model.death]) {
+          for (const clip of list) add(clip);
+        }
+        for (const clip of model.abilityByCode.values()) add(clip);
+      }
+    }
+    const missing: string[] = [];
+    const found: string[] = [];
+    for (const path of paths) (this.soundFileFor(path) ? found : missing).push(path);
+    let next = 0;
+    let done = 0;
+    let held = 0;
+    const worker = async (): Promise<void> => {
+      while (next < found.length) {
+        const path = found[next++];
+        if (this.audioBytes.has(path)) {
+          held++;
+        } else {
+          const bytes = await this.fetchSoundBytes(path);
+          if (!bytes) missing.push(path);
+          else if (this.rememberAudioBytes(path, bytes)) held++;
+        }
+        onProgress?.(++done / found.length);
+      }
+    };
+    // Bounded concurrency: the CASC reads are small but there can be a thousand of them.
+    await Promise.all(Array.from({ length: Math.min(16, found.length) }, worker));
+    if (!found.length) onProgress?.(1);
+    return { clips: paths.size, held, missing };
+  }
+
+  /** The file a table-named clip actually lives in, or null when this install has neither it
+   *  nor its re-encoded twins. The tables and the archive disagree about BOTH the extension and
+   *  the encoding: 1.30 installs keep `.wav`, 3.0's tables name `.flac` while its listfile may
+   *  hold either (and unit lines live as Ogg Vorbis beside the art). So try every audio
+   *  extension, not just the one the row wrote. */
+  private soundFileFor(path: string): string | null {
+    if (this.vfs.exists(path)) return path;
+    const fixed = SOUND_FILE_FIXES.get(path.replace(/\\/g, "/").toLowerCase());
+    if (fixed && this.vfs.exists(fixed)) return fixed;
+    const stem = path.replace(/\.(wav|flac|ogg|mp3)$/i, "");
+    const current = path.slice(stem.length).toLowerCase();
+    // Classic interludes still name their music with the encoding bitrate attached:
+    // Human06Interlude asks for `TragicConfrontation112`, NightElf06Interlude for
+    // `NightElf3-112`, the credits for `Orc1_112`/`Orc2-112`, while the install keeps the bare
+    // `TragicConfrontation` / `NightElf3` / `Orc1` / `Orc2`. The suffix is only ever stale on
+    // music, so a unit line's name is never rewritten.
+    if (/^sound[\\/]music[\\/]/i.test(path)) {
+      const bare = stem.replace(/[-_]?112$/i, "");
+      if (bare !== stem) {
+        if (this.vfs.exists(bare + current)) return bare + current;
+        for (const ext of [".mp3", ".ogg", ".flac", ".wav"]) {
+          if (this.vfs.exists(bare + ext)) return bare + ext;
+        }
+      }
+    }
+    for (const ext of [".wav", ".flac", ".ogg", ".mp3"]) {
+      if (ext === current) continue;
+      if (this.vfs.exists(stem + ext)) return stem + ext;
+    }
+    return null;
+  }
+
+  private async fetchSoundBytes(path: string): Promise<Uint8Array | null> {
+    return this.vfs.read(this.soundFileFor(path) ?? path).catch(() => null);
+  }
+
+  /** Hold a clip's bytes for the match's first play. No eviction: once a unit is on the field,
+   *  its sounds are the ones worth keeping, and the budget is what stops the tail of the tech
+   *  tree from pushing them out. Past the budget the answer is "no", and that clip stays lazy. */
+  private rememberAudioBytes(path: string, bytes: Uint8Array): boolean {
+    if (this.audioBytes.has(path)) return true;
+    if (this.audioBytesTotal + bytes.length > AUDIO_BYTES_BUDGET) return false;
+    this.audioBytes.set(path, bytes);
+    this.audioBytesTotal += bytes.length;
+    return true;
   }
 
   /** Play the crash a MODEL carries for its own death — the SND "D" event object. For the
@@ -798,6 +997,25 @@ export class SoundBoard {
       const clip = ms.abilityByCode.get(code);
       if (!clip || !times.some((t) => t >= from && t <= to)) continue;
       this.playPool(clip, "spell", at);
+      played = true;
+    }
+    return played;
+  }
+
+  /** Play every S (spell) event a model parks in one of its own clips — what the engine does
+   *  as that clip runs (see ModelSounds.spellByCode). Today the caller is a missile BURSTING:
+   *  its Death clip is played where it lands (mapViewer.impactProjectile), whether or not
+   *  it landed on anybody, and the bottle a Healing Spray wave throws carries the wave's
+   *  splash there. A model with no such event is silent here and nothing changes for it. */
+  playModelSpellEventsIn(modelArt: string, clip: "birth" | "death", at?: SoundPos): boolean {
+    if (!modelArt) return false;
+    const ms = this.resolveModelSounds(modelArt);
+    const w = clip === "birth" ? ms.birth : ms.deathWindow;
+    if (!w || !ms.spellByCode.size) return false;
+    let played = false;
+    for (const [code, c] of ms.spellByCode) {
+      if (!(ms.eventTimes.get(code) ?? []).some((t) => t >= w[0] && t <= w[1])) continue;
+      this.playPool(c, "spell", at);
       played = true;
     }
     return played;
@@ -914,17 +1132,28 @@ export class SoundBoard {
     const key = modelArt.toLowerCase();
     const cached = this.modelSounds.get(key);
     if (cached) return cached;
-    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), eventTimes: new Map(), birth: null, standWindow: null, deathWindow: null };
-    this.modelSounds.set(key, out); // memoize up-front so a missing/broken model isn't re-parsed
-    const bytes = this.vfs.rawBytes(modelArt);
-    if (!bytes) return out;
-    let model: MdlxModel;
-    try {
-      model = new MdlxModel();
-      model.load(bytes);
-    } catch {
-      return out; // unparseable model — stay silent rather than throw mid-combat
+    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), spellByCode: new Map(), eventTimes: new Map(), birth: null, standWindow: null, deathWindow: null };
+    let model: ParsedModel;
+    const registered = this.sceneModels.get(key);
+    if (registered) {
+      model = registered; // the scene parsed it to draw the unit — see registerModel
+    } else {
+      const bytes = this.vfs.rawBytes(modelArt);
+      // No bytes YET is not the same as no such model: on an HD mount (P3) the art is fetched
+      // asynchronously, and the model is only readable once the scene has drawn it. Do NOT
+      // memoize this answer — a unit's own file is read before the unit exists, and caching
+      // the empty set here is what left the hammer (and every embedded attack) silent.
+      if (!bytes) return out;
+      try {
+        const parsed = new MdlxModel();
+        parsed.load(bytes);
+        model = parsed;
+      } catch {
+        this.modelSounds.set(key, out); // unparseable — stay silent rather than throw mid-combat
+        return out;
+      }
     }
+    this.modelSounds.set(key, out); // memoize so a voiced model is read once, a broken one never
     const birth = model.sequences.find((q) => /^birth/i.test(q.name));
     if (birth) out.birth = [birth.interval[0], birth.interval[1]];
     const stand = model.sequences.find((q) => /^stand/i.test(q.name));
@@ -932,21 +1161,32 @@ export class SoundBoard {
     const death = model.sequences.find((q) => /^death/i.test(q.name));
     if (death) out.deathWindow = [death.interval[0], death.interval[1]];
     for (const evt of model.eventObjects) {
-      // Event-object names are "SND" + a 1-char separator + a 4-char code ("SNDXKRIF").
-      if (evt.name.substring(0, 3) !== "SND") continue;
+      // Event-object names are "SND" + a 1-char separator + a 4-char code ("SNDXKRIF"). A
+      // parser keeps that whole name; the viewer's runtime emitter keeps `type` + `id`.
+      const named = evt.name ?? "";
+      if (named ? named.substring(0, 3) !== "SND" : evt.type !== "SND") continue;
       // TRIMMED: some models pad the name — CycloneTarget.mdx's are "SNDXACYB " and
       // "SNDXACYD ", and with the space kept the code missed its AnimLookups row and the
       // Cyclone's birth and death sounds were silent.
-      const id = evt.name.substring(4).trim();
-      const cat = id[0]; // K = attack, M = missile, D = death, A = ability
-      if (cat !== "K" && cat !== "M" && cat !== "A" && cat !== "D") continue;
+      const id = (evt.id ?? named.substring(4)).trim();
+      const cat = id[0]; // K = attack, M = missile, D = death, A = ability, S = spell
+      if (cat !== "K" && cat !== "M" && cat !== "A" && cat !== "D" && cat !== "S") continue;
       const label = this.animLabel(id);
       if (!label) continue;
       const clip = this.resolve("anim", label); // AnimSounds row → clip (vol/pitch/3D/dist)
       if (!clip) continue;
       const code = id.toUpperCase();
       const times = out.eventTimes.get(code) ?? out.eventTimes.set(code, []).get(code)!;
-      for (const t of evt.tracks) times.push(t); // one track per clip the event is parked in
+      for (const t of Array.from(evt.tracks)) times.push(t); // one track per clip it is parked in
+      // An S event is played ONLY by the clip it is parked in (playModelSpellEventsIn), and
+      // joins none of the lists below: those are answered by other paths (a weapon's hit, a
+      // cast), each of which already has its own sound, and an S event added to them would be
+      // a second voice on a moment that has one — or, on a missile's `launch`, a coin toss
+      // against the M/A events parked beside it.
+      if (cat === "S") {
+        out.spellByCode.set(code, clip);
+        continue;
+      }
       // A MISSILE's throw and hit are the events parked in its Birth and its Death, whatever
       // letter they carry: the clip is what says WHEN the engine plays them. ChimaeraLightning
       // Missile.mdx is why it must be the clip and not the letter — its throw is `SNDXKFAR` at
@@ -973,12 +1213,15 @@ export class SoundBoard {
   }
 
   // Lazy index: lowercased folder path → the .wav files the listfile knows it holds.
+  // 3.0 re-encodes the whole sound archive as FLAC, so the same folder holds `.flac` twins —
+  // as far as a scan is concerned they are the same sound (see `decode`'s `.wav` → `.flac`
+  // retry), and leaving them out made every effect folder read as empty on that install.
   private wavFolders: Map<string, string[]> | null = null;
   private wavIndex(): Map<string, string[]> {
     if (this.wavFolders) return this.wavFolders;
     const idx = new Map<string, string[]>();
     for (const name of this.vfs.list()) {
-      if (!/\.wav$/i.test(name)) continue;
+      if (!/\.(wav|flac|ogg)$/i.test(name)) continue;
       const p = name.replace(/\//g, "\\");
       const slash = p.lastIndexOf("\\");
       if (slash < 0) continue;
@@ -1276,7 +1519,13 @@ export class SoundBoard {
    *  needs the later moment (see SoundObj.pending). */
   playScript(id: number, s: ScriptSoundSpec, onStart?: () => void): boolean {
     this.stopScript(id, false); // StartSound on a live handle restarts it
-    if (!s.file || !this.vfs.exists(s.file)) return false;
+    // The script names ONE encoding, but the store may hold the line in another: 3.0's
+    // campaign scripts ask for `.flac` while the install keeps the same dialogue as Ogg
+    // Vorbis, and a 1.26-era map asks for `.mp3`. `soundFileFor` is the same twin-resolution
+    // the clip tables go through, so a cinematic line is not silent just because its file
+    // name's extension is stale.
+    const file = s.file ? this.soundFileFor(s.file) : null;
+    if (!file) return false;
     if (!this.audible()) return false;
     const positional = s.is3D && !!s.at && !!this.listener;
     if (positional && s.cutoff > 0 && this.distanceTo(s.at!) > s.cutoff) return false;
@@ -1284,10 +1533,10 @@ export class SoundBoard {
     // StartSound then StopSound in the same tick (or asks GetSoundIsPlaying) must see it.
     const token: ScriptVoice = { src: null, gain: null, panner: null };
     this.scripts.set(id, token);
-    void this.buffer(s.file).then((buf) => {
+    void this.buffer(file).then((buf) => {
       if (!buf || !this.ctx || !this.master || this.scripts.get(id) !== token) return;
       const clip: Clip = {
-        paths: [s.file],
+        paths: [file],
         gain: Math.max(0, Math.min(1, s.volume / 127)),
         pitch: s.pitch > 0 ? s.pitch : 1,
         pitchVar: 0, // a script sets an exact pitch; the SLK's RANDOMPITCH jitter is the engine's
@@ -1519,11 +1768,13 @@ export class SoundBoard {
       // mp3s, and a store can hold the expansion's and not the original's) plays the expansion
       // list rather than nothing (docs/editions.md).
       const tft = skinValue(skins, this.musicSkin, name + "_V1");
-      if (tft && !candidates.some((p) => p.trim() && this.vfs.exists(p.trim().replace(/\//g, "\\")))) {
+      if (tft && !candidates.some((p) => p.trim() && this.soundFileFor(p.trim().replace(/\//g, "\\")))) {
         candidates = tft.split(";");
       }
     }
-    return candidates.map((p) => p.trim().replace(/\//g, "\\")).filter((p) => p && this.vfs.exists(p));
+    return candidates
+      .map((p) => this.soundFileFor(p.trim().replace(/\//g, "\\")))
+      .filter((p): p is string => !!p);
   }
 
   private loadSkins(): Map<string, Map<string, string>> {
@@ -1952,6 +2203,65 @@ export class SoundBoard {
     this.listener = null; // no camera any more; a 3D sound has nothing to be panned against
   }
 
+  /**
+   * Audio files by BASENAME (`peasantwhat1.wav`, `peasantwhat1.ogg` and the extensionless
+   * `peasantwhat1` all key the same file) — what a voice line needs.
+   *
+   * The SoundInfo tables do NOT name a path for unit voices: `UnitAckSounds` gives
+   * `PeasantWhat1.wav` (1.30) or `PeasantWhat1` (3.0) with no `DirectoryBase`, and the engine
+   * resolves that against its sound search roots. Worse, 3.0 stores each unit's lines BESIDE
+   * ITS ART (`Units\Human\Peasant\PeasantWhat1.ogg`), not under `Sound\` at all — so the search
+   * has to span the whole archive, and the extension may be `.ogg`, not the `.wav` the table
+   * names. We joined an empty directory and handed `decode` a bare name, so EVERY ack line —
+   * What/Yes/YesAttack/Pissed/Ready — resolved to nothing and the whole cast was mute.
+   * Indexed once, lazily; rows that already carry a full path never touch it.
+   */
+  private soundFiles: Map<string, string> | null = null;
+  /** Memoized `resolveSoundName` answers, including the nulls (a name this install lacks). */
+  private soundAliases = new Map<string, string | null>();
+  private soundFileIndex(): Map<string, string> {
+    if (this.soundFiles) return this.soundFiles;
+    const idx = new Map<string, string>();
+    for (const name of this.vfs.list()) {
+      if (!/\.(wav|flac|ogg|mp3)$/i.test(name)) continue;
+      const p = name.replace(/\//g, "\\");
+      const base = p.slice(p.lastIndexOf("\\") + 1).toLowerCase();
+      if (!idx.has(base)) idx.set(base, p);
+      const stem = base.replace(/\.[^.]+$/, "");
+      if (!idx.has(stem)) idx.set(stem, p);
+    }
+    this.soundFiles = idx;
+    return idx;
+  }
+
+  /** Aliases a BARE table name onto an archive BASENAME, memoized (`null` = not in the install).
+   *
+   *  3.0 renamed audio in two ways an exact match misses:
+   *    `PeasantDeath1`           → `PeasantDeath.ogg`        (numbered variants collapsed)
+   *    `BloodElfDragonHawkWhat1` → `DragonHawkWhat1.ogg`     (faction prefix dropped)
+   *  A miss is SILENT in-game — no death cry, no ack — so try both shapes. The prefix case
+   *  walks the name's camel-case tails longest-first (`…DragonHawkWhat1` before `…What1`,
+   *  which alone would match some other unit's line), and only accepts a tail long enough to
+   *  identify a clip. */
+  private resolveSoundName(name: string): string | null {
+    const memo = this.soundAliases.get(name.toLowerCase());
+    if (memo !== undefined) return memo;
+    const index = this.soundFileIndex();
+    let found = index.get(name.toLowerCase()) ?? null;
+    if (!found) {
+      const stripped = name.replace(/\d+$/, "");
+      if (stripped !== name) found = index.get(stripped.toLowerCase()) ?? null;
+    }
+    const pieces = name.match(/[A-Z]?[a-z]+|[0-9]+/g) ?? [];
+    for (let i = 1; i < pieces.length && !found; i++) {
+      const tail = pieces.slice(i).join("");
+      if (tail.length < 8 || /^[0-9]+$/.test(tail)) break;
+      found = index.get(tail.toLowerCase()) ?? null;
+    }
+    this.soundAliases.set(name.toLowerCase(), found);
+    return found;
+  }
+
   /** Resolve a table row → clip metadata, memoized. Row lookup is case-insensitive. */
   private resolve(tag: string, key: string): Clip | null {
     const memo = `${tag}|${key.toLowerCase()}`;
@@ -1986,7 +2296,14 @@ export class SoundBoard {
           // "…\AIamTomes.wav" for every AbilitySounds row — a path that resolves to
           // nothing. Only bit once something played those labels (a rune's Effectsound
           // is its ONLY sound source, so the whole table was mute).
-          paths: files.map((f) => (dir ? dir.replace(/[\\/]+$/, "") + "\\" + f : f).replace(/\//g, "\\")),
+          //
+          // A row with NO DirectoryBase names the file BARE (UnitAckSounds' voice lines):
+          // resolve it against the archive by basename, or it never finds a file at all.
+          paths: files.map((f) => {
+            const joined = (dir ? dir.replace(/[\\/]+$/, "") + "\\" + f : f).replace(/\//g, "\\");
+            if (dir || /[\\/]/.test(joined)) return joined;
+            return this.resolveSoundName(joined) ?? joined;
+          }),
           gain: Number.isFinite(vol) ? Math.max(0, Math.min(1, vol / 127)) : 1,
           volume127: Number.isFinite(vol) ? vol : 127,
           pitch: Number.isFinite(pitch) && pitch > 0 ? pitch : 1,
@@ -2058,7 +2375,12 @@ export class SoundBoard {
   private async decode(path: string): Promise<AudioBuffer | null> {
     if (!this.ctx) return null;
     try {
-      const bytes = await this.vfs.read(path);
+      // The tables name `.wav`; 3.0 keeps those names but stores the audio re-encoded (FLAC
+      // for the Sound archive, Ogg Vorbis for lines kept beside the unit art). The name is the
+      // table's — and the cache's — so retry the twins rather than rewrite rows.
+      // The loading screen may have fetched it already (see warmUnits): decode from that copy.
+      const bytes = this.audioBytes.get(path) ?? (await this.fetchSoundBytes(path));
+      if (!bytes) return null;
       // Copy into a standalone ArrayBuffer — decodeAudioData detaches it, and the
       // Uint8Array may be a view onto a larger pooled buffer.
       const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;

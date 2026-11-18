@@ -21,10 +21,23 @@ import { unhintTrueType } from "./unhintFont";
 const FRIZ = "Friz Quadrata TT";
 const NIMROD = "Nimrod MT";
 
-/** Where the two faces live in the archives. Case/slash-insensitive at the VFS. */
-const FONT_FILES: ReadonlyArray<{ family: string; path: string }> = [
+/**
+ * The Reforged front end's typeface. 3.0's own glue sheet names `MasterFont` / `MasterFontBold`
+ * everywhere (`WebUI\GlueManager.js`), not Friz Quadrata — its native host registers the two
+ * faces before the page runs. The files are `Fonts\BLQ55Web.ttf` / `BLQ85Web.ttf`, whose internal
+ * family is "BlizQuadrata Web"; they are LATIN-only, so Chinese/Korean/Russian text still falls
+ * through to the locale faces behind them in the stack.
+ */
+const MASTER = "MasterFont";
+const MASTER_BOLD = "MasterFontBold";
+
+/** Where the faces live in the archives. Case/slash-insensitive at the VFS. `hd` marks the two
+ *  the Reforged sheet asks for; they do not join the classic `--game-font` stack. */
+const FONT_FILES: ReadonlyArray<{ family: string; path: string; hd?: boolean }> = [
   { family: FRIZ, path: "Fonts\\FRIZQT__.TTF" },
   { family: NIMROD, path: "Fonts\\NIM_____.ttf" },
+  { family: MASTER, path: "Fonts\\BLQ55Web.ttf", hd: true },
+  { family: MASTER_BOLD, path: "Fonts\\BLQ85Web.ttf", hd: true },
 ];
 
 /** Tail of the stack: our bundled multi-language face, then whatever the OS has.
@@ -89,8 +102,9 @@ export function applyGameFont(vfs: DataSource): void {
     return;
   }
   const loaded: string[] = [];
+  const loadedHd: string[] = [];
   const pending: Array<Promise<unknown>> = [];
-  for (const { family, path } of FONT_FILES) {
+  for (const { family, path, hd } of FONT_FILES) {
     const bytes = vfs.rawBytes(path);
     if (!bytes) continue;
     try {
@@ -104,7 +118,7 @@ export function applyGameFont(vfs: DataSource): void {
           (err: unknown) => { console.warn(`[Warcraft Open] font ${path} failed to load:`, err); },
         ),
       );
-      loaded.push(family);
+      (hd ? loadedHd : loaded).push(family);
     } catch (err) {
       console.warn(`[Warcraft Open] font ${path} rejected:`, err);
     }
@@ -115,6 +129,11 @@ export function applyGameFont(vfs: DataSource): void {
   const root = document.documentElement.style;
   root.setProperty("--game-font", stack);
   root.setProperty("--ui-font", stack); // the glue menus use the same face in the real game
+  // The HD front end wears 3.0's own face when the install carries it, and keeps the classic
+  // stack (with Nowar Sans for CJK) behind it for every glyph BlizQuadrata cannot draw.
+  if (loadedHd.includes(MASTER)) {
+    root.setProperty("--hd-font", `"${MASTER}", ${stack}`);
+  }
   // Signal readiness once every face has settled (loaded OR failed — a failure just means the
   // fallback is final for that slot, which is still a stable answer to render against). Nothing
   // to wait for → ready now, so a screen mounted with no archive faces doesn't hang on a relayout.

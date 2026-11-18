@@ -1,5 +1,6 @@
 import { fileReader, type CascFiles } from "../vfs/casc";
 import type { CustomKeysWriter } from "../data/customKeys";
+import type { GameFlavor } from "../data/flavor";
 import { currentLocale } from "../i18n";
 import { DOWNLOAD_FOLDER, type MapWriter } from "./downloadedMaps";
 
@@ -12,7 +13,8 @@ import { DOWNLOAD_FOLDER, type MapWriter } from "./downloadedMaps";
  * Files from a picked install:
  *   • the top-level MPQ archives, keyed by LOWERCASED base name — "war3.mpq", "war3x.mpq"
  *   • every map under `Maps\`, keyed by its relative path AS WRITTEN —
- *     "Maps\\FrozenThrone\\(2)EchoIsles.w3x"
+ *     "Maps\\FrozenThrone\\(2)EchoIsles.w3x" — and every downloadable campaign (`.w3n`),
+ *     which the Campaign screen reads from `Maps\Download\` but no map list shows
  *
  * The maps are here because the Custom Game screen lists them (issue #61): WC3's melee maps
  * live on DISK under `Maps\`, not inside the archives (the MPQs carry only the campaign
@@ -25,6 +27,12 @@ export type InstallFiles = Map<string, File>;
 export const MAPS_PREFIX = "Maps\\";
 
 const isMap = (name: string): boolean => /\.(w3m|w3x)$/i.test(name);
+/** A downloadable campaign — a whole campaign in one `.w3n` archive (data/campaignArchive.ts).
+ *  Like a map it lives under `Maps\` and is read from the folder, but it is not one: it must
+ *  never reach a map list. 3.0 ships its DLC chapters encrypted, and such an archive in
+ *  `Maps\Download\` is what unlocks them (data/campaigns.ts `attachCampaigns`), so the VFS
+ *  has to be handed it. */
+const isCampaignArchive = (name: string): boolean => /\.w3n$/i.test(name);
 /** A map's own sidecar beside it: a Chinese/English dictionary (i18n/mapLanguage.ts) or a voice
  *  pack (voice/mapVoice.ts). Not a map: it must not show up in any map list, but it IS an install
  *  file the VFS has to be able to read. */
@@ -148,6 +156,10 @@ const isMpq = (name: string): boolean => name.toLowerCase().endsWith(".mpq");
 export interface PickedInstall {
   files: InstallFiles;
   casc: CascFiles | null;
+  /** The folder's own name, for the launcher to say WHICH folder it holds — the browser gets a
+   *  handle rather than a path, so this is the only spelling of "where" there is (ui/home.ts).
+   *  Optional: a shell older than this, or a pick built from files alone, has none. */
+  label?: string;
   /**
    * The text of the folder's own `CustomKeys.txt`, or null when it has none (issue #142).
    *
@@ -228,8 +240,13 @@ const HANDLE_KEY = "folder";
  * reloads with `?lang=`, and the boot (ui/gate.ts) mounts the folder remembered FOR THAT
  * language — pick a Chinese folder in Chinese and an English one in English, and the corner
  * button becomes a real language switch for the game data too.
+ *
+ * SD and HD are separate data lines with separate installs, so a launcher pick carries its line
+ * as well: one line's folder must never answer for the other (ui/home.ts shows both rows at
+ * once). The un-lined key is the older shape, still read when no line is named.
  */
-const handleKey = (locale: string): string => `folder:${locale}`;
+const handleKey = (locale: string, line?: GameFlavor): string =>
+  line ? `folder:${line}:${locale}` : `folder:${locale}`;
 
 function handleDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -240,15 +257,20 @@ function handleDb(): Promise<IDBDatabase> {
   });
 }
 
-/** Keep `handle` as the install a reload should mount, for `locale` (default: the language in
- *  use now — a pick is always made in the language its folder speaks). Silent on failure: private
- *  mode and a denied quota both mean "this visit only", which is what the old behaviour was. */
-export async function rememberInstallHandle(handle: DirHandle, locale = currentLocale()): Promise<void> {
+/** Keep `handle` as the install a reload should mount, for `line` (when named) and `locale`
+ *  (default: the language in use now — a pick is always made in the language its folder
+ *  speaks). Silent on failure: private mode and a denied quota both mean "this visit only",
+ *  which is what the old behaviour was. */
+export async function rememberInstallHandle(
+  handle: DirHandle,
+  line?: GameFlavor,
+  locale = currentLocale(),
+): Promise<void> {
   try {
     const db = await handleDb();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(HANDLE_STORE, "readwrite");
-      tx.objectStore(HANDLE_STORE).put(handle, handleKey(locale));
+      tx.objectStore(HANDLE_STORE).put(handle, handleKey(locale, line));
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -258,13 +280,16 @@ export async function rememberInstallHandle(handle: DirHandle, locale = currentL
   }
 }
 
-/** The handle the last pick in `locale` left, or null. */
-export async function rememberedInstallHandle(locale = currentLocale()): Promise<DirHandle | null> {
+/** The handle the last pick left for `line` (when named) in `locale`, or null. */
+export async function rememberedInstallHandle(
+  line?: GameFlavor,
+  locale = currentLocale(),
+): Promise<DirHandle | null> {
   try {
     const db = await handleDb();
     const handle = await new Promise<DirHandle | null>((resolve, reject) => {
       const tx = db.transaction(HANDLE_STORE, "readonly");
-      const request = tx.objectStore(HANDLE_STORE).get(handleKey(locale));
+      const request = tx.objectStore(HANDLE_STORE).get(handleKey(locale, line));
       request.onsuccess = () => resolve((request.result as DirHandle | undefined) ?? null);
       request.onerror = () => reject(request.error);
     });
@@ -280,8 +305,11 @@ export async function rememberedInstallHandle(locale = currentLocale()): Promise
  * that has none: switching to English before ever picking an English folder leaves the one
  * Chinese install mounted (it plays fine; only its text is Chinese), which beats an empty gate.
  * The language-specific key wins when several exist, hence the `folder:` prefix check first.
+ *
+ * `line`, when named, keeps the fallback on that line's own folders (plus the older un-lined
+ * key): the other line is a different install and must not answer for this one.
  */
-export async function anyRememberedInstallHandle(): Promise<DirHandle | null> {
+export async function anyRememberedInstallHandle(line?: GameFlavor): Promise<DirHandle | null> {
   try {
     const db = await handleDb();
     const entries = await new Promise<Array<[IDBValidKey, DirHandle]>>((resolve, reject) => {
@@ -296,7 +324,12 @@ export async function anyRememberedInstallHandle(): Promise<DirHandle | null> {
       tx.onerror = () => reject(tx.error);
     });
     db.close();
-    const localeFirst = entries.find(([key]) => String(key).startsWith("folder:"));
+    const onLine = (key: IDBValidKey): boolean => {
+      if (!line) return true;
+      const parts = String(key).split(":");
+      return parts.length < 3 || parts[1] === line;
+    };
+    const localeFirst = entries.find(([key]) => String(key).startsWith("folder:") && onLine(key));
     const legacy = entries.find(([key]) => key === HANDLE_KEY);
     return (localeFirst ?? legacy ?? entries[0])?.[1] ?? null;
   } catch {
@@ -308,8 +341,11 @@ export async function anyRememberedInstallHandle(): Promise<DirHandle | null> {
  * Pick a WC3 folder and return what it holds: MPQ archives or a CASC store, plus every map
  * under `Maps\`. Uses showDirectoryPicker on Chromium, falling back to <input webkitdirectory>
  * on Firefox/Safari. Returns null if the user cancels or nothing is selected.
+ *
+ * `line` is the data line the pick is FOR, when the caller knows it (the launcher's two rows):
+ * the handle is then remembered per line, so the other line keeps its own folder.
  */
-export async function pickInstall(): Promise<PickedInstall | null> {
+export async function pickInstall(line?: GameFlavor): Promise<PickedInstall | null> {
   const picker = (
     window as unknown as { showDirectoryPicker?: () => Promise<DirHandle> }
   ).showDirectoryPicker;
@@ -323,7 +359,7 @@ export async function pickInstall(): Promise<PickedInstall | null> {
     }
     // Remembered before it is read: the next boot mounts this folder without asking (ui/gate.ts),
     // and "Change Game Folder" (ui/fdfMainMenu.ts) is this plus a reload.
-    await rememberInstallHandle(handle);
+    await rememberInstallHandle(handle, line);
     return readInstallDir(handle);
   }
 
@@ -371,19 +407,32 @@ export async function readInstallDir(handle: DirHandle): Promise<PickedInstall> 
   return {
     files,
     casc: casc.buildInfo ? casc : null,
+    label: handle.name,
     customKeys,
     saveCustomKeys: customKeysWriter(keysDir, keysName),
     ...(maps ? { saveMap: maps.write, askMapWrite: maps.ask } : {}),
   };
 }
 
+/** The two folders of `Data\` a mount reads — see `collectCasc`. */
+const LIVE_CASC_DIRS = new Set(["data", "config"]);
+
 /** Walk `Data\` for the pieces a CASC mount needs (vfs/casc.ts). Everything but the
- *  `data.NNN` files is small and read whole; those are kept as ranged readers. */
+ *  `data.NNN` files is small and read whole; those are kept as ranged readers.
+ *
+ *  Only the LIVE store (`data\`, which also holds the `.idx` buckets) and the build configs
+ *  (`config\`) count. `ecache\` is the EXTERNAL DOWNLOAD CACHE: its `.idx` files are bucket
+ *  versions 0–7 and its `data.NNN` are partial downloads that need not exist — read one of those
+ *  as archive 0 and every ranged read past its end is a 416 (a real 3.0 install, not a broken
+ *  one). The desktop shell and the `?dev` harness read the same two folders
+ *  (electron/install.mjs, tools/vite-plugin-dev-install.ts). */
 async function collectCasc(dir: DirEntry, into: CascFiles, depth = 0): Promise<void> {
   for await (const entry of dir.values()) {
     if (entry.kind === "directory") {
-      // config/ is a two-level hash fan-out, data/ and indices/ are flat — three levels of
-      // recursion covers both without walking anything deeper.
+      // config/ is a two-level hash fan-out, data/ is flat — three levels of recursion covers
+      // both without walking anything deeper. At the top, anything that is not one of the two
+      // live folders (`ecache\`, `indices\`) is skipped whole.
+      if (depth === 0 && !LIVE_CASC_DIRS.has(entry.name.toLowerCase())) continue;
       if (depth < 3) await collectCasc(entry, into, depth + 1);
       continue;
     }
@@ -402,13 +451,15 @@ async function collectCasc(dir: DirEntry, into: CascFiles, depth = 0): Promise<v
   }
 }
 
-/** Walk `Maps\` and add every .w3m/.w3x — and every sidecar beside one — keyed by its
- *  relative path. */
+/** Walk `Maps\` and add every .w3m/.w3x, every downloadable campaign (.w3n), and every sidecar
+ *  beside a map — keyed by its relative path. */
 async function collectMaps(dir: DirEntry, prefix: string, into: InstallFiles): Promise<void> {
   for await (const entry of dir.values()) {
     const path = `${prefix}\\${entry.name}`;
     if (entry.kind === "file") {
-      if (isMap(entry.name) || isSidecarFile(entry.name)) into.set(path, await entry.getFile());
+      if (isMap(entry.name) || isCampaignArchive(entry.name) || isSidecarFile(entry.name)) {
+        into.set(path, await entry.getFile());
+      }
     } else {
       await collectMaps(entry, path, into);
     }
@@ -477,12 +528,18 @@ function pickViaInput(): Promise<PickedInstall | null> {
             if (/^[0-9a-f]{32}$/i.test(file.name)) casc.config.set(file.name.toLowerCase(), await file.text());
             continue;
           }
-          if (!isMap(file.name) && !isSidecarFile(file.name)) continue;
+          if (!isMap(file.name) && !isCampaignArchive(file.name) && !isSidecarFile(file.name)) continue;
           const rel = parts.join("\\");
           if (isUnderMaps(rel)) files.set(rel, file);
         }
         if (!files.size && !casc.buildInfo) return resolve(null);
-        resolve({ files, casc: casc.buildInfo ? casc : null, customKeys });
+        // The picked folder's own name, for the launcher's "which folder" line. Only when the
+        // engine put it in `webkitRelativePath`: a path that already starts at `Maps\` is the
+        // install itself, and its first segment is no folder name.
+        const first = list[0]?.webkitRelativePath ?? "";
+        const segments = first.split("/");
+        const label = stripPickedRoot(segments).length < segments.length ? segments[0] : "";
+        resolve({ files, casc: casc.buildInfo ? casc : null, ...(label ? { label } : {}), customKeys });
       })();
     };
     input.oncancel = () => resolve(null);

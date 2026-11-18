@@ -71,8 +71,9 @@ const bounds = (r) => ({
 });
 
 /**
- * Wire the views to `ipcMain`. `save(name, bytes)` keeps a map in the install (and throws when it
- * cannot — the page is told why, and still gets the map for this session).
+ * Wire the views to `ipcMain`. `save(name, bytes, game)` keeps a map in the install (and throws
+ * when it cannot — the page is told why, and still gets the map for this session). `game` is the
+ * window that asked, so the caller can put the map in THAT window's line (`ow3-install://`).
  */
 export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
   /** site key → { view, game, home } */
@@ -120,7 +121,7 @@ export function wireMapSiteViews(ipcMain, BrowserWindow, save) {
           }
           const bytes = new Uint8Array(await readFile(tmp));
           let saveError = null;
-          try { await save(name, bytes); } catch (err) { saveError = err instanceof Error ? err.message : String(err); }
+          try { await save(name, bytes, game); } catch (err) { saveError = err instanceof Error ? err.message : String(err); }
           tell(game, "ow3:mapsite-downloaded", name, bytes, saveError);
         } finally {
           void rm(tmp, { force: true });

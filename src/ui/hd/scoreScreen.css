@@ -1,0 +1,459 @@
+.hd-official .ScoreScreen-Header{z-index:4;height:120px;width:100%;align-self:center}
+.hd-official .ScoreScreen-Header,
+.hd-official .ScoreScreen-Header-Menu{display:flex;flex-direction:row;align-items:center;position:relative;justify-content:center}
+.hd-official .ScoreScreen-Header-Menu{height:100%;width:calc(100% - 2 * 33px)}
+.hd-official .ScoreScreen-Header-Menu-Decorations-Wrapper{position:absolute;width:100%;height:calc(100% - 2 * 28px);top:28px;filter:drop-shadow(2px 4px 6px black);z-index:-1}
+.hd-official .ScoreScreen-Header-Menu-Decorations-Wrapper .Header-Metal-Decoration-Left{top:0;left:0;width:75px;height:100%;transform:scaleX(1);background-image:url(BaseFrames/war3_v2_mainmenu_decal_curly_thing.png)}
+.hd-official .ScoreScreen-Header-Menu-Decorations-Wrapper .Header-Metal-Decoration-Right{top:0;right:0;width:75px;height:100%;transform:scaleX(-1);background-image:url(BaseFrames/war3_v2_mainmenu_decal_curly_thing.png)}
+.hd-official .ScoreScreen-Header-Menu-Content{flex:1;display:flex;position:relative;flex-direction:row;justify-content:space-between;align-items:center;height:100%;border-image:url(ScoreScreen/MetalFrame.png) 28 0 fill stretch;border-image-width:28px 0}
+.hd-official .ScoreScreen-Header-Menu-Content:before{content:"";position:absolute;top:20px;bottom:20px;right:0;left:0;background-image:url(BaseFrames/test_texture-wood-alt.png);background-position:0;background-size:auto;background-repeat:repeat-x;z-index:-1}
+.hd-official .ScoreScreen-Header-Menu-Title{font-size:40px;line-height:.9;letter-spacing:.04em;text-transform:uppercase;font-family:var(--game-font);color:#ffd428;width:400px;padding-left:75px}
+.hd-official .ScoreScreen-Container{height:100%;z-index:1}
+.hd-official .ScoreScreen-Container .ScoreScreen-Background-Texture{width:calc(100% - 2 * 33px);height:100%;position:absolute;left:33px;background-image:url("BaseFrames/war3_stone_bg_landscape_4k.png");background-repeat:repeat-y;opacity:.9}
+.hd-official .ScoreScreen-Container .ScoreScreen-Wrapper{position:relative;width:100%;height:880px;display:flex;z-index:4;align-items:center;justify-content:center}
+.hd-official .ScoreScreen-Container .ScoreScreen-Wrapper .ScoreScreen-Background{position:absolute;z-index:-1;width:calc(100% - 2 * 33px);height:100%}
+.hd-official .ScoreScreen-Container .ScoreScreen-Wrapper .ScoreScreen-Background .ScoreScreen-Race-Art{position:absolute;height:512px;width:512px;bottom:0;right:28px;z-index:2}
+.hd-official .ScoreScreen-Container .ScoreScreen-Wrapper .ScoreScreen-Background .ScoreScreen-Race-Art.human{background-image:url(ScoreScreen/scorescreen-human.png)}
+.hd-official .ScoreScreen-Container .ScoreScreen-Wrapper .ScoreScreen-Background .ScoreScreen-Race-Art.orc{background-image:url(ScoreScreen/scorescreen-orc.png)}
+.hd-official .ScoreScreen-Container .ScoreScreen-Wrapper .ScoreScreen-Background .ScoreScreen-Race-Art.undead{background-image:url(ScoreScreen/scorescreen-undead.png)}
+.hd-official .ScoreScreen-Container .ScoreScreen-Wrapper .ScoreScreen-Background .ScoreScreen-Race-Art.night_elf{background-image:url(ScoreScreen/scorescreen-nightelf.png)}
+.hd-official .ScoreScreen-Container .ScoreScreen-Wrapper .ScoreScreen-Background .ScoreScreen-Background-Page{position:absolute;height:100%;width:100%;border-image:url(ScoreScreen/ScoreBackground.png) 28 31 fill stretch;border-image-width:28px 31px}
+.hd-official .ScoreScreen-Container.Animate-Out{animation-delay:.1s}
+.hd-official .ScoreScreen-TabBar{display:flex;flex:1;align-items:center;height:84px;margin-top:0;padding-left:75px;padding-right:75px}
+.hd-official .ScoreScreen-TabOptionHolder{display:flex;flex-direction:row;align-items:center;justify-content:center;flex:1;height:100%;padding:0 20px;border-image:url(Widgets/Buttons/button_frame_shadow_4k.png) 60 100 fill repeat round;border-image-width:30px 50px;position:relative}
+.hd-official .ScoreScreen-TabOptionHolder:before{content:"";width:60px;height:80px;position:absolute;left:-20px;top:0;background:url(Widgets/Buttons/pb-left-cap-small-alt.png) no-repeat;z-index:0;background-size:contain}
+.hd-official .ScoreScreen-TabOptionHolder:after{content:"";width:60px;height:91px;position:absolute;right:-32px;top:-6px;background:url(Widgets/Buttons/pb-right-cap-small-alt.png) no-repeat;z-index:0;background-size:contain}
+.hd-official .ScoreScreen-TabOptionHolder .withSound{flex:1}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container{height:48px;width:97%;position:relative}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Primary-Button{width:100%;height:40px;font-size:18px;font-variant:normal;text-transform:uppercase;line-height:.9;letter-spacing:.1em;z-index:1;padding:0}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Primary-Button:hover{color:#fd3}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Primary-Button:hover .Primary-Button-Content .Recap-Tab-Icon{width:28px;height:28px;background-image:url(Icons/informational-icon-hovered.png);background-size:cover}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Primary-Button:active{width:calc(100% - 17px);height:29px;margin:7px 9px 9px 6px;color:#b59513;padding-top:2px}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Primary-Button:active:before{content:"";position:absolute;top:-10px;right:-10px;bottom:-10px;left:-10px}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Primary-Button.isSelected.isDisabled,
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Primary-Button.isSelected.isDisabled:active,
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Primary-Button.isSelected.isDisabled:hover{width:calc(100% - 17px);height:33px;margin:2px 4px 0;color:#999;border-image-source:url("Widgets/Buttons/wc3_btn_disabled_normal_4k.png");outline:none}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Left-Container .Focus-State-BG{width:100%;height:47px;display:flex;position:absolute;margin-top:-2px}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Right-Container{margin-left:202px;margin-top:-25px;position:absolute}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Right-Container .Primary-Button{width:186px;height:40px;z-index:1;font-size:18px;font-variant:normal;text-transform:uppercase;line-height:.9;letter-spacing:.1em;padding:0}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Right-Container .Primary-Button:active{width:178px;height:36px;margin-left:4px}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Right-Container .Primary-Button.Social-TabButton-Active{width:178px;height:36px;margin-left:4px;border-image-source:url("Widgets/Buttons/wc3_btn_blue_down_4k.png");color:#ffd428}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Right-Container .Primary-Button.Social-TabButton-Active .Recap-Tab-Icon{width:30px;height:30px;background-image:url(Icons/informational-icon-pressed.png);background-size:cover}
+.hd-official .ScoreScreen-TabOptionHolder .withSound .Primary-Tab-Button-Right-Container .Focus-State-BG{width:186px;height:40px;display:flex;position:absolute}
+.hd-official .ScoreScreen-Map-Container{display:flex;flex-direction:row;padding:105px 0;height:100%;justify-content:center}
+.hd-official .ScoreScreen-Map{width:640px;height:640px;margin-top:20px;border-image:url(Widgets/Buttons/wc3_btn_frame_4k.png) 60 100 fill repeat;border-image-width:60px 100px}
+.hd-official .ScoreScreen-Map-Image{width:594px;height:594px;background-size:contain;background-repeat:no-repeat;background-position:50%;background-color:#000;margin-top:12px;margin-left:24px;border-radius:18px;box-shadow:inset 0 0 10px 3px #000}
+.hd-official .ScoreScreen-Map-Details{width:500px;margin-bottom:30px;margin:0 0 30px 6px;text-shadow:0 2px 4px #000}
+.hd-official .ScoreScreen-Map-Info{display:flex;flex-direction:column;align-items:flex-start;margin-top:30px}
+.hd-official .ScoreScreen-MapName{color:#fcd200;font-variant:small-caps;font-size:36px;letter-spacing:.06em;font-family:var(--game-font);white-space:pre;line-height:1.4}
+.hd-official .ScoreScreen-Map-Buttons{display:flex;flex-direction:column;align-items:center}
+.hd-official .ScoreScreen-Map-Buttons .Framed-Secondary-Button{animation:none}
+.hd-official .ScoreScreen-Map-Buttons .Framed-Secondary-Button .Primary-Button-Frame-Alternate-B{height:70px;width:320px}
+.hd-official .ScoreScreen-Map-Buttons .Framed-Secondary-Button .Primary-Button{font-size:20px;width:100%;height:48px}
+.hd-official .ScoreScreen-Team-Icon{width:34px;height:34px;background-image:url("ScoreScreen/ally-icon-inactive.png");background-size:cover;margin-left:10px}/* The score screen fills the window; its 3.0 container is authored for 1080 lines and zoomed
+ * by the caller, so the root only owns the background and the stacking order. */
+.hd-official.ScoreScreen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  z-index: 9;
+}
+
+.hd-official .ScoreScreen-Container { position: relative; width: 100%; height: 100%; }
+
+/* The window's carved frame and its corner machinery sit above the stone backdrop and the
+ * page's edges, under the Back/Save buttons. */
+.hd-official.ScoreScreen .Persistent-CornerDecorations { z-index: 6; }
+.hd-official.ScoreScreen .PersistentBackButton { z-index: 8; }
+
+/* The "i" tab wears the same plate as the data tabs; 3.0's round marker is its face. */
+.hd-official .ScoreScreen-TabOptionHolder .withSound .GameLobby-ReportIcon {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto;
+  background-image: url(Icons/informational-icon-resting.png);
+  background-size: cover;
+}
+
+/* The selected tab keeps the theme's plate, pressed: the same blue `down` art the base sheet
+ * gives a picked tab (`Primary-Button.isSelected`). */
+.hd-official .ScoreScreen-TabOptionHolder .Primary-Tab-Button-Left-Container .Primary-Button.ScoreScreen-TabOption-Selected,
+.hd-official .ScoreScreen-TabOptionHolder .Primary-Tab-Button-Left-Container .Primary-Button.ScoreScreen-TabOption-Selected:hover {
+  border-image-source: url("Widgets/Buttons/wc3_btn_blue_down_4k.png");
+  color: #ffd428;
+}
+
+/* On the FK back the same tab is pressed into the Forsaken green, exactly as 3.0's own
+ * `.Primary-Button.fk` does for its picked options tab. */
+.hd-official.fk .ScoreScreen-TabOptionHolder .Primary-Tab-Button-Left-Container .Primary-Button.ScoreScreen-TabOption-Selected,
+.hd-official.fk .ScoreScreen-TabOptionHolder .Primary-Tab-Button-Left-Container .Primary-Button.ScoreScreen-TabOption-Selected:hover {
+  border-image-source: url("Widgets/Buttons/wc3_btn_green_down_FK_4k.png");
+}
+
+/* --------------------------------------------------------------- the results table */
+/* 3.0's own table geometry: a sorting header bar, 60px banner rows tinted with the player's
+ * colour, the team tint block and the race crest at the left of each ribbon. */
+
+.hd-official .ScoreScreen-Table-Container { width: calc(100% - 2 * 33px); height: 100%; }
+
+.hd-official .ScoreScreen-Table-Container .Table-Th-Wrapper { padding: 30px 35px 0; }
+
+.hd-official .ScoreScreen-Table-Container .Table-Th-Wrapper .Table-Th {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  height: 60px;
+  position: sticky;
+  top: 0;
+  z-index: 11;
+  font-size: 18px;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-shadow: 0 2px 1px #000;
+  color: #d8d8d8;
+  border-image: url(Widgets/ListItems/war3_header_sorting_4k.png) 60 1000 fill repeat;
+  border-image-width: 60px 1000px;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Th-Wrapper .Table-Th .ScoreScreen-ListHeader-Divider {
+  width: 6px;
+  height: 41px;
+  position: absolute;
+  background-image: url("Widgets/ListItems/war3_header_sorting_divider_4k.png");
+  background-size: cover;
+  background-repeat: no-repeat;
+  margin-top: -2px;
+  margin-left: -16px;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Th-Wrapper .Table-Th .Table-Col-0 { padding-left: 16px; }
+
+.hd-official .ScoreScreen-Table-Container .Table-Th-Wrapper .Table-Th .Table-Col:hover .Table-Col-Hover {
+  background: hsla(0, 0%, 100%, 0.2);
+  height: 73%;
+  position: absolute;
+  right: 15px;
+  width: 98%;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Th-Wrapper .Table-Th .Table-Col:first-of-type:hover .Table-Col-Hover {
+  border-radius: 6px 0 0 8px;
+  width: 83%;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Th-Wrapper .Table-Th .Table-Col:last-of-type:hover .Table-Col-Hover {
+  border-radius: 0 6px 6px 0;
+  right: 10px;
+  width: 100%;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Th .Table-Col.isSorted span { color: #fcd200; }
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr {
+  display: flex;
+  align-items: center;
+  height: 60px;
+  width: 100%;
+  color: #d8d8d8;
+  background-color: rgba(0, 0, 0, 0.7);
+  position: relative;
+  margin: 10px 0;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr .BannerBG {
+  clip-path: polygon(calc(100% - 5px) 0, calc(100% - 45px) 50%, calc(100% - 5px) 100%, 0 100%, 0 0);
+  height: 100%;
+  position: absolute;
+  width: calc(20% + 125px - 20.8333px - 25px);
+  min-width: 370px;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Banner {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: -3px;
+  height: calc(100% + 6px);
+  filter: drop-shadow(2px 4px 6px black);
+  width: calc(20% + 125px - 20.8333px - 25px);
+  min-width: 370px;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Banner.Gold {
+  border-image: url(ScoreScreen/GoldBorder.png) 10 45 10 8 fill stretch;
+  border-image-width: 10px 45px 10px 8px;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Banner.Silver {
+  border-image: url(ScoreScreen/SilverBorder.png) 10 45 10 8 fill stretch;
+  border-image-width: 10px 45px 10px 8px;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr .winner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 2px solid transparent;
+  border-image: url(ScoreScreen/rowBgGoldBorder.png) 4 4 repeat;
+  border-image-width: 4px 4px;
+  height: 100%;
+  width: 100%;
+  pointer-events: none;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-1,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-2,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-3,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-4,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-5,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-6 {
+  color: #e6e6e6;
+  font-family: var(--game-font);
+  text-shadow: 0 2px 1px #000;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-1 {
+  font-size: 21px;
+  text-transform: none;
+  line-height: 1.1;
+  letter-spacing: 0.06em;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-2,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-3,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-4,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-5,
+.hd-official .ScoreScreen-Table-Container .Table-Tr .Table-Col-6 {
+  font-size: 18px;
+  text-transform: uppercase;
+  line-height: 0.9;
+  letter-spacing: 0.04em;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Col {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  max-width: 595px;
+  position: relative;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Col span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
+  max-width: 88%;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Col-0 {
+  width: 125px;
+  justify-content: flex-start;
+  padding-left: 7px;
+}
+
+.hd-official .ScoreScreen-Table-Container .Table-Col-1 { width: calc(20% - 20.8333px); }
+
+.hd-official .ScoreScreen-Table-Container .Table-Col-2.Length-3,
+.hd-official .ScoreScreen-Table-Container .Table-Col-3.Length-3 { width: calc(30% - 34.7222px); }
+
+.hd-official .ScoreScreen-Table-Container .Table-Col-2.Length-4,
+.hd-official .ScoreScreen-Table-Container .Table-Col-3.Length-4,
+.hd-official .ScoreScreen-Table-Container .Table-Col-4.Length-4,
+.hd-official .ScoreScreen-Table-Container .Table-Col-5.Length-4 { width: calc(20% - 26.0417px); }
+
+.hd-official .ScoreScreen-Table-Container .Table-Col-2.Length-5 { width: calc(21% - 20.8333px); }
+
+.hd-official .ScoreScreen-Table-Container .Table-Col-3.Length-5,
+.hd-official .ScoreScreen-Table-Container .Table-Col-5.Length-5,
+.hd-official .ScoreScreen-Table-Container .Table-Col-6 { width: calc(20% - 20.8333px); }
+
+.hd-official .ScoreScreen-Table-Container .Table-Col-4.Length-5 { width: calc(13% - 20.8333px); }
+
+.hd-official .ScoreScreen-Table-Container .TeamColor {
+  font-size: 24px;
+  line-height: 0.9;
+  align-items: center;
+  color: #e6e6e6;
+  display: flex;
+  font-family: var(--game-font);
+  height: 100%;
+  justify-content: center;
+  text-shadow: 0 1px 1px #000;
+  width: 48px;
+}
+
+.hd-official .ScoreScreen-Table-Container .TeamColor .TeamColor-Tint-Background {
+  align-items: center;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  position: relative;
+  width: 100%;
+}
+
+.hd-official .ScoreScreen-Table-Container .TeamColor .TeamColor-Tint-Background .TeamColor-Tint {
+  background-blend-mode: multiply;
+  width: 100%;
+  height: 100%;
+  opacity: 0.78;
+}
+
+.hd-official .ScoreScreen-Table-Container .TeamColor .TeamColor-Tint-Background .TeamColor-Tint.Team-1 {
+  background: radial-gradient(circle, #fc0303, #e00404 100%);
+}
+
+.hd-official .ScoreScreen-Table-Container .TeamColor .TeamColor-Tint-Background .TeamColor-Tint.Team-2 {
+  background: radial-gradient(circle, #087bff 0, #0460c9 100%);
+}
+
+.hd-official .ScoreScreen-Table-Container .TeamColor .TeamColor-Tint-Background .TeamColor-Tint.Team-3 {
+  background: radial-gradient(circle, #018991 0, #003538 100%);
+}
+
+.hd-official .ScoreScreen-Table-Container .TeamColor .TeamColor-Tint-Background .TeamColor-Tint.Team-4 {
+  background: radial-gradient(circle, #921b99 0, #6f245f 100%);
+}
+
+.hd-official .ScoreScreen-Table-Container .TeamColor .TeamColor-Tint-Background .TeamColor-Text {
+  font-family: var(--game-font);
+  font-size: 20px;
+  letter-spacing: 1.5px;
+  position: absolute;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+}
+
+.hd-official .ScoreScreen-Table-Container .PlayerColor {
+  display: none;
+  height: 100%;
+  width: 10px;
+}
+
+.hd-official .ScoreScreen-Table-Container {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hd-official .ScoreScreen-Table-Container::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.hd-official .ScoreScreen-Table-Container .ScoreScreen-Table {
+  position: relative;
+  align-items: center;
+  width: 100%;
+  height: 765px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 35px;
+  /* The page scrolls with the wheel but draws no bar: 3.0's parchment has none, and the header
+   * stays stuck at the top while the ribbons move under it. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hd-official .ScoreScreen-Table-Container .ScoreScreen-Table::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.hd-official .ScoreScreen-RaceIcon {
+  width: 46px;
+  height: 46px;
+  background-repeat: round;
+}
+
+/* Save Replay stays available, but out of the reference's way in the lower-right corner. */
+.hd-official .Official-ScoreSave {
+  position: absolute;
+  right: 44px;
+  bottom: 26px;
+  z-index: 7;
+}
+
+/* Every action button on this screen is the theme's own Primary-Button at the size the menus
+ * give it: Save Replay, Watch Replay and Download Replay are one plate, not three sizes. The
+ * tab strip keeps the tab bar's own 40px geometry below. */
+.hd-official.ScoreScreen .Official-ScoreSave .Primary-Button,
+.hd-official.ScoreScreen .ScoreScreen-MatchInfo-Buttons .Primary-Button {
+  width: 335px;
+  height: 54px;
+  font-size: 16px;
+  line-height: 0.9;
+  letter-spacing: 0.04em;
+}
+
+/* --------------------------------------------------------------- the match-info page */
+/* The "i" tab's page, as 3.0 draws it: the played map in its metal frame, the map's name and the
+ * match length beside it, and the recording's two actions under them — over the same parchment
+ * and race art as the table pages. The group sits left of centre so the portrait keeps the right. */
+
+.hd-official .ScoreScreen-Table-Container.is-hidden { display: none; }
+
+.hd-official .ScoreScreen-MatchInfo {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 40px;
+  padding-top: 130px;
+  z-index: 2;
+}
+
+.hd-official .ScoreScreen-MatchInfo.is-open { display: flex; }
+
+.hd-official .ScoreScreen-MatchInfo-Map {
+  width: 620px;
+  height: 620px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-image: url(LoadingScreen/loadscreen_mapframe.png) 28 fill repeat;
+  border-image-width: 20px;
+}
+
+.hd-official .ScoreScreen-MatchInfo-MapImage {
+  width: 580px;
+  height: 580px;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: 50%;
+}
+
+.hd-official .ScoreScreen-MatchInfo-Details {
+  width: 400px;
+  padding-top: 4px;
+  text-shadow: 0 2px 2px #000;
+}
+
+.hd-official .ScoreScreen-MatchInfo-Name {
+  color: #fcd200;
+  font-size: 38px;
+  line-height: 1.1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hd-official .ScoreScreen-MatchInfo-Duration {
+  margin-top: 8px;
+  color: #d8d8d8;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+}
+
+.hd-official .ScoreScreen-MatchInfo-Buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 56px;
+}

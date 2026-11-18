@@ -2,6 +2,7 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { layCustomKeys } from "./customKeys";
 import { decodeGameText } from "./text";
 import { versionIndex } from "./edition";
+import { flavor, hdArt } from "./flavor";
 import type { DataSource } from "../vfs/types";
 import {
   ArmorType,
@@ -118,6 +119,14 @@ export interface WeaponSlotDef {
   areaHalfFactor: number;
   areaQuarterFactor: number;
   splashTargets: string[]; // `splashTargs` — what the AREA may catch (vs `targets`, what it may aim at)
+  /**
+   * `targCount` — "Attack N - Maximum Number of Targets": how many bodies ONE attack strikes,
+   * the aimed one included. Only a MISSILE (BOUNCE) slot (`weapTp` = `mbounce`) spends it: the
+   * Huntress's glaive is 2 (one bounce; Upgrade Moon Glaive's `ratc` makes it 3) and Naisha's
+   * is 5. On those two rows `Farea` (400) is how far a bounce may reach, `damageLoss` (0.5)
+   * what each hop sheds, and `splashTargs` who a bounce may land on. Every other row says 1.
+   */
+  targetCount: number;
   /**
    * `showUI` — "Attack N - Show UI". Whether this attack gets an ATTACK COMMAND on the card.
    *
@@ -382,8 +391,8 @@ export interface UnitDef {
    *  100 of 300 (Liquipedia lists it as "Initial Mana"). 40 of the game's rows differ from
    *  their `manaN`, and every one of them is a caster you have to wait on. */
   manaStart: number;
-  /** UnitBalance.slk `regenMana` — mana/sec for a NON-hero caster (a hero's comes from its
-   *  Intelligence instead). It is a real per-type number and it spreads wide: a Sorceress
+  /** UnitBalance.slk `regenMana` — mana/sec for a caster's TYPE (a hero's ADDS its
+   *  Intelligence regen on top: every melee hero row is 0.01, see SimWorld.baseManaRegen). It is a real per-type number and it spreads wide: a Sorceress
    *  0.667, a Priest 0.72, a Spirit Walker 1, a Moon Well and an Obsidian Statue 1.5. The sim
    *  used one flat approximation for all of them until this column arrived. 0 when the row
    *  has none, which is most units — they have no mana either. */
@@ -595,6 +604,10 @@ const SLK = {
   ui: "Units\\UnitUI.slk",
   weapons: "Units\\UnitWeapons.slk",
   abilities: "Units\\UnitAbilities.slk",
+  // Reforged moved the model path out of UnitUI.slk into this INI. Its rows also carry
+  // per-variant keys (`modelScale:hd/sd`, `walk:hd/sd`); only `file` is read here — the
+  // SD tables keep their own `file` and are unaffected.
+  skin: "Units\\unitSkin.txt",
 };
 
 // Canonical display names ("Great Hall", not the SLK's internal "ogre1") live
@@ -629,6 +642,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
   const ui = table(SLK.ui);
   const weapons = table(SLK.weapons);
   const abilities = table(SLK.abilities);
+  const skin = table(SLK.skin);
 
   const names = new MappedData();
   for (const path of STRING_FILES) {
@@ -649,10 +663,36 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
   const defs = new Map<string, UnitDef>();
   if (!data || !ui) return new UnitRegistry(defs);
 
+  // Reforged keeps the model path and the HD variants in `unitSkin.txt` (P3-5). `hd` selects
+  // those columns and skips the SD `_V0`/`_V1` model twins, which a Reforged store does not
+  // carry; `art` picks which of the two HD art sets the scale belongs to (`modelScale:de`).
+  const hd = flavor() === "hd";
+  const art = hdArt();
+  const skinNum = (row: Row | undefined, key: string, fallback: number): number =>
+    row ? num(row, key, fallback) : fallback;
+
   for (const id of Object.keys(data.map)) {
     const d = data.getRow(id) as Row | undefined;
     const u = ui.getRow(id) as Row | undefined;
-    const file = u ? str(u, "file") : "";
+    // 3.0 (Reforged) dropped UnitUI's `file` column; the model path lives in `unitSkin.txt`.
+    // The SD tables still carry `file`, so this fallback never runs for them.
+    // Some Reforged rows carry ONLY qualified keys — the Forest Troll Berserker (`nftb`) has
+    // `file:hd`/`file:sd`/`file:de` and no plain `file=` — so ask the art set's key before the
+    // plain one. `file:sd` is deliberately NOT a fallback on HD: it names the classic model,
+    // which is the silent substitution P4 exists to prevent.
+    const uiFile = u ? str(u, "file") : "";
+    const skinRow = skin?.getRow(id) as Row | undefined;
+    // The CLASSIC set (`art === "sd"`) asks `file:sd` and then the plain `file`, which is the
+    // 1.30 model the base module carries. It must NOT fall back to `file:hd`: that is the HD
+    // model, and picking classic art is the one case where the classic path is what was asked.
+    const skinFile = skinRow
+      ? hd
+        ? art === "sd"
+          ? str(skinRow, "file:sd") || str(skinRow, "file")
+          : str(skinRow, `file:${art}`) || str(skinRow, "file:hd") || str(skinRow, "file")
+        : str(skinRow, "file")
+      : "";
+    const file = uiFile || skinFile;
     if (!file) continue; // header rows / non-placeable entries have no model
 
     const b = balance?.getRow(id) as Row | undefined;
@@ -697,24 +737,48 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       typeName: u ? str(u, "name") : "",
       race: d ? str(d, "race") : "",
       tilesets: (b ? str(b, "tilesets") : "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => s && s !== "_" && s !== "-"),
-      model: unitModelPath(vfs, file, u ? num(u, "fileVerFlags", 0) : 0),
-      modelScale: u ? num(u, "modelScale", 1) : 1,
+      model: unitModelPath(
+        vfs,
+        file,
+        uiFile ? (u ? num(u, "fileVerFlags", 0) : 0) : skinRow ? num(skinRow, "fileVerFlags", 0) : 0,
+        hd,
+      ),
+      // Reforged carries the HD scale per ART SET (`modelScale:de`), and the HD gait as
+      // `walk:hd`/`run:hd`. The SD tables have neither, so their three lines are untouched.
+      modelScale: hd
+        ? skinNum(skinRow, `modelScale:${art}`, skinNum(skinRow, "modelScale", u ? num(u, "modelScale", 1) : 1))
+        : u ? num(u, "modelScale", 1) : 1,
       occlusionHeight: u ? num(u, "occH", 0) : 0,
       selScale: u ? num(u, "scale", 1) : 1,
-      animWalkSpeed: u ? num(u, "walk", 0) : 0,
-      animRunSpeed: u ? num(u, "run", 0) : 0,
+      animWalkSpeed: hd ? skinNum(skinRow, "walk:hd", skinNum(skinRow, "walk", u ? num(u, "walk", 0) : 0)) : u ? num(u, "walk", 0) : 0,
+      animRunSpeed: hd ? skinNum(skinRow, "run:hd", skinNum(skinRow, "run", u ? num(u, "run", 0) : 0)) : u ? num(u, "run", 0) : 0,
       animBlend: u ? num(u, "blend", 0.15) : 0.15,
       animProps,
       attachAnimProps,
       attachLinkProps,
-      soundSet: u ? str(u, "unitSound") : "",
+      // 3.0 moved the sound-set LABEL out of UnitUI.slk into `unitSkin.txt` along with `file`
+      // (this install's UnitUI has no `unitSound` column at all), so read the skin row too or
+      // every unit's voice set is "" and no What/Yes/Pissed/Ready line can be looked up.
+      soundSet: (u ? str(u, "unitSound") : "") || (skinRow ? str(skinRow, "unitSound") : ""),
       // "Art - Tinting Color": three 0–255 columns, absent on an untinted row. See UnitDef.tint.
       tint: u ? [num(u, "red", 255) / 255, num(u, "green", 255) / 255, num(u, "blue", 255) / 255] : [1, 1, 1],
       targType: (d ? str(d, "targType") : "").toLowerCase().trim(),
       weaponSound: "", // a view of the primary slot — syncPrimaryWeapon fills it below
       lumberSound: soundBase(u ? str(u, "weap2") : ""),
       armorSound: soundBase(u ? str(u, "armor") : ""),
-      icon: fn ? str(fn, "art") : "",
+      // 3.0 moved the command-button face out of `*UnitFunc.txt` into `unitSkin.txt`'s `art`,
+      // the same move `file` made — every stock unit's Func row here carries only `buttonpos`
+      // and `specialart`, which is why the whole spawn catalogue had empty icons. Read both:
+      // SD (and custom maps' Func overrides) still write `art` in the Func file.
+      icon:
+        (fn ? str(fn, "art") : "") ||
+        (skinRow
+          ? hd
+            ? art === "sd"
+              ? str(skinRow, "art:sd") || str(skinRow, "art")
+              : str(skinRow, `art:${art}`) || str(skinRow, "art:hd") || str(skinRow, "art")
+            : str(skinRow, "art")
+          : ""),
       specialArt: fn ? mdxPath(str(fn, "specialart")) : "",
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
       // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The
@@ -991,6 +1055,7 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
       areaHalfFactor: num(w, `Hfact${n}`, 0.5),
       areaQuarterFactor: num(w, `Qfact${n}`, 0.25),
       splashTargets: list(str(w, `splashTargs${n}`)),
+      targetCount: num(w, `targCount${n}`, 1),
       // The column is missing on a custom row that never thought about it; an attack that
       // exists is one you can aim, so "not stated" reads as shown — only an explicit 0 hides it.
       showUI: num(w, `showUI${n}`, 1) !== 0,
@@ -1027,13 +1092,15 @@ function list(v: string): string[] {
  * the Berserker's (HeadHunter_V1 holds its alternate clips) and missed the other seventeen. A
  * flagged twin the install does not ship falls back to the plain file.
  */
-function unitModelPath(vfs: DataSource, file: string, verFlags: number): string {
+function unitModelPath(vfs: DataSource, file: string, verFlags: number, hd = false): string {
   // The stock table writes the column bare (`units\human\Footman\Footman`), but nothing makes a
   // map's own `Units\UnitUI.slk` do so: a hand-edited one carries the extension the author
   // typed — `units\orc\WolfRider\WolfRider.mdl`, `cloud7777.mdx` (DotA v6.77b AI Fun, eleven
   // rows) — and the game takes either. Appended to blindly that asked for `WolfRider.mdl.mdx`,
   // which is in no archive, so those heroes had no body. Same rule as objectData's `normModel`.
   const base = file.trim().replace(/\//g, "\\").replace(/\.(mdl|mdx)$/i, "");
+  // Reforged ships ONE model per unit — there are no `_V0`/`_V1` twins to prefer (P3-5).
+  if (hd) return `${base}.mdx`;
   const v = versionIndex();
   const twin = `${base}_V${v}.mdx`;
   return verFlags & (1 << v) && vfs.exists(twin) ? twin : `${base}.mdx`;
@@ -1044,6 +1111,25 @@ function mdxPath(v: string): string {
   if (!v) return "";
   const p = v.replace(/\//g, "\\").replace(/\.mdl$/i, "");
   return /\.mdx$/i.test(p) ? p : `${p}.mdx`;
+}
+
+/**
+ * A JASS rawcode as the four-character id the tables use — `0x68666f6f → "hfoo"`.
+ *
+ * Reforged's `BlzCreateUnitWithSkin` / `BlzSetUnitSkin` name a unit SKIN this way (a skin variant
+ * is an ordinary unit type in the map's or the install's data, so its model comes through the
+ * same `unitSkin.txt` path as every other unit). "" for 0 or anything that is not four printable
+ * characters, which the caller reads as "no skin".
+ */
+export function unitIdFromRaw(raw: number): string {
+  if (!raw) return "";
+  let id = "";
+  for (let shift = 24; shift >= 0; shift -= 8) {
+    const c = (raw >>> shift) & 0xff;
+    if (c < 0x20 || c > 0x7e) return "";
+    id += String.fromCharCode(c);
+  }
+  return id;
 }
 
 // "buttonpos" is "col,row" on the 4×3 command grid; default top-left.

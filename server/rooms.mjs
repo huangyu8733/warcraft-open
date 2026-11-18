@@ -45,6 +45,10 @@ const roomInfo = (r) => ({
   edition: r.edition,
   // The host's Game Speed rung (src/data/gameSpeed.ts), for the join screen's "Game Speed:" row.
   speed: r.speed,
+  // Which line the host is on, and (for HD) the exact build. Passed through; clients list only
+  // their own line and refuse a join across it (src/net/protocol.ts RoomInfo.flavor).
+  flavor: r.flavor,
+  gameVersion: r.gameVersion,
 });
 
 const peerInfo = (p) => ({ id: p.id, name: p.name, host: p.host });
@@ -219,6 +223,11 @@ export class RelayCore {
           maxPlayers: Math.max(2, Math.min(12, msg.maxPlayers || 12)),
           observers: msg.observers === true,
           edition: msg.edition === "roc" ? "roc" : "tft",
+          // Which data / asset line. An older client's silence is SD, the only line it had.
+          flavor: msg.flavor === "hd" ? "hd" : "sd",
+          // Only an HD room compares this; SD is pinned by the version gate. Normalised to a
+          // string or null so a join's comparison has one shape to answer.
+          gameVersion: typeof msg.gameVersion === "string" && msg.gameVersion ? msg.gameVersion : null,
           // 0 Slow … 3 Fastest; anything else (an older client's silence) is Fast, 2.
           speed: Number.isInteger(msg.speed) && msg.speed >= 0 && msg.speed <= 3 ? msg.speed : 2,
           peers: new Map([[peer.id, peer]]),
@@ -236,6 +245,21 @@ export class RelayCore {
         if (conn.roomId) return conn.send({ t: "error", message: "Already in a game." });
         const room = this.rooms.get(msg.roomId);
         if (!room) return conn.send({ t: "error", message: "That game is no longer available." });
+
+        // The line, before the seat: an SD and an HD game are not the same data, so a join
+        // across them must not even reclaim a held slot. A missing flavor is SD (older client).
+        const line = msg.flavor === "hd" ? "hd" : "sd";
+        if (line !== (room.flavor ?? "sd")) {
+          return conn.send({ t: "error", message: "That game is on a different version line (SD/HD)." });
+        }
+        // HD also needs the same BUILD: Reforged patches carry balance changes. SD does not —
+        // its data is pinned by the version gate before any room is created.
+        if (room.flavor === "hd") {
+          const asked = typeof msg.gameVersion === "string" && msg.gameVersion ? msg.gameVersion : null;
+          if (asked !== room.gameVersion) {
+            return conn.send({ t: "error", message: `That game needs Reforged ${room.gameVersion ?? "another build"}.` });
+          }
+        }
 
         // RECONNECT (item 11): a `token` matching a slot this room is HOLDING for a dropped
         // player reclaims that exact slot — same peer id, same token — rather than minting a

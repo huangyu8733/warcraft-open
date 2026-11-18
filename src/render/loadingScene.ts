@@ -2,9 +2,12 @@ import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
 import tgaHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/tga/handler";
+import ddsHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/dds/handler";
 import { LOAD_BAR_MODEL } from "../data/loadingScreens";
 import { UI_HEIGHT, UI_WIDTH } from "../ui/fdf/layout";
 import type { DataSource } from "../vfs/types";
+import { isHd } from "../data/flavor";
+import { hdTexturePaths } from "../vfs/tileset";
 
 // The loading screen's ART (issue #78) — the background and the load bar, both of them real
 // MDX read out of the player's install.
@@ -123,6 +126,7 @@ export class LoadingScene {
    *  thing drawn and a scrim shows through around it. The loading screen is the whole picture and
    *  leaves it off. */
   constructor(private canvas: HTMLCanvasElement, private vfs: DataSource, transparent = false) {
+    const hd = isHd();
     canvas.width = canvas.clientWidth || window.innerWidth;
     canvas.height = canvas.clientHeight || window.innerHeight;
     // The viewer's own default is `{ alpha: false }`, which makes the CANVAS opaque whatever the
@@ -130,9 +134,18 @@ export class LoadingScene {
     // have to say so, which is why this is passed as well as `scene.alpha` below.
     const viewer = new ViewerClass(canvas, transparent ? { alpha: true } : undefined);
     viewer.on("error", (e) => console.error("[loadingscene]", e));
-    this.solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
-    viewer.addHandler(mdxHandler, this.solver, false);
+    this.solver = (src) => {
+      if (typeof src !== "string") return src;
+      if (!hd) return this.vfs.read(src);
+      // HD: the model names `.blp`/`.tif`, the art module stores `.dds` (vfs/tileset.ts).
+      for (const path of hdTexturePaths(src, true)) {
+        if (this.vfs.exists(path)) return this.vfs.read(path);
+      }
+      return undefined;
+    };
+    viewer.addHandler(mdxHandler, this.solver, hd);
     viewer.addHandler(blpHandler);
+    if (hd) viewer.addHandler(ddsHandler); // Reforged art (P3-4); harmless on SD, never asked
     // …and TGA, which the game reads as readily as BLP: a map's IMPORTED loading screen is
     // usually TGA, because that is what an author exports. Monolith's own
     // `war3mapImported\LoadingScreen.mdx` names four quarters `LoadingScreen{TL,TR,BL,BR}.tga`

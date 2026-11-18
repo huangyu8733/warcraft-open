@@ -253,6 +253,18 @@ console.log("\nthe map KIND picks the other half of the set");
   }
 }
 
+console.log("\nHD has no edition branch — it stays on the expansion, whatever is stored");
+{
+  const { setFlavor } = require(join(REPO, ".sim-build", "src", "data", "flavor.js"));
+  setFlavor("hd");
+  setEdition("roc");
+  check("a Reign of Chaos switch is ignored", isRoc(), false);
+  check("…and the live tables stay selected", dataSetFolder(), null);
+  setFlavor("sd");
+  setEdition("tft");
+  setMapDataSet("melee");
+}
+
 setEdition("tft"); // leave the module as the suite found it
 setMapDataSet("melee");
 check("the module is left on the melee tables", [isRoc(), mapDataSet()], [false, "melee"]);

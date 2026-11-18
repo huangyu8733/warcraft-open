@@ -1,5 +1,9 @@
-import War3MapViewer from "mdx-m3-viewer/dist/cjs/viewer/handlers/w3x/viewer";
+import { OpenWar3Viewer } from "./popcornMdx";
+import { installHdLayerTextures } from "./hdLayers";
+import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
 import { dataSetFolder, isRoc, mapDataSet } from "../data/edition";
+import { flavor, isHd } from "../data/flavor";
+import { gameVersion } from "../data/gameVersion";
 import { dbg } from "../dev/dbg";
 import { decodeGameText } from "../data/text";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
@@ -10,8 +14,8 @@ import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { MpqDataSource } from "../vfs/mpq";
 import { MapTableSource } from "../vfs/mapTables";
 import { LayeredDataSource } from "../vfs/layered";
-import { tilesetOverlay } from "../vfs/tileset";
-import { createAssetSolver, type MapFileLayer, type Solver } from "./assetSolver";
+import { hdTexturePaths, tilesetOverlay } from "../vfs/tileset";
+import { createAssetSolver, movedModelCandidates, type MapFileLayer, type Solver } from "./assetSolver";
 import { SkyDome, skyModelPath, type SkyViewer } from "./sky";
 import { CAMERA_MARGIN, CELL, cameraBoundsOf, parseW3E, playableRect, type TerrainData, type WorldRect } from "../world/terrain";
 import { brushPoints, parseCellRarity, pickCell } from "./terrainBrush";
@@ -24,6 +28,14 @@ import { summonsBuildings, castCostOf, isOffField, CARRIED_ONTO_SHEET, type Aler
 import { stampFootprints, stampFootprint, unstampFootprint, decodePathTex, footprintBuildable, footprintCellsAt, footprintRadius, quarterTurns, rotateFootprint, type Footprint, type PlacedFootprint } from "../sim/destructibles";
 import { parseMapUnits, GOLD_MINE_ID, START_LOCATION_ID } from "../world/mapUnits";
 import { frameModel, loadMapScript, type MapScriptEngine } from "../jass/index";
+import { decodeGraph, encodeGraph, newEncodeStats, type DecodeReport, type EncodeStats, type GraphDoc } from "../game/save/graph";
+import { registerSaveClasses } from "../game/save/classes";
+import { isRenderObject, registerGameSaveClasses } from "../game/save/gameClasses";
+import { externalResolver, externalsFor, type SaveRegistries } from "../game/save/matchSave";
+import type { SaveFile, SavedScene } from "../game/save/saveFile";
+import { saveFileName, saveSink } from "../game/save/saveSink";
+import { mintedOrders, restoreMintedOrders } from "../jass/orders";
+import { jStr, JNULL } from "../jass/values";
 import { learnOrderStrings } from "../jass/orders";
 import { localizedHotkey } from "../jass/natives/text";
 import { setWidePlayerTable } from "../data/enums";
@@ -41,6 +53,7 @@ import { parseTerrainShadows, TerrainShadowOverlay } from "./terrainShadowOverla
 import { CameraHeightField } from "./cameraHeight";
 import { LightningOverlay } from "./lightningOverlay";
 import { WeatherOverlay } from "./weather";
+import { PkbOverlay, pkbBakeResolver, type PkbScene } from "./pkbOverlay";
 import { loadWeatherRegistry, type WeatherRegistry } from "../data/weather";
 import { DebugColliders, OverlayLayer, COLLIDER_COLORS, FLOATS_PER_VERT, type ColliderBatch } from "./debugColliders";
 import { FogState, VISION_CELL, type VisionMap } from "../sim/vision";
@@ -49,7 +62,7 @@ import type { Instance as RtsInstance } from "../game/rts";
 import type { MatchLinkSetup } from "../game/matchLink";
 import type { ScoreRow, ScoreTable } from "../game/scoreTable";
 import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
-import { SoundBoard } from "../audio/sounds";
+import { SoundBoard, type UnitSoundDef, type ParsedModel } from "../audio/sounds";
 import { VoiceChat } from "../audio/voiceChat";
 import { onVoiceControlChange, setVoiceHost, voiceControlOn } from "../voice/control";
 import { VoiceLabels } from "../game/voiceLabels";
@@ -60,12 +73,12 @@ import { dressAsGameTip } from "../ui/gameTipSkin";
 import { anyModalOpen } from "../ui/modal";
 import { makeVoiceHost } from "../game/voiceActions";
 import { Talkers, VOICE_HUD_MAX, VOICE_KEY_CODE, voiceFromBase64, voiceRecipients, voiceToBase64 } from "../game/voice";
-import { loadUnitRegistry, type UnitRegistry, type UnitDef } from "../data/units";
+import { loadUnitRegistry, unitIdFromRaw, type UnitRegistry, type UnitDef } from "../data/units";
 import { applyMapUnitData, applyMapAbilityData, applyMapItemData, applyMapUpgradeData, applyMapTechData, mapDestructablePathing, heroFoldConstants, makeTrigStr, refoldHeroConstants } from "../data/objectData";
 import { applyMapObjectLanguage, localizeMapWtsText } from "../i18n/mapLanguage";
 import { localizeGlobalStrings } from "../i18n/fdfStrings";
 import { t as tr, displayHeroName } from "../i18n";
-import { readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
+import { mapFlavor, readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
 import { readW3i } from "../compat/w3i";
 import { preloadLuaHost } from "../compat/lua/index";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
@@ -94,7 +107,7 @@ import { MELEE_NORMAL as MELEE_AI_NORMAL } from "../ai/ids";
 import { DEFAULT_GAME_SPEED, gameSpeedLabel, gameSpeedRate, type GameSpeed } from "../data/gameSpeed";
 import { MatchLog, type LogSeat } from "../game/matchLog";
 import { matchLogSink } from "../game/matchLogSink";
-import { CHECK_EVERY, Phase, ReplayPlayer, ReplayRecorder, encodeReplay, readReplayHeader, type ReplayEnding, type ReplayEvent, type ReplayHeader, type ReplayView } from "../game/replay";
+import { CHECK_EVERY, Phase, ReplayPlayer, ReplayRecorder, encodeReplay, fnv64, readReplayHeader, type ReplayEnding, type ReplayEvent, type ReplayHeader, type ReplayView } from "../game/replay";
 import type { ReplayControls } from "../ui/replayPanel";
 import { diffDumps, stateDump, stateHash } from "../game/replayHash";
 import { STATE_EVERY, StateTracker } from "../game/replayState";
@@ -149,7 +162,7 @@ import { ModelViewerScene } from "./modelViewer";
 import { animPropsFor, buildAnimSet } from "./unitAnims";
 import { OBSERVER_NAME, OBSERVER_PLAYER, type Controller, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { MetricsOverlay } from "../ui/metrics";
-import { cursorImageValue, cursorPx, cursorValue } from "../ui/cursor";
+import { cursorDrawPx, cursorImageValue, cursorPx, cursorValue } from "../ui/cursor";
 import { perfLog } from "../dev/perfLog";
 /** package.json's version, as the main menu prints it (vite.config.ts). */
 declare const __OW3_VERSION__: string;
@@ -157,6 +170,8 @@ declare const __OW3_COMMIT__: string;
 declare const __OW3_SIM_FINGERPRINT__: string;
 import { animStride, renderSize, videoSettings } from "./videoQuality";
 import { edgeScrollScale, keyScrollScale } from "./scrollOptions";
+import { gameInfoMessagesEnabled, peonDoubleTapFocus } from "./gameplayOptions";
+import { defaultCameraDistance, maxCameraDistance, minCameraDistance } from "./cameraOptions";
 import { centreGamepadCursor, gamepadPan, setGamepadHost } from "../ui/gamepad";
 import { TerrainCull } from "./terrainCull";
 import type { PickVolume } from "./modelCollision";
@@ -167,6 +182,7 @@ import { GAME_HEIGHT, disposeWorldLayer, worldLayer } from "../ui/stage";
 import { EscMenu } from "../ui/escMenu";
 import { AllianceDialogOverlay } from "../ui/allianceDialog";
 import { ChatDialogOverlay } from "../ui/chatDialog";
+import { LogDialogOverlay, LOG_MAX_LINES } from "../ui/logDialog";
 import { QuestDialogOverlay, primeQuestStrings } from "../ui/questDialog";
 import { ConsoleUi, type ConsolePanel } from "../ui/consoleUi";
 import { parseMapInfo } from "../world/mapInfo";
@@ -183,13 +199,14 @@ import { SuspendDialogOverlay, type SuspendRow } from "../ui/suspendDialog";
 import { CinematicPanelOverlay } from "../ui/cinematicPanel";
 import { ScriptCamera, type CameraState } from "./scriptCamera";
 import { AutoCamera } from "../game/autoCamera";
-import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
+import { BOUNTY_TEXT_STYLE, CombatTextTags, GOLD_TEXT_STYLE, LUMBER_TEXT_STYLE, MISS_TEXT_STYLE, TextTagOverlay, XP_TEXT_STYLE, type CombatTextStyle, type TextTagContext } from "./textTags";
 import { FdfLibrary } from "../ui/fdf/library";
 import { playFdfClick } from "../ui/fdf/render";
-import { blpToCanvas, blpToDataUrl } from "./blputil";
+import { blpToCanvas, imageCandidates, imageToCanvas, imageToDataUrl, vfsImage } from "./blputil";
 import { loadTechRegistry, type TechRegistry } from "../data/techtree";
 import { loadUpgradeRegistry, type UpgradeRegistry } from "../data/upgrades";
 import { parseWar3Skins, skinValue, WAR3SKINS } from "../data/war3skins";
+import { uiThemeSkin } from "../data/uiTheme";
 import { MAP_SKIN_FILE, mapSkinOverlay, parseMapSkin, setMapSkinOverlay, type MapSkin } from "../data/mapSkin";
 
 // Our race ids → the section names in the game's own skin table (UI\war3skins.txt), which
@@ -252,6 +269,20 @@ const BASE_FILES = [
  */
 const SIM_HZ = 60;
 const SIM_DT = 1 / SIM_HZ;
+
+/** common.j `EVENT_GAME_LOADED = ConvertGameEvent(256)`, `EVENT_GAME_SAVE = ConvertGameEvent(259)`. */
+const EVENT_GAME_LOADED = 256;
+
+/** The SimWorld queues the RENDERER drains once a frame (effects, sounds, flashes) — state for a
+ *  save, but not for comparing two matches step by step (`devStateHash`). */
+const SIM_RENDER_QUEUES = new Set([
+  "hits", "chops", "treeHits", "attackSwings", "spawnedProjectiles", "removedProjectiles", "projectileImpacts",
+  "spellEffects", "spellSplats", "spellLightnings", "spellLightningStops", "castStarts", "castFires", "combatTexts",
+  "refusals", "levelUps", "alerts", "powerupPickups", "itemSpawns", "itemRemovals", "deaths", "removals", "felled",
+  "depleted", "morphs", "attackReveals", "deathReveals", "itemReveals", "researchCompletions", "buildCompletions",
+  "foodStalls", "mirrorMissiles", "addedMines", "deadStructures",
+]);
+const EVENT_GAME_SAVE = 259;
 /** Catch-up steps allowed in one frame before the remainder is dropped. Without a cap, a
  *  long stall (tab-switch, GC) queues more work than the next frame can retire, which
  *  queues still more — the classic spiral of death. */
@@ -289,19 +320,12 @@ function randomSeed(): number {
   return 1 + Math.floor(Math.random() * 2147483645);
 }
 
-// Camera zoom limits (world units of camera distance), at module scope so an instance field can
-// open on them — a `static readonly` declared further down the class is not yet initialized when
-// the instance initializers run. See MapViewerScene.ZOOM_MIN/ZOOM_MAX/MELEE_START, which alias
-// these and carry the reasoning.
-const ZOOM_MIN_DISTANCE = 1250;
-// The far end is where a match opens (MELEE_START) and how much of the map a player can take in
-// at once. Widened from 2400 at the developer's request — at the 32° lens this is ~2060 world
-// units across, about a DotA lane plus the jungle on either side; 2400 showed ~1375 and cut the
-// second treeline off. Anything a map's own script parks the camera at is unaffected (the ladder
-// only bounds the PLAYER's wheel).
-const ZOOM_MAX_DISTANCE = 3600;
-/** The distance a match OPENS on: the far end of the wheel (zoom stop 0). */
-const OPENING_DISTANCE = ZOOM_MAX_DISTANCE;
+// Camera zoom limits (world units of camera distance) live in render/cameraOptions.ts now: the
+// base ladder is 1250 … 3600, opening at 3600 (widened from 2400 at the developer's request — at
+// the 32° lens 3600 is ~2060 world units across, about a DotA lane plus the jungle on either
+// side; 2400 showed ~1375 and cut the second treeline off). Options → Gameplay can widen it
+// further. Anything a map's own script parks the camera at is unaffected (the ladder only bounds
+// the PLAYER's wheel). See MapViewerScene.ZOOM_MIN/ZOOM_MAX/MELEE_START.
 
 const UP = new Float32Array([0, 0, 1]); // WC3 world space is Z-up
 const LEVEL_UP_FX = "Abilities\\Spells\\Other\\Levelup\\Levelupcaster.mdx"; // hero level-up nova
@@ -332,6 +356,9 @@ const BOUNTY_TEXT_COLOR = argbOfParts(TEXT_TAG.BountyTextColor);
 // ...and the one exception, the XP number, which 1.30.4 does not raise at all and therefore
 // keeps no colour for — see XP_TEXT_STYLE. A violet matched to the Reforged client that does.
 const XP_TEXT_COLOR = 0xffb478ff;
+// A miss is the file's own red (`MissTextColor` = 255,255,0,0) — pure, where our crit's is the
+// palette's 255,3,3.
+const MISS_TEXT_COLOR = argbOfParts(TEXT_TAG.MissTextColor);
 // A bounty sits where a credit does; the XP goes a hair above it. The two are raised by the
 // SAME event a step apart, and a hero that killed the creep in melee is standing on top of it,
 // so at one identical height they would print over each other.
@@ -345,7 +372,10 @@ const XP_TEXT_Z = 240;
 /** Colour, spec and height for one CREDIT kind — the four tags the engine raises to tell you
  *  what you were just paid (see CombatText). A crit and a deny are not in here: they report a
  *  blow, not a payment, and wear the victim's colour rather than the resource's. */
-const CREDIT_TEXT: Record<"gold" | "lumber" | "bounty" | "xp", { color: number; style: CombatTextStyle; z: number }> = {
+const CREDIT_TEXT: Record<"gold" | "lumber" | "bounty" | "xp" | "miss", { color: number; style: CombatTextStyle; z: number }> = {
+  // Not a credit, but styled the same way: the game keeps a whole row for it (MISS_TEXT_STYLE).
+  // It sits where a crit does — ON the unit that was shot at.
+  miss: { color: MISS_TEXT_COLOR, style: MISS_TEXT_STYLE, z: COMBAT_TEXT_Z },
   gold: { color: GOLD_TEXT_COLOR, style: GOLD_TEXT_STYLE, z: GOLD_TEXT_Z },
   lumber: { color: LUMBER_TEXT_COLOR, style: LUMBER_TEXT_STYLE, z: GOLD_TEXT_Z },
   bounty: { color: BOUNTY_TEXT_COLOR, style: BOUNTY_TEXT_STYLE, z: GOLD_TEXT_Z },
@@ -453,8 +483,15 @@ const GOLD_MINE_COLLAPSE_ART = "Objects\\Spawnmodels\\Other\\NeutralBuildingExpl
  * chain's guess found those same events off the rows' `EfctID1` art (`Xbdt` → Andt.mdl carries
  * RevealMap too) and played them a second time at the SHOOTER — a Flare Gun pressed in your base
  * whistled there, 0.8 s before the flare came down on the other side of the map.
+ *
+ * Healing Spray (`ANhs`) is the same mistake made with a HEAL: the chain found `[XNhs]
+ * Specialart = HealTarget.mdl` and played its `SNDXAHEA` (HealTarget.wav, the Priest's Heal)
+ * once at the Alchemist as he raised his arm. Nothing in the game sounds there —
+ * HeroGoblinAlchemist.mdx keys no `ANHS` event, his spell clip is silent — and the press is
+ * heard through its bottles' own throw (`SNDxSHSL`, Sounds.playMissile). The heal chime
+ * belongs to the flash, on each unit a wave mends (SimWorld.healWave).
  */
-const SOUNDED_BY_EFFECT = new Set(["AIta", "AOfs", "Andt", "AItb", "AIfa", "Afla"]);
+const SOUNDED_BY_EFFECT = new Set(["AIta", "AOfs", "Andt", "AItb", "AIfa", "Afla", "ANhs"]);
 /**
  * Abilities whose whole sound is their MISSILE's — so the cast-fire chain guesses nothing for
  * them either. Storm Bolt names no art of its own, and the chain's last rung, the BUFF's worn
@@ -991,6 +1028,10 @@ function particleTail(inst: SpawnInstance): number {
 }
 interface SpawnModel {
   addInstance(): SpawnInstance;
+  /** The parse behind it. Present on a real viewer model (the sound board reads the SND events
+   *  out of exactly this parse — see SoundBoard.registerModel); absent on a test stub. */
+  sequences?: ParsedModel["sequences"];
+  eventObjects?: ParsedModel["eventObjects"];
 }
 
 /** A placed doodad's scene-animated stand-in — the only way a map doodad can move
@@ -1057,6 +1098,8 @@ function lerp4(a: readonly number[], b: readonly number[], k: number): [number, 
 /** One live script `effect` (7.26 — issue #68): the model AddSpecialEffect* put in the
  *  world, held until the script's DestroyEffect. See MapViewerScene.specialFx. */
 interface SpecialFx {
+  /** The model, as the script named it (`.mdl` folded to `.mdx`) — what a saved game re-creates it from. */
+  path: string;
   /** null while the model is still loading — the handle exists before the art does. */
   inst: SpawnInstance | null;
   /** Seconds since the script created it. THE effect's clock: an mdx instance only
@@ -1129,7 +1172,7 @@ interface SphereThrow {
   peak: number; // parabolic arc apex height
 }
 
-const ViewerClass = War3MapViewer as unknown as {
+const ViewerClass = OpenWar3Viewer as unknown as {
   new (canvas: HTMLCanvasElement, solver: Solver, isReforged: boolean): W3xViewer;
 };
 
@@ -1222,6 +1265,191 @@ const RACE_STRING_KEY: Record<PlayableRace | "random", string> = {
   human: "HUMAN", orc: "ORC", undead: "UNDEAD", nightelf: "NIGHT_ELF", random: "RANDOM",
 };
 
+/** Why a map was refused at the load door (P4), and what the console should say about it. */
+export interface MapRefusal {
+  /** What the player is told — the same text the map list's hover carries. */
+  message: string;
+  /** The exact version / id / path that failed, for the console. */
+  detail: string;
+}
+
+/**
+ * Merge rows whose ids differ only by CASE into the row that was loaded first.
+ *
+ * The viewer reads its SLKs and its Reforged `*Skin.txt` files into one `MappedData`, keyed by
+ * the literal id. 3.0's skin files spell five doodad ids differently from `Doodads.slk`
+ * (`[YCgd]` vs `Ycgd`, and four more), so those skins landed on invented rows and the real rows
+ * kept no `file` — the placed `Ycgd` ground decals on Reforged campaign maps therefore drew
+ * nothing. The SLKs are loaded before the skins, so the first spelling is the canonical one;
+ * fold every later case-only duplicate into it and drop the invented key.
+ */
+function foldCaseOnlyRows(table: MappedData): void {
+  const rows = table.map;
+  const canonical = new Map<string, string>();
+  for (const key of Object.keys(rows)) {
+    const lower = key.toLowerCase();
+    const first = canonical.get(lower);
+    if (first === undefined) {
+      canonical.set(lower, key);
+      continue;
+    }
+    for (const [name, value] of Object.entries(rows[key].map)) rows[first].map[name] = value;
+    delete rows[key];
+  }
+}
+
+/** Models the start preload fetches at once. The old code used `Promise.all` over the whole
+ *  closure; on a Reforged mount that fired thousands of reads/parses in one burst. Six keeps
+ *  the disk and the main thread busy without letting the queue monopolise a frame. */
+const PRELOAD_CONCURRENCY = 6;
+
+/** Future-tech models the background warmer may still fetch after the match starts. Beyond
+ *  this the rest stays on the asset solver's on-demand path — the reference client does not
+ *  fetch a unit a match will never field either, and a script can spawn anything. */
+const DEFERRED_MODEL_BUDGET = 300;
+
+/** …and on a REFORGED mount that budget is zero. A classic future-tech model is one BLP and a
+ *  few hundred KB; an HD one is an MDX plus its diffuse/normal/ORM DDS, routinely 1–2 MB
+ *  compressed and 12–20 MB of VRAM, and the whole load happens on the main thread. Measured on
+ *  a 3.0 mount, one melee map: the warmer pulled 271 models / 810 DDS over the first 45 s of
+ *  play while the scene itself never held more than 8 model types, and frames sat at 5–12 fps
+ *  with `render` accounting for 0.85 ms of an 82 ms frame — the rest was decode/upload stalls
+ *  from this queue. The reference client does not warm future tech at all: it loads a unit the
+ *  frame it first appears. On HD that first-appearance cost is one model, paid once; warming
+ *  300 of them costs ~40 s of continuous hitching. Keep classic's warmer byte-for-byte. */
+const DEFERRED_MODEL_BUDGET_HD = 0;
+
+/** `Array.prototype.map` with at most `limit` promises in flight, in order. */
+async function forEachLimited<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
+/**
+ * The three checks a map must pass before it is loaded (P4-3), in order:
+ *
+ *   1. **the same game line** — an SD map on an HD client (or the reverse) is refused, so the
+ *      base module's classic models can never stand in for a map that asked for Reforged art;
+ *   2. **base ids exist in the data in play** — every `war3map.w3u` row's base must be in the
+ *      Reforged registry on HD (P2's 646 units). A PLACED type that is missing from it is only
+ *      a warning: Reforged's own maps still place types it dropped, and the engine has always
+ *      skipped those;
+ *   3. **the art resolves** — each placed unit's model, and the map's terrain files, must be
+ *      present in the mounted store.
+ *
+ * Checks 2 and 3 run on HD only: SD has always played maps whose custom rows or models are
+ * missing, and P4 must not change that (a missing model is a decades-old custom-map problem,
+ * not an HD one). Everything here is synchronous — `DataSource.exists` is index-only, so HD's
+ * lazy art does not need a byte to answer.
+ *
+ * Returns null when the map may load. The caller logs `detail` and refuses the match.
+ */
+export function mapLoadRefusal(bytes: Uint8Array, vfs: DataSource, registry: UnitRegistry): MapRefusal | null {
+  const archive = new MpqDataSource("map", bytes);
+  const format = readMapFormat(archive);
+  // No w3i at all: `unsupportedReason` already keeps this file out of the list, and SD's load
+  // path has always let it through to fail on its own terms. Not a flavour question.
+  if (format.w3iVersion === 0) return null;
+
+  const own = mapFlavor(format);
+  const client = isHd() ? "hd" : "sd";
+  if (own !== client) {
+    return {
+      message: tr("map.refuse.flavor", {
+        map: tr(own === "hd" ? "flavor.hd" : "flavor.sd"),
+        client: tr(client === "hd" ? "flavor.hd" : "flavor.sd"),
+      }),
+      detail: `w3i v${format.w3iVersion}, editor build ${format.editorBuild} is ${own}; this client is ${client}`,
+    };
+  }
+  if (client === "sd") return null;
+
+  // --- 2. base ids ---------------------------------------------------------------------
+  // The map's own object data first: every row copies an existing type, and on Reforged that
+  // base has to be one this install knows. A row whose base is unknown is skipped by
+  // `applyMapUnitData` (silently, for SD's sake), which is exactly the silent hole P4 closes.
+  const customBase = new Map<string, string>(); // the map's new id → the base it copies
+  const w3uBytes = archive.rawBytes("war3map.w3u");
+  if (w3uBytes) {
+    try {
+      const w3u = new War3MapW3u();
+      w3u.load(w3uBytes);
+      for (const obj of [...w3u.customTable.objects, ...w3u.originalTable.objects]) {
+        const base = obj.oldId;
+        customBase.set(obj.newId ?? base, base);
+        if (!registry.base(base) && !registry.get(base)) {
+          return {
+            message: tr("map.refuse.baseId", { id: base }),
+            detail: `war3map.w3u row "${obj.newId ?? base}" is based on "${base}", which is not in the Reforged unit data`,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("[map] couldn't read war3map.w3u for the HD checks:", err);
+    }
+  }
+  // …then everything the map PLACES. A placed id the registry does not know is NOT a refusal:
+  // Reforged's own stock maps still place types it dropped (`ngns`, the Goblin Shipyard, on
+  // Booty Bay), and the engine has always skipped them — SD and HD alike. Refusing here would
+  // throw out 273 stock maps to report one building. It is worth a line in the console, which
+  // is what "no silent substitution" means for a type that has no Reforged row to substitute.
+  const w3iBytes = archive.rawBytes("war3map.w3i");
+  const buildVersion = w3iBytes ? readW3i(w3iBytes).info.getBuildVersion() : 0;
+  const placed = parseMapUnits(archive.rawBytes("war3mapUnits.doo"), buildVersion);
+  // Pre-placed items share the .doo with units: `gold`, `silk`, `tin2`, `hslv` are ItemData
+  // ids (Chest of Gold, Spider Silk, Tome of Intelligence +2, Healing Salve), not dropped unit
+  // types. Asking the unit registry alone reported them as missing Reforged data on every
+  // prologue map; they are loaded by the item stream instead (see stampMapPathing).
+  const items = loadItemRegistry(vfs);
+  const unknown = new Set<string>();
+  for (const u of placed) {
+    if (u.typeId === START_LOCATION_ID) continue; // the editor's marker prop, not a unit
+    if (customBase.has(u.typeId) || registry.get(u.typeId) || items.get(u.typeId)) continue;
+    unknown.add(u.typeId);
+  }
+  if (unknown.size) {
+    console.warn(`[map] placed unit type(s) not in the Reforged data, skipped as on SD: ${[...unknown].join(", ")}`);
+  }
+
+  // --- 3. art --------------------------------------------------------------------------
+  // A placed unit's model, resolved through the same registry the match would use. Units the
+  // map defines are looked up by their base. Stock STARTING units are not placed, so they are
+  // not checked here — P3's probe already proved the install's own rosters resolve.
+  for (const u of placed) {
+    if (u.typeId === START_LOCATION_ID) continue;
+    const def = registry.get(u.typeId) ?? registry.get(customBase.get(u.typeId) ?? "");
+    // 3.0's `nzin` (an invisible line-of-sight blocker) still names
+    // `Doodads\Terrain\LOSBlocker\IntentionallyLeftBlank.mdx`, which the Reforged install does
+    // not ship. The unit is invisible by design, so the missing model is not missing art —
+    // refusing here kept the whole prologue campaign (OrcX01) from loading.
+    if (def?.model && /[\\/]LOSBlocker[\\/]IntentionallyLeftBlank\.md[xl]$/i.test(def.model)) continue;
+    if (def?.model && !vfs.exists(def.model)) {
+      return {
+        message: tr("map.refuse.assets", { path: def.model }),
+        detail: `unit "${u.typeId}" needs model "${def.model}", which the Reforged install does not have`,
+      };
+    }
+  }
+  // The map's terrain: without these there is no ground to draw at all (the black screen P4
+  // exists to prevent). Ground TILE textures are keyed by 4-char tileset codes and resolved
+  // through Terrain.slk at render time — an install-level question P3 already answered.
+  for (const name of ["war3map.w3e", "war3map.wpm"]) {
+    if (!archive.rawBytes(name)) {
+      return {
+        message: tr("map.refuse.assets", { path: name }),
+        detail: `the map has no ${name}`,
+      };
+    }
+  }
+  return null;
+}
+
 export class MapViewerScene {
   // The game camera's shape — what the view opens at and what ResetToGameCamera returns to
   // (7.24).
@@ -1303,7 +1531,7 @@ export class MapViewerScene {
    * The camera's other fields have no player-facing control (see the block above), so for
    * those "the game camera" really is WC3's own defaults.
    */
-  private playerDistance: number = OPENING_DISTANCE;
+  private playerDistance: number = defaultCameraDistance();
   /** …and the tilt that goes with it. The wheel is the only thing that moves the game camera's
    *  angle of attack (see pitchForZoomStep), so the player's zoom is a distance AND a pitch, and
    *  both have to survive a cinematic for ResetToGameCamera to hand back the view you had. */
@@ -1311,7 +1539,7 @@ export class MapViewerScene {
   // The wheel's in-flight ease (see updatePlayerCamera). A notch does not jump the camera: it
   // starts a short tween from wherever the view currently is to the new step's distance+pitch,
   // so notching four times in a second reads as one smooth dolly rather than four snaps.
-  private zoomFromDistance: number = OPENING_DISTANCE;
+  private zoomFromDistance: number = defaultCameraDistance();
   private zoomFromPitch = MapViewerScene.GAME_PITCH;
   private zoomT = 1; // 0…1 through the current step's ease; 1 = settled
   /** Insert/Delete's yaw offset, in radians, CURRENTLY applied to `yaw`. Kept as a separate
@@ -1370,6 +1598,8 @@ export class MapViewerScene {
   // the ids we register from spawnUnit so they can be pruned when the building dies.
   private splats: UberSplatOverlay | null = null;
   private weather: WeatherOverlay | null = null; // AddWeatherEffect — rain/snow/fog (7.23)
+  /** Reforged PopcornFX effects (CORN nodes) — the Wisp's body, spell bursts (render/pkbOverlay.ts). */
+  private pkb: PkbOverlay | null = null;
   private weatherSampler: HeightSampler | null = null;
   private weatherDefs: WeatherRegistry | null = null; // TerrainArt\Weather.slk (loaded on first use)
   private uberSplats: UberSplatRegistry | null = null;
@@ -1450,6 +1680,7 @@ export class MapViewerScene {
   private metrics = new MetricsOverlay();
   private hud: GameHud | null = null;
   private mapScript: MapScriptEngine | null = null; // the running JASS interpreter (Phase 7), pumped from the frame loop
+
   /** Registration count the sim's capture flags were derived from — re-derive when it
    *  changes (a trigger, or a thread resuming from a Wait, can register events late). */
   private scriptRegCount = 0;
@@ -1465,6 +1696,12 @@ export class MapViewerScene {
   private gameMenu: EscMenu | null = null; // F10 — the game's own EscMenuMainPanel.fdf
   private allies: AllianceDialogOverlay | null = null; // F11 — AllianceDialog.fdf + AllianceSlot.fdf
   private chatDialog: ChatDialogOverlay | null = null; // F12 — ChatDialog.fdf
+  private logDialog: LogDialogOverlay | null = null; // F12 in a campaign — LogDialog.fdf
+  /** Every message the map has put in front of this player — the script's `DisplayText…`
+   *  lines (quest updates and hints are those) and the console transmissions — for the
+   *  campaign's Message Log. As shown, markup and all; the oldest falls off at the panel's
+   *  own `TextAreaMaxLines`. */
+  private messageLog: string[] = [];
   private questLog: QuestDialogOverlay | null = null; // F9 — QuestDialog.fdf
   /** The console — both bands of ConsoleUI + UpperButtonBar + ResourceBar, all from the FDF. */
   private consoleUi: ConsoleUi | null = null;
@@ -1674,6 +1911,10 @@ export class MapViewerScene {
    *  named map (src/main.ts `changeLevel`). See Runtime.changeLevel for why this is a
    *  different exit from `onExit`. */
   onChangeLevel: ((mapName: string) => void) | null = null;
+  /** `ForceCampaignSelectScreen` — the chapter's script wants the player returned to the list
+   *  of CAMPAIGNS when it ends (the last chapter of one opening the next). Only whoever owns
+   *  the campaign screen can act on it (src/main.ts). */
+  onCampaignSelect: (() => void) | null = null;
   /** `RestartGame` — the defeat dialog's Restart. The same map again, from the top, at the
    *  difficulty the match is on NOW: "Reduce Difficulty" is that button with one
    *  `SetGameDifficulty` in front of it, so the rung has to travel with the restart
@@ -1794,6 +2035,9 @@ export class MapViewerScene {
   private observers: ReadonlyArray<{ id: number; peer: number; name: string }> = [];
   /** Advanced Options → Lock Teams (`MeleeConfig.lockTeams`): the Allies dialog's boxes are dead. */
   private lockTeams = false;
+  /** The lobby's options as `mapflag` bits (`MeleeConfig.mapFlags`) — handed to the map script
+   *  before config(), where `IsMapFlagSet(MAP_RANDOM_HERO)` reads them (issue #296). */
+  private mapFlags = 0;
   /** Advanced Options → All Talk (`MeleeConfig.allTalk`): voice reaches everybody, not allies. */
   private allTalk = false;
   /** Every seat's race as the match resolved it — the voice plates wear the speaker's symbol. */
@@ -1938,6 +2182,9 @@ export class MapViewerScene {
   // local player has vision/control (issue #33) and runs the map's config() (Phase 7).
   private mapPlayerUnits: Array<{ x: number; y: number; owner: number }> = [];
   private mapArchive: MpqDataSource | null = null;
+  /** The `.w3n` a CAMPAIGN CHAPTER came out of, when it came out of one — its imported art
+   *  and its `war3campaign.*` object data. Null for every other map. */
+  private campaignArchive: DataSource | null = null;
   /** …and the map's own gameplay constants (war3mapMisc.txt), re-read per map. */
   private mapMisc: MapMisc = NO_MAP_MISC;
   /** The viewer's object-data tables as the GAME ships them, snapshotted at the first map load
@@ -2046,6 +2293,10 @@ export class MapViewerScene {
   private consoleSkinCache: boolean | undefined;
   /** UI\war3skins.txt, parsed once — see skinPath(). */
   private skins: Map<string, Map<string, string>> | undefined;
+  /** The section the in-game interface is decorated from THIS match: the player's `uiTheme`
+   *  option, or the local race when it is "auto" (src/data/uiTheme.ts). Set in mountHud, read
+   *  by skinPath for the HUD's own art. The MUSIC skin is the race regardless (mountScriptUi). */
+  private uiSkin = "Default";
   private strings!: CommandStrings; // Units\commandstrings.txt [Errors] — every refusal line
   /** Which of the install's four object-table sets the five registries below were read from
    *  (src/data/edition.ts). The scene outlives a match, so the NEXT map may want the other
@@ -2067,6 +2318,9 @@ export class MapViewerScene {
     private mapFiles: MapFileLayer,
     shared: SoundBoard | null,
   ) {
+    // HD materials resolve their diffuse texture per frame (water sequences); install the
+    // batch-render hook before this match draws anything (see hdLayers.ts).
+    installHdLayerTextures();
     // The menu already built a SoundBoard (and with it the page's one AudioContext) to play
     // its theme and its wind — take that same one into the match rather than opening a second.
     this.sounds = shared ?? new SoundBoard(vfs);
@@ -2122,9 +2376,13 @@ export class MapViewerScene {
     // Map archive, then tileset archive, then the install — one stable blob URL per path
     // (render/assetSolver.ts says why each layer is there).
     const mapFiles: MapFileLayer = { archive: null, epoch: 0 };
-    const solver = createAssetSolver(vfs, mapFiles, baseUrls, created);
+    const hd = isHd();
+    const solver = createAssetSolver(vfs, mapFiles, baseUrls, created, hd);
 
-    const viewer = new ViewerClass(canvas, solver, false);
+    // `isReforged` is what makes the viewer's own map handler ask for `.dds`, register the
+    // Reforged `*Skin.txt` tables and wear the HD shader; the mount already carries the art
+    // module that answers those paths (P3).
+    const viewer = new ViewerClass(canvas, solver, hd);
     viewer.terrainModelExists = (path) => vfs.exists(path);
     // Low Performance Mode's shared poses are for THIS viewer — the world, where a crowd of one
     // model stands at the same point of the same clip. Every other viewer on the page (the menu's
@@ -2194,6 +2452,15 @@ export class MapViewerScene {
       baseUrls.delete(path);
     }
 
+    // 3.0's skin files spell a handful of object ids in a different CASE from the SLKs they
+    // decorate (`Doodads\doodadSkins.txt` has `[YCgd]` for `Doodads.slk`'s `Ycgd`). MappedData
+    // keys rows by the literal string, so each of those became a SECOND row beside the real one;
+    // the `.doo`'s own spelling then found the SLK row, which carries no `file`, and every
+    // placed instance drew nothing (146 of them on one 3.0 campaign map). WC3's own lookups are
+    // case-insensitive — fold the case-only duplicates back onto the row loaded first.
+    foldCaseOnlyRows(viewer.unitsData);
+    foldCaseOnlyRows(viewer.doodadsData);
+
     // The object tables are read through a source a map can lay its OWN tables over
     // (src/vfs/mapTables.ts); with no map on it yet it is the install.
     const tables = new MapTableSource(vfs);
@@ -2234,10 +2501,23 @@ export class MapViewerScene {
   /** Whether the registries in hand were read with a map's own tables over the install's. */
   private mapTables = false;
 
-  /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map. */
-  loadMap(bytes: Uint8Array): void {
+  /** Load a .w3x/.w3m (raw archive bytes) and frame the camera on the whole map.
+   *  `campaign` — a CAMPAIGN chapter's `.w3n` (data/campaignArchive.ts) — goes in between the
+   *  map and the install, so the chapter's imported art and the campaign's shared object data
+   *  resolve the way the reference client resolves them. */
+  async loadMap(bytes: Uint8Array, campaign?: DataSource): Promise<void> {
+    this.preloadEpoch++; // the previous map's background warmer must not load into this one
     syncCanvasSize(this.canvas);
     const archive = new MpqDataSource("map", bytes);
+    // P4's three checks, BEFORE a single piece of the previous match is torn down or the
+    // viewer opens the file: a refused map leaves no half-built scene behind (and the caller,
+    // `startGame`, has already refused it before the menus left — this is the backstop for the
+    // dev hook and any other direct door).
+    const refusal = mapLoadRefusal(bytes, this.vfs, this.registry);
+    if (refusal) {
+      console.error(`[map] refused: ${refusal.detail}`);
+      throw new Error(refusal.message);
+    }
     this.syncDataSet(archive);
     // Drop the previous map's scene so reloading doesn't stack renders.
     const prev = this.viewer.map?.worldScene;
@@ -2272,6 +2552,12 @@ export class MapViewerScene {
     // next map the game's own tables rather than the last map's (see resetObjectData).
     this.resetObjectData();
     this.layMapTables(archive);
+    // The 3.0 install keeps no `file` column in `UnitUI.slk` at all — a unit's model path lives
+    // only in `unitSkin.txt`, which the vendored viewer merges ONLY when it was built Reforged.
+    // On Classic graphics (`flavor=sd`) it was never merged, so every pre-placed unit — gold
+    // mines, creeps, shops — came out of `loadUnitsAndItems` as "Unknown unit ID": no widget and
+    // no model, while the sim's own mines still had health bars and the ground splats still drew.
+    this.seedUnitModels();
     this.viewer.loadMap(bytes);
     this.repairCustomRowIds(); // …before anything asks a placed unit which type it is
     const map = this.viewer.map;
@@ -2314,9 +2600,13 @@ export class MapViewerScene {
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
     this.mapArchive = archive; // kept so startCustom can read war3map.j (Phase 7 triggers)
+    this.campaignArchive = campaign ?? null;
     // Laid over the install for every MODEL and texture the scene loads itself — the units a
     // trigger creates, the effects it spawns (see `create`'s solver). Audio's twin is below.
-    this.mapFiles.archive = archive;
+    // A chapter's campaign archive sits UNDER its map: an imported model the chapter overrides
+    // still wins, and the campaign's own art fills whatever the chapter does not name.
+    const assets: DataSource = campaign ? new LayeredDataSource([archive, campaign]) : archive;
+    this.mapFiles.archive = assets;
     this.mapFiles.epoch++;
     // The map's own object data goes in FIRST — before anything reads the registries for this
     // map. It is the map's declaration of what its types ARE, so every question asked below
@@ -2335,7 +2625,7 @@ export class MapViewerScene {
     // …and mounted over the install for AUDIO, so a map's imported clips resolve: the paths
     // its CreateSound calls name (`war3mapImported\HalloweenMusic.wav`) are inside this
     // archive and nowhere else. See SoundBoard.mountMap.
-    this.sounds?.mountMap(archive);
+    this.sounds?.mountMap(assets);
     // The map's own display name (war3map.w3i) — the Quest Log's white subtitle line.
     // parseMapInfo takes the whole MAP ARCHIVE (it opens the MPQ itself and resolves the
     // name's TRIGSTR_ through war3map.wts), not the w3i bytes — feeding it the w3i was a
@@ -2375,7 +2665,13 @@ export class MapViewerScene {
       const splatLoader = (p: string) => {
         const art = tilesetArt(p, terrain.tileset);
         const b = art.source.rawBytes(art.path);
-        return b ? blpToCanvas(b) : null;
+        if (b) {
+          const canvas = imageToCanvas(b);
+          if (canvas) return canvas;
+        }
+        // Not tileset art (the selection circles are plain UI images) — fall back to the
+        // HD-aware candidate list, or an HD install's .dds copies stay invisible.
+        return vfsImage(this.vfs, p);
       };
       // Terrain camera culling (render/terrainCull.ts) — built off the same terrain the
       // overlays are, and consulted once a frame just before the ground and water passes.
@@ -2406,6 +2702,27 @@ export class MapViewerScene {
       // Lightning (issue #97): the same BLP loader, plus Splats\LightningData.slk — the
       // table that holds every bolt's texture, width, tint, fray and scroll speed.
       this.lightning = new LightningOverlay(this.viewer.gl, splatLoader, loadLightningRegistry(this.vfs));
+      // PopcornFX (Reforged CORN nodes). Bakes and their textures are read straight out of the
+      // HD mount: a bake names `SharedFX\X\X.pkfx` and ships `X.pkb`, and its texture paths are
+      // install-absolute with an `_HD.w3mod/` prefix the loader strips. Bakes go through the
+      // ASYNC read — a Reforged mount keeps art lazy, so `rawBytes` has never seen them.
+      this.pkb = new PkbOverlay(
+        this.viewer.gl,
+        (p) => this.vfs.read(p),
+        async (p) => {
+          for (const candidate of imageCandidates(p)) {
+            try {
+              return imageToCanvas(await this.vfs.read(candidate));
+            } catch {
+              // Not this candidate — try the next spelling (.dds then the .tif the bake names).
+            }
+          }
+          return null;
+        },
+        // …and a bake a model names at a path the store files somewhere else (the same rot the
+        // texture paths have; see pkbBakeResolver).
+        pkbBakeResolver(this.vfs.list()),
+      );
       const grid = new PathingGrid(parseWpm(wpm), terrain.centerOffset);
       this.grid = grid;
       const nodes = this.stampMapPathing(grid, archive);
@@ -2432,6 +2749,7 @@ export class MapViewerScene {
       this.rts.setSoundBoard(this.sounds);
       this.rts.simWorld.tileset = terrain.tileset; // which critters belong here (itemMechanicalCritter)
       this.rts.onRefuse = (key) => this.refuse(key); // refused orders → the gold line + error sound
+      this.rts.uiString = (key, fallback) => this.globalStrings?.strings.get(key) ?? fallback; // the hover slab's "Level N" / "Gold: N"
       this.rts.onDisarmed = () => this.hud?.clearOrderMode(); // a cast began under the aim (RtsController.disarmOnCast)
       // Somebody handed us the keys to their army (or took them back). SHARED CONTROL only:
       // the other alliance settings change constantly and silently, and the data keeps a line
@@ -2450,18 +2768,28 @@ export class MapViewerScene {
       // by the re-tint itself, so an alliance changing hands under a filter reaches it too.
       this.rts.onWorldColorsChange = () => this.hud?.refreshChatColors();
       this.registerResourceNodes(nodes);
-      this.rts.initVisionBlockers(makeCliffLevelSampler(terrain)); // fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight)
+      // Fog LOS: only cliff LEVELS + treelines block sight (not rolling groundHeight). A unit
+      // on a bridge is on the level of the banks the bridge joins, not of the river under it
+      // (WalkableSurfaces.levelAt) — so the decks are built first and folded into the field.
+      await this.buildWalkableSurfaces(); // the bridges' decks, which units stand ON (render/walkableHeight.ts)
+      const cliffLevel = makeCliffLevelSampler(terrain);
+      const groundHeight = makeHeightSampler(terrain);
+      this.rts.initVisionBlockers(this.walkables.count
+        ? (x, y) => this.walkables.levelAt(x, y, groundHeight, cliffLevel)
+        : cliffLevel);
       this.rts.setNeutralPassive(nodes.neutral); // yellow ring for shops/taverns/etc.
       this.rts.setPlacedFootprints(nodes.placedFootprints); // each map building's stamp → freed when it dies
       this.rts.setCreepData(nodes.creeps); // per-creep guard/aggro data (Neutral Hostile)
       this.rts.setPlacedOrder(nodes.placedOrder); // sim ids from .doo order, not model-load order
+      // Ground loot the editor placed with the map: `stampMapPathing` recognised these .doo
+      // rows as items, so put them in the sim's own item stream (drawn like a dropped item).
+      for (const it of nodes.groundItems) this.rts.simWorld.createItem(it.typeId, it.x, it.y);
       // AFTER setPlacedOrder, never before: that call reserves ids 1..N for the .doo's own
       // units and resets the counter above them. Seeding destructibles first handed them ids
       // 1..14 and the placed units then took those same ids back — a gate quietly became a
       // Watcher. Above the reserved block they are ordinal and identical on every machine,
       // because this walks the .doo in its own order.
       this.seedDestructibles();
-      this.buildWalkableSurfaces(); // the bridges' decks, which units stand ON (render/walkableHeight.ts)
       this.mapPlayerUnits = nodes.players; // pre-placed player units → seeded owned in startCustom (issue #33)
     }
   }
@@ -2544,16 +2872,17 @@ export class MapViewerScene {
    * to a GL buffer and the runtime `Geoset` holds byte offsets into it, not vertices. One
    * parse per distinct MODEL, and most maps in the game have none at all.
    */
-  private buildWalkableSurfaces(): void {
+  private async buildWalkableSurfaces(): Promise<void> {
     this.walkables.clear();
-    const meshes = new Map<string, WalkableGeoset[] | null>();
+    const meshes = new Map<string, Promise<WalkableGeoset[] | null>>();
     for (const d of this.destructibles) {
       if (!d.walkable || !d.model) continue;
-      let geosets = meshes.get(d.model);
-      if (geosets === undefined) {
-        geosets = this.walkableMesh(d.model);
-        meshes.set(d.model, geosets);
+      let pending = meshes.get(d.model);
+      if (!pending) {
+        pending = this.walkableMesh(d.model);
+        meshes.set(d.model, pending);
       }
+      const geosets = await pending;
       if (!geosets) continue;
       this.walkables.add(d.id, geosets, { x: d.x, y: d.y, z: d.z, angle: d.angle, scale: d.scale });
     }
@@ -2564,8 +2893,12 @@ export class MapViewerScene {
   /** One walkable model's triangles, or null if the install hasn't got it / it won't parse.
    *  LOD geosets are skipped for the same reason the viewer skips them when it draws: `lod`
    *  above 0 is a reduced copy of a mesh already in the list. */
-  private walkableMesh(path: string): WalkableGeoset[] | null {
-    const bytes = this.vfs.rawBytes(path);
+  private async walkableMesh(path: string): Promise<WalkableGeoset[] | null> {
+    // Lazy HD mounts no longer keep every `.mdx` in memory; a bridge's deck still has to exist
+    // before the first sim tick, so read it here (then the suffix fallback 1.30 uses).
+    const bytes = await this.vfs.read(path).catch(() => null)
+      ?? await this.vfs.read(path.replace(/\.mdl$/i, ".mdx")).catch(() => null)
+      ?? this.vfs.rawBytes(path);
     if (!bytes) return null;
     try {
       const model = new MdlxModel();
@@ -2783,13 +3116,16 @@ export class MapViewerScene {
   private stampMapPathing(
     grid: PathingGrid,
     archive: MpqDataSource,
-  ): { trees: Array<{ x: number; y: number; angle: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; placedFootprints: PlacedFootprint[]; placedOrder: PlacedRef[] } {
+  ): { trees: Array<{ x: number; y: number; angle: number; pathTex: string }>; mines: Array<{ x: number; y: number; gold: number }>; neutral: Array<{ x: number; y: number }>; creeps: CreepSeed[]; players: Array<{ x: number; y: number; owner: number }>; groundItems: Array<{ typeId: string; x: number; y: number }>; placedFootprints: PlacedFootprint[]; placedOrder: PlacedRef[] } {
     const placedFootprints: PlacedFootprint[] = []; // each map building's stamp, handed to its unit at seed time
     const trees: Array<{ x: number; y: number; angle: number; pathTex: string }> = [];
     const mines: Array<{ x: number; y: number; gold: number }> = [];
     const neutral: Array<{ x: number; y: number }> = []; // Neutral Passive (player 15) sites
     const creeps: CreepSeed[] = []; // Neutral Hostile (player 12+) guard + drop data
     const players: Array<{ x: number; y: number; owner: number }> = []; // pre-placed player units (custom maps)
+    // Items the editor laid on the ground are stored in war3mapUnits.doo too (owner Neutral
+    // Passive). They are item ids, not unit ids, so the unit registry has no row for them.
+    const groundItems: Array<{ typeId: string; x: number; y: number }> = [];
     let buildVersion = 0;
     this.w3iPlayable = null; // …until this map's w3i says otherwise (see minimapRect)
     const w3iBytes = archive.rawBytes("war3map.w3i");
@@ -2938,6 +3274,14 @@ export class MapViewerScene {
           this.mapBuildingSplats.set(`p${i}`, { simId: i + 1, seen: false });
         }
       }
+      // A pre-placed ITEM is a .doo row like any other, but its id lives in ItemData.slk, not
+      // UnitData.slk. The unit registry cannot resolve it, and Neutral Passive ownership would
+      // otherwise put a yellow ring around an invisible "site". Hand it to the sim's item
+      // stream instead — later it is drawn and picked up exactly like a dropped item.
+      if (this.items.get(u.typeId) && !this.registry.get(u.typeId)) {
+        groundItems.push({ typeId: u.typeId, x: u.x, y: u.y });
+        continue;
+      }
       if (u.typeId === GOLD_MINE_ID) {
         mines.push({ x: u.x, y: u.y, gold: u.goldAmount || 12500 });
       } else if (u.neutralPassive) {
@@ -2960,7 +3304,7 @@ export class MapViewerScene {
     // Every placed unit in war3mapUnits.doo ORDER. This is the map's own ordering of its
     // units and the only stable identity they have — see RtsController.setPlacedOrder.
     const placedOrder: PlacedRef[] = placed.map((u) => ({ x: u.x, y: u.y, typeId: u.typeId, facing: u.facing }));
-    return { trees, mines, neutral, creeps, players, placedFootprints, placedOrder };
+    return { trees, mines, neutral, creeps, players, groundItems, placedFootprints, placedOrder };
   }
 
   private slkText(path: string): string {
@@ -3033,6 +3377,7 @@ export class MapViewerScene {
     this.observer = config.observer === true || playback !== null;
     this.observers = config.observers ?? [];
     this.lockTeams = config.lockTeams === true;
+    this.mapFlags = config.mapFlags ?? 0;
     this.allTalk = config.allTalk === true;
     // A LAN client is told (every human slot in a shared config says "user", so
     // the fallback would seat every machine on the same player — see MeleeConfig.localPlayer).
@@ -3208,8 +3553,24 @@ export class MapViewerScene {
     // The last match's replay is not this one's: the score screen offers nothing until this
     // match has one of its own (recorded here, or handed over by the host at the end).
     lastReplay = null;
+    this.refreshKnownSaves(); // what `SaveGameExists` answers from (issue #159)
+    // The config as it was RESOLVED — what a saved game writes in its header, so a load lays the
+    // same map out for the same seats with the same rolled races (docs/save-games.md).
+    this.resolvedConfig = {
+      ...config,
+      seed,
+      replay: undefined,
+      replayResume: undefined,
+      slots: config.slots.map((s) => ({ ...s, race: races.get(s.id) ?? s.race, random: s.random || s.race === "random" })),
+    };
     const rts = this.rts;
     if (!rts) return;
+    // A match LOADED from a saved game records nothing: a replay is the inputs from the START,
+    // and this one began in the middle (WC3 keeps no replay of a loaded game either).
+    if (this.pendingSave) {
+      rts.replayAiInputs = null;
+      return;
+    }
     if (this.replayPlayback) {
       // The computers are seated as usual but never think: their decisions are in the file.
       rts.replayAiInputs = () => this.replayInject(Phase.Ai);
@@ -3241,6 +3602,8 @@ export class MapViewerScene {
       commit: __OW3_COMMIT__,
       fingerprint: __OW3_SIM_FINGERPRINT__,
       install: this.replayInstall,
+      flavor: flavor(),
+      gameVersion: gameVersion() ?? undefined,
       recordedAt: new Date().toISOString(),
       map: this.replayMap,
       // RESOLVED: the seed it rolled with and every Random race already rolled. `random` stays
@@ -3558,6 +3921,404 @@ export class MapViewerScene {
     return n > 0 ? Math.floor(n) : CHECK_EVERY;
   })();
 
+  // --- saved games (issue #159, docs/save-games.md) -----------------------------------------------
+  //
+  // A saved game is this match's MEMORY written down, not a replay: `captureSave` hands the codec
+  // (game/save/graph.ts) the authoritative objects — the world, the controller's books, the map's
+  // script with its sleeping threads — and gathers what only this scene knows (the camera, what a
+  // script put on the screen) beside them. Loading one is the map's own start with the script's
+  // `config`/`main` NOT run (`pendingSave`, read by startMelee/startCustom): the map is laid out,
+  // its placed units are adopted, its computers are seated, and then `applySave` writes the saved
+  // state over all of it and gives every unit the save has a body.
+
+  /** The saved game this match is to be loaded from (main.ts `loadSavedGame`), until it is. */
+  private pendingSave: SaveFile | null = null;
+  setPendingSave(save: SaveFile | null): void {
+    this.pendingSave = save;
+  }
+
+  /** Where the F10 menu's Save Game and Load Game go (main.ts `saveCurrentGame`/`loadSavedGame`). */
+  onSaveGame: ((name: string) => Promise<void>) | null = null;
+  onLoadGame: ((name: string) => void) | null = null;
+
+  /** The name the Save panel offers: the map's and the moment, as the Save Replay panel names a
+   *  replay — so a second save off the same map does not land on the first. */
+  suggestedSaveName(): string {
+    const d = new Date();
+    const p = (n: number): string => String(n).padStart(2, "0");
+    const title = (this.mapDisplayName || "Saved Game").replace(/\|c[0-9a-f]{8}|\|r/gi, "").replace(/[<>:"/\\|?*]/g, "").trim();
+    return `${title} ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  }
+
+  /** A `SaveGame` / `LoadGame` the map's script asked for, carried out between steps. */
+  private pendingScriptSave: string | null = null;
+  private pendingScriptLoad: string | null = null;
+  /** The saves on disk, lowercased — what `SaveGameExists` answers from (it cannot wait on a
+   *  disk), refreshed at the start of the match and after every save. */
+  private knownSaves = new Set<string>();
+  private refreshKnownSaves(): void {
+    void saveSink().list().then((all) => (this.knownSaves = new Set(all.map((f) => f.name.toLowerCase())))).catch(() => undefined);
+  }
+
+  /** Carry out the script's save or load request: EVENT_GAME_SAVE first — the map's own
+   *  triggers get their say, `GetSaveBasicFilename` answering — then the save itself. */
+  private servePendingScriptSave(): void {
+    const save = this.pendingScriptSave;
+    const load = this.pendingScriptLoad;
+    this.pendingScriptSave = this.pendingScriptLoad = null;
+    if (save !== null && this.onSaveGame && !this.saveRefusal()) {
+      const rt = this.mapScript?.interp.rt;
+      if (rt) {
+        const responses = new Map([["SaveBasicFilename", jStr(saveFileName(save).replace(/\.o3s$/i, ""))]]);
+        this.mapScript?.interp.fireEvent("gameEvent", responses, (p) => rt.enumIndex(p[0] ?? JNULL) === EVENT_GAME_SAVE);
+      }
+      void this.onSaveGame(save).then(() => this.refreshKnownSaves(), (err) => console.warn("[save] the script's SaveGame failed:", err));
+    }
+    if (load !== null) this.onLoadGame?.(load);
+  }
+
+  /** The match was loaded from a saved game — for the tests, and for nothing that changes play. */
+  loadedFromSave = false;
+
+  /** DEV: called after every sim step — the save/load equivalence harness (docs/save-games.md
+   *  "Verified") reads the state at exact steps through it. */
+  devStepHook: ((tick: number) => void) | null = null;
+
+  /** DEV: a hash of the whole match state as a saved game would write it — every root, every
+   *  field — so two matches can be compared for being the SAME match, not merely alike. */
+  devStateHash(): string {
+    const json = this.devStateJson();
+    return `${fnv64(new TextEncoder().encode(json))}:${json.length}`;
+  }
+
+  /** DEV: the encoded state `devStateHash` hashes, for finding where two matches parted. Three
+   *  things are left out because they move with the FRAMES rather than the steps — the sim's
+   *  render queues, a viewpoint's `visible` layer (the fog pass resamples it on a real-time
+   *  throttle), and the APM meter's window (pruned when the observer HUD reads it) — and wiring
+   *  is folded to null, since whether a hook is installed (the match log opens on the first
+   *  unheld frame; a loaded match records no replay) is not the match. */
+  devStateJson(): string {
+    registerSaveClasses();
+    registerGameSaveClasses();
+    const ext = externalsFor(this.saveRegistries());
+    return JSON.stringify(encodeGraph(this.saveRoots(), {
+      externalKey: ext.keyOf, opaque: isRenderObject,
+      transient: (c, f) => (c === "sim.SimWorld" && SIM_RENDER_QUEUES.has(f)) || (c === "sim.VisionMap" && f === "visible") || c === "game.ApmMeter",
+    })).replace(/\{"f":1\}/g, "null");
+  }
+
+  /** This match's lobby config as it was RESOLVED (beginReplay) — a saved game's header. */
+  private resolvedConfig: MeleeConfig | null = null;
+  matchConfig(): MeleeConfig | null {
+    return this.resolvedConfig;
+  }
+
+  /** Why this match cannot be saved right now, as a GlobalStrings key where the game has one —
+   *  or null when it can. The game itself refuses in a multiplayer game it is not hosting and
+   *  while a cinematic's SAVE is locked out; we add the two things only we cannot carry. */
+  saveRefusal(): string | null {
+    if (!this.rts || !this.viewer.map) return "no match";
+    if (this.replayPlayback) return "a replay";
+    if (this.rts.frozenClient || this.hostSeat !== null) return "a multiplayer game";
+    if (this.matchEnded) return "a finished match";
+    if (this.startHeld) return "the loading screen";
+    if (this.mapScript?.lua) return "a Lua map";
+    const why = this.mapScript?.interp.unsaveable();
+    return why ?? null;
+  }
+
+  private saveRegistries(): SaveRegistries {
+    return { units: this.registry, abilities: this.abilities, items: this.items, upgrades: this.upgrades, tech: this.tech };
+  }
+
+  /** The roots of a saved game's state (game/save/matchSave.ts). The SAME shape on both ends:
+   *  `applySave` writes the saved roots over these, field by field. */
+  private saveRoots(): Record<string, unknown> {
+    const rts = this.rts!;
+    return {
+      sim: rts.simWorld,
+      rts,
+      script: this.mapScript?.interp ?? null,
+      minted: mintedOrders(),
+    };
+  }
+
+  /** Write this match down. Throws when it cannot be (`saveRefusal`). */
+  captureSave(): { state: GraphDoc; scene: SavedScene; gameTime: number; localPlayer: number; stats: EncodeStats } {
+    const why = this.saveRefusal();
+    if (why) throw new Error(`cannot save ${why}`);
+    registerSaveClasses();
+    registerGameSaveClasses();
+    // A path search half-way through cannot be written down: land it now (SimWorld.settleForSave).
+    this.rts!.simWorld.settleForSave();
+    const ext = externalsFor(this.saveRegistries());
+    const stats = newEncodeStats();
+    const state = encodeGraph(this.saveRoots(), { externalKey: ext.keyOf, opaque: isRenderObject }, stats);
+    if (stats.unregistered.size) console.warn(`[save] classes the save registry does not name (docs/save-games.md): ${[...stats.unregistered].join(" | ")}`);
+    return { state, scene: this.captureScene(), gameTime: this.rts!.simWorld.elapsed, localPlayer: this.localPlayer, stats };
+  }
+
+  /** What only the scene knows about the match, for a saved game. */
+  private captureScene(): SavedScene {
+    const rts = this.rts!;
+    return {
+      aiSeats: rts.aiSeatLog.map(([p, s]) => [p, s] as [number, string]),
+      camera: {
+        target: [this.target[0], this.target[1], this.target[2]],
+        distance: this.distance, yaw: this.yaw, pitch: this.pitch, fov: this.fov, roll: this.roll, farZ: this.farZ,
+        zOffset: this.zOffset, playerDistance: this.playerDistance, playerPitch: this.playerPitch,
+      },
+      gameSpeed: this.speed,
+      difficulty: this.gameDifficulty,
+      defaultDifficulty: this.defaultDifficulty,
+      interfaceShown: this.interfaceShown,
+      userUi: this.userUi,
+      userControl: this.userControl,
+      destructibles: this.destructibles.map((d) => [d.id, d.life] as [number, number]),
+      destSimIds: [...this.destSimIds],
+      matchDecided: this.matchDecided,
+      questFlashesSeen: this.questFlashesSeen,
+      looks: rts.captureLooks(),
+      // A script's special effects: re-created under the SAME ids its `effect` handles carry.
+      specialFx: [...this.specialFx].filter(([, fx]) => !fx.doomed && !fx.spent).map(([id, fx]) => [id, {
+        path: fx.path, age: fx.age, hostId: fx.hostId, attach: fx.attach, x: fx.x, y: fx.y, z: fx.z,
+        yaw: fx.yaw, pitch: fx.pitch, roll: fx.roll, scale: fx.scale, color: fx.color, teamColor: fx.teamColor,
+        tags: fx.tags, played: fx.played,
+      }]),
+      nextSpecialFxId: this.nextSpecialFxId,
+      // Where the camera may go, the map's own fog and the presentation switches a cinematic flips.
+      mapBounds: this.mapBounds,
+      terrainFog: this.terrainFog,
+      scriptPaused: this.scriptPaused,
+      terrainEdits: this.terrainEdits,
+      waterTint: this.waterTint,
+      sky: this.skyPath,
+      music: this.music,
+      // The script's LOOPING sounds that are playing (an ambient loop, a fire crackling): started
+      // again. A one-shot line in the middle of being spoken is not resumed.
+      loops: (this.mapScript?.interp.rt.sounds ?? []).filter((snd) => snd.looping && this.sounds?.isScriptPlaying(snd.handleId)).map((snd) => snd.handleId),
+      cineFilter: this.cinematic?.liveFilter() ?? null,
+      weather: this.weather?.snapshot() ?? null,
+      bolts: this.lightning?.scriptSnapshot() ?? [],
+      nextScriptBoltId: this.nextScriptBoltId,
+      splats: [...this.scriptSplats].map(([id, sp]) => [id, { ...sp, def: sp.def.id }]),
+      nextScriptSplatId: this.nextScriptSplatId,
+      images: [...this.scriptImages],
+      nextScriptImageId: this.nextScriptImageId,
+    };
+  }
+
+  /**
+   * Write a saved game over the match that has just been laid out for it (`pendingSave`).
+   *
+   * Everything the map's start made is still standing: its placed units adopted with their
+   * bodies, its trees and mines, its computers seated (`aiSeats`, replayed here in the order the
+   * script asked). The codec then writes the saved world, controller and script INTO those same
+   * objects; what is left is the PICTURE — the entries are reconciled with the world as it now is
+   * (`RtsController.reconcileAfterLoad`), and everything the save has that the map's start did not
+   * (a trained army, a raised mine, an item on the ground, a missile in flight) gets its model.
+   */
+  private async applySave(save: SaveFile): Promise<void> {
+    const rts = this.rts!;
+    const world = rts.simWorld;
+    const map = this.viewer.map!;
+    const scene = save.scene as SavedScene;
+    registerSaveClasses();
+    registerGameSaveClasses();
+    // The computers, on the scripts their seats were asked for — so each brain the save writes
+    // back has the wiring it would have had (its host, its own JASS VM).
+    for (const [player, script] of scene.aiSeats ?? []) rts.startMeleeAIFor(player, script);
+    rts.prepareForLoad();
+    // What the map's start laid out, to tell afterwards what the save has done to it.
+    const freshMines = new Map([...world.mines].map(([id, m]) => [id, { x: m.x, y: m.y }]));
+    const freshTrees = new Map([...world.trees].map(([id, t]) => [id, { x: t.x, y: t.y }]));
+    const freshDest = new Map(this.destructibles.map((d) => [d.id, d.life]));
+    const report: DecodeReport = { lost: [], missingExternals: [] };
+    const out = decodeGraph(save.state, this.saveRoots(), { resolveExternal: externalResolver(this.saveRegistries()) }, report) as { minted?: Array<[string, number]> };
+    restoreMintedOrders(out.minted ?? []);
+    if (report.lost.length || report.missingExternals.length) {
+      console.warn(`[save] the load could not restore ${report.lost.length + report.missingExternals.length} value(s): ${[...report.lost, ...report.missingExternals].slice(0, 40).join(" | ")}`);
+    }
+    this.loadedFromSave = true;
+
+    // --- the picture ------------------------------------------------------------------------------
+    const { needBody, retyped } = rts.reconcileAfterLoad();
+    for (const r of retyped) void this.remodelUnit(r.id, r.to);
+    for (const u of needBody) {
+      const def = this.registry.get(u.typeId) ?? this.destDefs.get(u.typeId);
+      if (!def) continue;
+      // The record, its stamp and its seat are the save's; only the BODY is new.
+      const fp = def.isBuilding && def.pathTex && this.grid ? this.footprintFor(def.pathTex) : null;
+      if (fp) {
+        const [seatW, seatH] = seatHalfExtents(def, fp);
+        rts.setBuildingFootprint(u.id, seatW, seatH);
+      }
+      if (def.isBuilding && def.uberSplat) {
+        this.simBuildingSplats.add(u.id);
+        this.addBuildingSplat(u.id, def, u.x, u.y);
+      }
+      if (def.model) void this.spawnUnit(def, u.x, u.y, u.owner, u.team, 0, u.facing, u.id, true);
+    }
+    // Mines: one the save no longer has ran dry or was removed; one it has that the map did not
+    // place was raised by a script.
+    for (const [id, m] of freshMines) {
+      if (world.mines.has(id)) continue;
+      this.removeNodeVisual(id, m.x, m.y, map.units as unknown as HideableWidget[]);
+      this.splats?.remove(`m${id}`);
+    }
+    for (const m of world.mines.values()) {
+      if (!freshMines.has(m.id)) void this.raiseScriptMine(m);
+      // …and a mine an Entangled or Haunted Gold Mine stands on keeps its own model hidden.
+      if (m.entangledBy > 0 && world.units.has(m.entangledBy)) this.claimMineWidget(m.entangledBy, m.id, this.mineWidget(m.id, m.x, m.y));
+    }
+    // Trees: a felled one is gone from the world — posed as its stump (the grid and the fog
+    // already have it down; both are the save's).
+    for (const [id, t] of freshTrees) {
+      if (world.trees.has(id)) continue;
+      this.nodeFootprints.delete(id);
+      const rec = this.destructibles.find((r) => r.isTree && r.life > 0 && r.x === t.x && r.y === t.y);
+      if (rec) rec.life = 0;
+      this.dropTreeModel(t.x, t.y, map.doodads, true);
+    }
+    // Destructibles the save has dead that the map placed alive (a gate opened, a crate broken)
+    // are posed as their wreckage, and the other way round stood up — the pathing grid is the
+    // save's already, so nothing is re-stamped and no death is announced to the script again.
+    const lifeById = new Map(scene.destructibles ?? []);
+    for (const d of this.destructibles) {
+      const life = lifeById.get(d.id);
+      if (life === undefined) continue;
+      const was = freshDest.get(d.id) ?? 0;
+      d.life = life;
+      if (d.isTree) continue;
+      if (life <= 0 && was > 0) this.poseDestructibleDead(d);
+      else if (life > 0 && was <= 0) this.playDestructibleClip(d, clipRe("stand"), false);
+    }
+    // Ground items, corpses and missiles in flight: each wants its model.
+    for (const it of world.items.values()) void this.spawnItemModel(it.id, it.itemId, it.x, it.y);
+    for (const c of world.corpses.values()) if (!c.raised) void this.spawnCorpseBody(c.id, c.unitId, c.x, c.y, c.facing);
+    for (const p of world.projectiles.values()) {
+      if (this.projectileLoading.has(p.id) || !p.art) continue;
+      this.projectileLoading.add(p.id);
+      void this.loadProjectile(p.id, p.art);
+    }
+    // Blight and the minimap re-read the whole grid.
+    this.blightSweepDue = true;
+    this.minimapBlightStale = true;
+    this.applyScene(scene);
+    rts.restoreLooks((scene.looks as Parameters<RtsController["restoreLooks"]>[0]) ?? []);
+    // A script's special effects, under the ids its handles hold.
+    const fxs = (scene.specialFx as Array<[number, Partial<SpecialFx> & { path: string }]>) ?? [];
+    for (const [id, saved] of fxs) {
+      const fx: SpecialFx = {
+        path: saved.path, inst: null, age: saved.age ?? 0, spent: false, standing: false, standIdx: -1,
+        clips: { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false, standSecs: 0 },
+        hidden: true, hostId: saved.hostId ?? -1, attach: saved.attach ?? [], parented: false, x: saved.x ?? 0, y: saved.y ?? 0, doomed: false,
+        z: saved.z ?? null, yaw: saved.yaw ?? 0, pitch: saved.pitch ?? 0, roll: saved.roll ?? 0, scale: saved.scale ?? 1,
+        color: saved.color ?? [1, 1, 1, 1], teamColor: saved.teamColor ?? -1, tags: saved.tags ?? [], played: saved.played ?? null,
+      };
+      this.specialFx.set(id, fx);
+      void this.loadSpecialFx(id, fx.path, fx);
+    }
+    if (typeof scene.nextSpecialFxId === "number") this.nextSpecialFxId = Math.max(this.nextSpecialFxId, scene.nextSpecialFxId);
+    if (this.mapScript) {
+      this.syncEventCaptures(this.mapScript);
+      // EVENT_GAME_LOADED — what a campaign hangs "put the music back on" off.
+      const rt = this.mapScript.interp.rt;
+      this.mapScript.interp.fireEvent("gameEvent", new Map(), (p) => rt.enumIndex(p[0] ?? JNULL) === EVENT_GAME_LOADED);
+    }
+  }
+
+  /** A destructible that is dead in a loaded game: its death clip's last frame, at once. */
+  private poseDestructibleDead(d: MapDestructible): void {
+    const map = this.viewer.map;
+    const w = map ? this.nearestDoodadWidget(d.x, d.y, map.doodads as unknown as HideableWidget[]) : null;
+    if (!w) return;
+    const a = this.doodadActor(w);
+    if (!a) {
+      w.instance.hide();
+      this.removedWidgets.add(w);
+      return;
+    }
+    this.playActorDeath(a, true);
+  }
+
+  /** The scene's own half of a saved game, put back (captureScene). */
+  private applyScene(s: SavedScene): void {
+    // What a script did to the map's look: its terrain edits in order, its water, its sky, the
+    // camera's wall and the fog.
+    for (const e of (s.terrainEdits as Array<[number, number, string, number, number, number]>) ?? []) this.setTerrainType(...e);
+    if (s.waterTint) this.setWaterTint(s.waterTint as [number, number, number, number]);
+    if (typeof s.sky === "string" && s.sky) this.setSky(s.sky);
+    if (s.mapBounds) this.mapBounds = s.mapBounds as WorldRect;
+    const fog = s.terrainFog as [number, number, number, number, number] | null | undefined;
+    if (fog) {
+      this.mapFog = makeFog(...fog);
+      this.terrainFog = fog;
+    }
+    this.scriptPaused = s.scriptPaused === true;
+    // The soundtrack, the script's looping sounds, the fade, the weather, its bolts, splats and images.
+    const music = s.music as MapViewerScene["music"] | undefined;
+    if (music) {
+      this.music = music;
+      if (music.map) this.sounds?.setMapMusic(...music.map);
+      if (music.thematic) this.sounds?.playThematicMusic(music.thematic, 0);
+      else if (music.play && !music.stopped) this.sounds?.playMusic(music.play, 0, 0);
+    }
+    const rt = this.mapScript?.interp.rt;
+    for (const id of (s.loops as number[]) ?? []) {
+      const snd = rt?.sounds.find((x) => x.handleId === id);
+      if (snd) rt?.hooks?.playSound?.(snd);
+    }
+    const fade = s.cineFilter as ReturnType<CinematicPanelOverlay["liveFilter"]>;
+    if (fade) this.cinematic?.restoreFilter(fade.filter, fade.t);
+    if (s.weather && this.weather) {
+      this.weatherDefs ??= loadWeatherRegistry(this.vfs);
+      const defs = this.weatherDefs;
+      this.weather.restore(s.weather as ReturnType<WeatherOverlay["snapshot"]>, (id) => defs.get(id));
+    }
+    for (const [id, req] of (s.bolts as Array<[number, Parameters<LightningOverlay["addScript"]>[1]]>) ?? []) this.lightning?.addScript(id, req);
+    if (typeof s.nextScriptBoltId === "number") this.nextScriptBoltId = Math.max(this.nextScriptBoltId, s.nextScriptBoltId);
+    for (const [id, saved] of (s.splats as Array<[number, Omit<ScriptSplat, "def"> & { def: string }]>) ?? []) {
+      const def = this.uberSplatRegistry().get(saved.def);
+      if (!def || !this.splats) continue;
+      this.splats.add(saved.key, saved.x, saved.y, def.scale, def.texture, { alpha: 0 });
+      this.scriptSplats.set(id, { ...saved, def });
+    }
+    if (typeof s.nextScriptSplatId === "number") this.nextScriptSplatId = Math.max(this.nextScriptSplatId, s.nextScriptSplatId);
+    for (const [id, img] of (s.images as Array<[number, ScriptImage]>) ?? []) {
+      this.scriptImages.set(id, img);
+      this.placeScriptImage(img);
+    }
+    if (typeof s.nextScriptImageId === "number") this.nextScriptImageId = Math.max(this.nextScriptImageId, s.nextScriptImageId);
+    // The letterbox and the HUD follow the switches a cinematic flipped.
+    this.cinematic?.setLetterbox(s.interfaceShown === false, 0);
+    const c = s.camera;
+    if (c) {
+      this.target[0] = c.target[0];
+      this.target[1] = c.target[1];
+      this.target[2] = c.target[2];
+      this.distance = c.distance;
+      this.yaw = c.yaw;
+      this.pitch = c.pitch;
+      this.fov = c.fov;
+      this.roll = c.roll;
+      this.farZ = c.farZ;
+      this.zOffset = c.zOffset;
+      this.playerDistance = c.playerDistance;
+      this.playerPitch = c.playerPitch;
+      this.zoomT = 1;
+    }
+    if (s.gameSpeed !== undefined) this.setGameSpeed(s.gameSpeed);
+    this.gameDifficulty = s.difficulty ?? this.gameDifficulty;
+    this.defaultDifficulty = s.defaultDifficulty ?? this.defaultDifficulty;
+    this.interfaceShown = s.interfaceShown ?? true;
+    this.userUi = s.userUi ?? true;
+    this.userControl = s.userControl ?? true;
+    this.syncHudVisible();
+    this.matchDecided = s.matchDecided ?? false;
+    this.questFlashesSeen = s.questFlashesSeen ?? 0;
+  }
+
   /** The map this match is played on, as a replay names it (main.ts, before setup). */
   setReplayMap(map: ReplayHeader["map"], install = ""): void {
     this.replayMap = map;
@@ -3793,6 +4554,15 @@ export class MapViewerScene {
     await this.waitForMapUnits(onProgress);
     this.rts.seedModellessPlaced((path) => this.assetFiles().exists(path)); // …including the ones the renderer never delivers (dummy units)
     await this.preloadScriptHost();
+    // A SAVED GAME: the map is laid out as it was at the start, and the save is written over it
+    // (applySave) instead of the script's init running.
+    const save = this.pendingSave;
+    if (save) {
+      this.pendingSave = null;
+      this.runMapScript({ melee: true, races, slots: config.slots, restore: true });
+      await this.applySave(save);
+      return;
+    }
     const engine = this.runMapScript({ melee: true, races, slots: config.slots });
     // No script (or it created nothing for the local player — a script that leans on
     // natives we haven't written yet): fall back to our own roster so the match still
@@ -3941,18 +4711,25 @@ export class MapViewerScene {
    * still up — the last stretch of the bar, and what makes the beat at the end of the load
    * worth anything (see `startGame` in src/main.ts).
    *
-   * The original does exactly this from the map's own script: `Preload` / `PreloadStart` /
-   * `PreloadEnd` (common.j) exist so a map can name the art it is about to want and have the
-   * engine fetch it before the mission runs, rather than hitch the frame each piece is first
-   * drawn on. We have the same two costs — an `.mdx` is parsed and uploaded the first time
-   * something asks for it, and an icon's `.blp` is decoded the first time a command card
-   * shows it — so this fetches:
+   * The reference client fetches a map's placed art and the local race's opening roster, then
+   * loads each new unit the frame it first appears; it does NOT pull every future tech tree
+   * into memory. This mirrors that split:
    *
-   *   1. everything already in flight (the models the map's script spawned, and their
-   *      textures), and
-   *   2. the local player's ROSTER: what their worker builds, what those buildings train and
-   *      what they upgrade into — models AND command-card icons. That is the set the opening
-   *      minutes actually touch, and being one race's tech tree it is bounded.
+   *   1. everything already in flight (the models the map's script spawned, and their textures),
+   *   2. what this match can field now: every type standing on the map, the local race's
+   *      starting units, and the local worker's direct build/train roster — with their own
+   *      models, missiles and ability/missile/effect art,
+   *   3. their command-card icons (the local race's first — see warmIconCache for the rest), and
+   *   4. their sounds: voice lines, death cries, weapon and harvest clangs against the
+   *      materials in play, and the SND events inside the models (fire, hammer, birth).
+   *
+   * The REST of the closure (other races' future buildings, upgrades, summons) is not allowed
+   * to park the bar: up to DEFERRED_MODEL_BUDGET of it (none of it on a Reforged mount — see
+   * DEFERRED_MODEL_BUDGET_HD) is fetched by `warmDeferredModels` one
+   * model per idle turn AFTER the loading screen lifts, and anything beyond that stays on the
+   * solver's on-demand path — a match that never fields a unit should not pay for its model,
+   * exactly as the reference client behaves. Missing files are reported once for the priority
+   * slice; a missing future model is left to on-demand and must not fail the load.
    *
    * Portrait busts stay on the idle warmer (`warmPortraits`): they are the heaviest models
    * here and nothing is drawn with one until a unit is CLICKED, so they are not worth holding
@@ -3960,32 +4737,230 @@ export class MapViewerScene {
    */
   async preloadForStart(onProgress: (p: number) => void = () => {}): Promise<void> {
     const t0 = performance.now();
-    // The two halves of this are timed alike, so they take half the span each: measured on
-    // `(2)EchoIsles.w3x`, the whole call is ~0.7 s of which the drain is ~0.25 s — and that is
-    // with a roster the map had already spawned, which is the case that flatters the roster
-    // half. Fixed shares rather than one count across both, because a queued fetch and a
-    // tech-tree entry are not the same unit of work.
-    const DRAIN_SHARE = 0.5;
-    // Whatever the script set going — its spawns are still streaming when it returns. Reported
-    // per poll rather than as one step at the end, or the bar stands still through it.
+    // The four phases are not the same unit of work, so they get fixed shares of the bar: the
+    // drain already under way, the PRIORITY models, the texture tail they dispatch, and the
+    // sound clips. Future tech does not hold the bar at all (see `warmDeferredModels`).
+    const DRAIN_SHARE = 0.12;
+    const MODEL_SHARE = 0.55;
+    const TAIL_SHARE = 0.18;
+    const SOUND_SHARE = 0.15;
     await this.waitForLoader(
       () => this.viewer.promiseMap.size === 0, 20000, "the map's art",
       (p) => onProgress(DRAIN_SHARE * p),
     );
+    const tDrain = performance.now();
+    const { models } = this.matchAssetClosure();
+    // What the map HAS on the field is what the first minute hears and sees, so those go first.
+    const onField = new Set<string>();
+    for (const u of this.rts?.simWorld.units.values() ?? []) if (u.hp > 0) onField.add(u.typeId);
+    // Client-style priority slice: everything standing on the map, the local race's starting
+    // units, and what its worker can build/train directly. The rest of the closure — the other
+    // races' future buildings, upgrades and summons — is future tech.
+    const priority = new Set<string>(onField);
+    const local = new Set<string>();
+    for (const { id } of STARTING_UNITS[this.localRace] ?? []) { priority.add(id); local.add(id); }
     const roster = this.producibleRoster();
-    // The rest of what this roster can put on a card goes to the FRONT of the icon warmer:
-    // the preload below decodes the units' own icons, and their abilities, their shops'
-    // items and the greyed twins follow in the background (see warmIconCache).
+    for (const id of roster) { priority.add(id); local.add(id); }
+    // A placed creep's model/missile is already being drawn by the scene, but its SPELL art is
+    // future tech: the reference client fetches that the first time the creep casts, not while
+    // the map loads. Only the local race's own opening roster pays for full ability art here.
+    const priorityModels = [...new Set([...this.modelsForUnitIds(onField, false), ...this.modelsForUnitIds(local)])];
+    const prioritySet = new Set(priorityModels);
+    const deferred = models.filter((path) => !prioritySet.has(path));
+    const defs = [...priority]
+      .map((id) => this.registry.get(id))
+      .filter((d): d is UnitDef => !!d)
+      .sort((a, b) => Number(onField.has(b.id)) - Number(onField.has(a.id)));
+    // The local race's card icons still jump the idle warmer's queue; the rest of the map's
+    // follow in the background — warmIconCache walks every registry row.
     this.prioritizeIcons(roster);
+    const missingModels: string[] = [];
     let done = 0;
-    await Promise.all(roster.map(async (id) => {
-      const def = this.registry.get(id);
-      if (def?.icon) this.blpIcon(def.icon); // decodes the BLP into the icon cache, once
-      if (def?.model) await this.viewer.load(def.model, this.solver).catch(() => undefined);
-      onProgress(DRAIN_SHARE + ((1 - DRAIN_SHARE) * ++done) / roster.length);
+    await forEachLimited(priorityModels, PRELOAD_CONCURRENCY, async (path) => {
+      if (!(await this.loadModel(path))) missingModels.push(path);
+      onProgress(DRAIN_SHARE + (MODEL_SHARE * ++done) / Math.max(1, priorityModels.length));
+    });
+    const tModels = performance.now();
+    // A model's own load dispatches its textures; drain those before the bar says done.
+    await this.waitForLoader(
+      () => this.viewer.promiseMap.size === 0, 20000, "the map's models",
+      (p) => onProgress(DRAIN_SHARE + MODEL_SHARE + TAIL_SHARE * p),
+    );
+    const tTail = performance.now();
+    const soundDefs: UnitSoundDef[] = defs.map((d) => ({
+      model: d.model, soundSet: d.soundSet, weaponSound: d.weaponSound,
+      lumberSound: d.lumberSound, armorSound: d.armorSound,
     }));
+    const sounds = this.sounds
+      ? await this.sounds.warmUnits(soundDefs,
+        (p) => onProgress(DRAIN_SHARE + MODEL_SHARE + TAIL_SHARE + SOUND_SHARE * p))
+      : { clips: 0, held: 0, missing: [] as string[] };
+    const tSounds = performance.now();
+    // Last gate: a model read that started while the sounds were fetched (a doodad variation,
+    // a texture a skinned unit asked for) must be in too, or it pops in once the match starts.
+    await this.waitForLoader(() => this.viewer.promiseMap.size === 0, 20000, "the map's remaining art", () => {});
+    const tSettle = performance.now();
     onProgress(1);
-    console.info(`[Warcraft Open] preloaded ${roster.length} ${this.localRace} unit model(s) + icons in ${Math.round(performance.now() - t0)}ms.`);
+    const warm = deferred.slice(0, isHd() ? DEFERRED_MODEL_BUDGET_HD : DEFERRED_MODEL_BUDGET);
+    console.info(
+      `[Warcraft Open] preloaded ${priorityModels.length} priority model(s) for ${defs.length} ` +
+      `unit type(s) and ${sounds.clips} sound clip(s) (${sounds.held} held) in ` +
+      `${Math.round(tSettle - t0)}ms (drain ${Math.round(tDrain - t0)} / models ` +
+      `${Math.round(tModels - tDrain)} / textures ${Math.round(tTail - tModels)} / sounds ` +
+      `${Math.round(tSounds - tTail)} / settle ${Math.round(tSettle - tSounds)}); ` +
+      `${deferred.length} future model(s) on demand, ${warm.length} warming in the background.`,
+    );
+    // The bar and the loading screen are done; fetch the next slice of future tech one model
+    // per idle turn. The epoch stops it if this scene is disposed or another map loads.
+    if (warm.length) setTimeout(() => this.warmDeferredModels(warm, this.preloadEpoch), 400);
+    if (missingModels.length) {
+      console.warn(
+        `[Warcraft Open] ${missingModels.length} model(s) this map asks for are not in this install: ` +
+        missingModels.slice(0, 12).join(", ") + (missingModels.length > 12 ? ", …" : ""),
+      );
+    }
+    if (sounds.missing.length) {
+      console.warn(
+        `[Warcraft Open] ${sounds.missing.length} sound file(s) this map asks for are not in this install: ` +
+        sounds.missing.slice(0, 12).join(", ") + (sounds.missing.length > 12 ? ", …" : ""),
+      );
+    }
+  }
+
+  /** Load one model through the solver and give its SND events to the sound cache. Returns
+   *  false when the install cannot resolve it (or the viewer refuses it). */
+  private async loadModel(path: string): Promise<boolean> {
+    if (!this.assetInInstall(path)) return false;
+    try {
+      const loaded = await this.viewer.load(path, this.solver);
+      // The scene paid to parse this model; the sound chain reads the SND events inside the
+      // same file, and on an HD mount the bytes behind it are not fetchable later.
+      if (loaded?.sequences && loaded.eventObjects) {
+        this.sounds?.registerModel(path, { sequences: loaded.sequences, eventObjects: loaded.eventObjects });
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Future tech, fetched after the loading screen has lifted: one model per idle turn so a
+   *  parse never lands in the middle of a frame burst. `epoch` is the map's generation — a
+   *  disposed scene or a newly loaded map stops the queue instead of polluting the next map. */
+  private warmDeferredModels(paths: readonly string[], epoch: number): void {
+    let next = 0;
+    const schedule = (): void => {
+      if (this.disposed || epoch !== this.preloadEpoch || next >= paths.length) return;
+      const idle = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+      if (idle) idle(pump, { timeout: 1000 });
+      else setTimeout(pump, 120);
+    };
+    const pump = (): void => {
+      if (this.disposed || epoch !== this.preloadEpoch || next >= paths.length) return;
+      void this.loadModel(paths[next++]).finally(schedule);
+    };
+    schedule();
+  }
+
+  /** Is this logical art path actually in one of the archives we have mounted? Asked with the
+   *  same HD spellings the asset solver tries (`.dds` first on a Reforged mount), so a model
+   *  that resolves at draw time is not reported missing here — and one that does NOT resolve
+   *  is reported instead of being silently skipped. */
+  private assetInInstall(path: string): boolean {
+    // The invisible LOS blocker names a model Reforged deliberately does not ship; the solver
+    // answers "nothing" for it, so it is not a missing asset (see createAssetSolver).
+    if (/[\\/]LOSBlocker[\\/]IntentionallyLeftBlank\.md[xl]$/i.test(path)) return true;
+    // Ask the same spellings the draw-time solver tries, including the moved-folder rows
+    // (`Stampede\MissileDeath.mdx` is really `StampedeMissileDeath.mdx`) — otherwise the
+    // loading screen warned about models it could actually load.
+    for (const spelling of [path, ...movedModelCandidates(path)]) {
+      if (hdTexturePaths(spelling, isHd()).some((candidate) => this.vfs.exists(candidate))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Every unit type this map can put on the field, and every model that field can draw.
+   *
+   * Seeded from what is standing (all players' starting units, the map's creeps and shops, and
+   * the Reforged skins they are wearing — a skin is a unit row of its own) and closed over
+   * `builds` / `trains` / `upgradesTo`, so a race's tree is exactly as big as the map makes it:
+   * a campaign map that never fields a Steam Tank never pays for one. 400 ids is the cap — a
+   * script can spawn anything, and this runs on a loading screen.
+   */
+  private matchAssetClosure(): { units: string[]; models: string[] } {
+    const seen = new Set<string>();
+    const queue: string[] = [];
+    const add = (id: string): void => {
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      queue.push(id);
+    };
+    for (const u of this.rts?.simWorld.units.values() ?? []) {
+      if (u.hp <= 0) continue;
+      add(u.typeId);
+      // HD-only skins: `skinDefFor` ignores them in classic, so the closure must too — otherwise
+      // a classic map that calls BlzSetUnitSkin would warm models that edition never shows.
+      const skin = isHd() && u.skinId ? unitIdFromRaw(u.skinId) : "";
+      if (skin) add(skin);
+    }
+    while (queue.length && seen.size < 400) {
+      const id = queue.shift()!;
+      for (const made of this.tech.builds(id)) add(made);
+      for (const made of this.tech.trains(id)) add(made);
+      for (const made of this.tech.upgradesTo(id)) add(made);
+      // Units that no building TRAINS: summons (Water Elemental, Feral Spirit, wards) and both
+      // halves of a morph (Druid of the Claw → Bear Form). Their models are first seen only
+      // when the spell is cast — exactly the kind of late arrival this closure exists to stop.
+      const def = this.registry.get(id);
+      for (const abilityId of def ? [...def.abilities, ...def.heroAbilities] : []) {
+        const ability = this.abilities.get(abilityId);
+        for (const level of ability?.levelData ?? []) {
+          for (const token of level.summon.split(",")) {
+            const summoned = token.trim();
+            if (/^[A-Za-z0-9]{4}$/.test(summoned)) add(summoned);
+          }
+        }
+      }
+    }
+    return { units: [...seen], models: this.modelsForUnitIds(seen) };
+  }
+
+  /** Models and effect art a set of unit types can draw — a unit's own model and missile,
+   *  plus, unless `abilities` is false, every ability/missile/effect/buff/fx path on it. */
+  private modelsForUnitIds(ids: Iterable<string>, abilities = true): string[] {
+    const models = new Set<string>();
+    const addModel = (path: string | undefined | null): void => {
+      if (path) models.add(path);
+    };
+    for (const id of ids) {
+      const def = this.registry.get(id);
+      if (!def) continue;
+      addModel(def.model);
+      addModel(def.missileArt);
+      addModel(def.specialArt);
+      if (!abilities) continue;
+      for (const abilityId of [...def.abilities, ...def.heroAbilities]) {
+        const ability = this.abilities.get(abilityId);
+        if (!ability) continue;
+        addModel(ability.missileArt);
+        addModel(ability.targetArt);
+        for (const art of ability.targetArts) addModel(art);
+        addModel(ability.casterArt);
+        addModel(ability.specialArt);
+        addModel(ability.effectArt);
+        addModel(ability.areaArt);
+        addModel(ability.buffArt);
+        addModel(ability.buffEffectArt);
+        addModel(ability.buffSpecialArt);
+        addModel(ability.fxArt);
+        addModel(ability.fxSpecialArt);
+        addModel(ability.fxMissileArt);
+        addModel(ability.fxTargetArt);
+        for (const fx of ability.buffFx) addModel(fx.path);
+      }
+    }
+    return [...models];
   }
 
   /** Everything the local player is likely to MAKE: their worker, what it builds, and what
@@ -4199,12 +5174,16 @@ export class MapViewerScene {
     // messages appear in the HUD message log.
     await this.preloadScriptHost();
     const openedAt = [this.target[0], this.target[1]];
+    // A SAVED GAME (applySave): the script is parsed and its init is NOT run — the save's own
+    // runtime is written over it below, once the map's own computer seats are made.
+    const save = this.pendingSave;
+    this.pendingSave = null;
     // …with the races `beginMatch` already ROLLED. A "random" seat resolved a second time here
     // played one race in the script (GetPlayerRace → MeleeStartingUnitsForPlayer, the AI's
     // race file) while the roster, the console skin and the match log reported another — an
     // observed (4)Monolith listed its Night Elf as "human" and its Human as "orc".
-    this.runMapScript({ melee: false, races, slots: config.slots });
-    this.openOnScriptStart(openedAt);
+    this.runMapScript({ melee: false, races, slots: config.slots, restore: !!save });
+    if (!save) this.openOnScriptStart(openedAt);
     // COMPUTER+ ON EXTREME CANDY WAR (src/ai/plus/candy/, docs/candy-war-ai.md). A scenario runs none
     // of the melee library, so no script will ever call `StartMeleeAI` here — the lobby's computers
     // in the map's HERO seats are seated by us, once the script has shown it is this map. The two
@@ -4238,6 +5217,7 @@ export class MapViewerScene {
         .filter((s) => s.controller === "computer" && DOTA_HERO_SEATS.has(s.id))
         .map((s) => ({ player: s.id, difficulty: s.aiDifficulty ?? MELEE_AI_NORMAL })));
     }
+    if (save) await this.applySave(save);
     this.rts.holdWorld(false); // the map has had its say — let the world run
     console.info(`[Warcraft Open] Custom map: ${seeds.length} pre-placed player unit(s) seeded owned (issue #33)${dummies ? `, plus ${dummies} model-less dummy unit(s)` : ""}.`);
   }
@@ -4393,7 +5373,7 @@ export class MapViewerScene {
         const bytes = this.mapArchive?.rawBytes(path) ?? this.vfs.rawBytes(path);
         let canvas: HTMLCanvasElement | null = null;
         try {
-          canvas = bytes ? blpToCanvas(bytes) : null;
+          canvas = bytes ? imageToCanvas(bytes) : null;
         } catch {
           canvas = null; // not a BLP we can read — the map keeps the picture it had
         }
@@ -4459,6 +5439,7 @@ export class MapViewerScene {
         // prints "%s has left the game." itself — the very line `announceGone` has just printed
         // for every map, scripted or not. Said once.
         if (this.goneLines.delete(msg)) return;
+        this.logMessage(msg);
         this.hud?.showMessage(msg, duration);
       },
       clearText: (player) => {
@@ -4482,6 +5463,9 @@ export class MapViewerScene {
       // it drew, the footprints it stamped, and the stand-in instances that play their clips.
       findDestructable: (typeId, x, y) => findDestructibleAt(this.destructibles, typeId, x, y)?.id ?? 0,
       destructableInfo: (id) => this.destructibleSnapshot(id),
+      // The sim unit a gate or crate fights as — what `IssueTargetOrder` aims at when its
+      // widget is a destructable (jass/natives/orderTarget.ts). 0 for a tree or a bridge.
+      destructableUnit: (id) => this.destSimByDoo.get(id) ?? 0,
       killDestructable: (id, clip) => this.killDestructible(id, clipRe(clip)),
       restoreDestructable: (id, life, birth) => this.restoreDestructible(id, life, birth),
       setDestructableLife: (id, life) => this.setDestructibleLife(id, life),
@@ -4528,6 +5512,7 @@ export class MapViewerScene {
       // …and its campaign twin: Continue on a chapter that named a next level. The match is
       // over either way — the difference is only what the player is handed next, so both
       // clear the same dialog and the same script pause on the way out.
+      forceCampaignSelect: () => this.onCampaignSelect?.(),
       changeLevel: (mapName) => {
         this.showDialog(null);
         this.scriptPaused = false;
@@ -4562,6 +5547,10 @@ export class MapViewerScene {
         if (result === PLAYER_GAME_RESULT_VICTORY && player === this.localPlayer) this.onLocalVictory?.();
       },
       pauseGame: (flag) => (this.scriptPaused = flag),
+      // SAVED GAMES from the script (natives/saves.ts): requests, carried out between steps.
+      saveGame: (name) => void (this.pendingScriptSave = name),
+      loadGame: (name) => void (this.pendingScriptLoad = name),
+      saveGameExists: (name) => this.knownSaves.has(saveFileName(name).toLowerCase()),
       // EnableUserUI hides EVERYTHING, interface and all — blizzard.j calls it before each
       // cinematic fade (the filter covers the world, not the UI, so the UI has to go). It is
       // a different switch from ShowInterface's letterbox, and the HUD needs both to be on.
@@ -4605,12 +5594,33 @@ export class MapViewerScene {
       soundIsPlaying: (id) => this.sounds?.isScriptPlaying(id) ?? false,
       moveSound: (id, x, y, z) => this.sounds?.moveScript(id, { x, y, z }),
       soundFileDuration: (file) => this.sounds?.fileDurationMs(file) ?? 0,
-      setMapMusic: (name, random, index) => this.sounds?.setMapMusic(name, random, index),
-      clearMapMusic: () => this.sounds?.clearMapMusic(),
-      playMusic: (name, fromMs, fadeInMs) => this.sounds?.playMusic(name, fromMs, fadeInMs),
-      stopMusic: (fadeOut) => this.sounds?.stopMusic(fadeOut),
-      resumeMusic: () => this.sounds?.resumeMusic(),
-      playThematicMusic: (name, fromMs) => this.sounds?.playThematicMusic(name, fromMs),
+      // The music calls are also written down (`music`), for a saved game to start the same
+      // soundtrack again (docs/save-games.md).
+      setMapMusic: (name, random, index) => {
+        this.music.map = [name, random, index];
+        this.sounds?.setMapMusic(name, random, index);
+      },
+      clearMapMusic: () => {
+        this.music.map = null;
+        this.sounds?.clearMapMusic();
+      },
+      playMusic: (name, fromMs, fadeInMs) => {
+        this.music.play = name;
+        this.music.stopped = false;
+        this.sounds?.playMusic(name, fromMs, fadeInMs);
+      },
+      stopMusic: (fadeOut) => {
+        this.music.stopped = true;
+        this.sounds?.stopMusic(fadeOut);
+      },
+      resumeMusic: () => {
+        this.music.stopped = false;
+        this.sounds?.resumeMusic();
+      },
+      playThematicMusic: (name, fromMs) => {
+        this.music.thematic = name;
+        this.sounds?.playThematicMusic(name, fromMs);
+      },
       endThematicMusic: () => this.sounds?.endThematicMusic(),
       setMusicVolume: (v) => this.sounds?.setMusicVolume(v),
       setVolumeGroup: (group, scale) => this.sounds?.setVolumeGroup(group, scale),
@@ -4662,9 +5672,11 @@ export class MapViewerScene {
       // FOGSTART 2000, FOGEND 4000, FOGCOLOR 0x808080, its w3i and its main() to the digit.
       setTerrainFog: (_style, zstart, zend, _density, r, g, b) => {
         this.mapFog = makeFog(zstart, zend, r, g, b);
+        this.terrainFog = [zstart, zend, r, g, b]; // …as asked, for a saved game
       },
       resetTerrainFog: () => {
         this.mapFog = this.w3iFog;
+        this.terrainFog = null;
       },
       // --- the boundary tint: the veil over the unplayable area (issue #117) ---
       // Purely this machine's picture, like the two fog switches it travels with in
@@ -4765,6 +5777,7 @@ export class MapViewerScene {
       getDefaultDifficulty: () => this.defaultDifficulty,
       // --- animation (7.17) — a model's, not the world's, so it stays with the renderer ---
       setUnitAnimation: (id, animation) => this.rts?.setUnitAnimation(id, animation),
+      queueUnitAnimation: (id, animation) => this.rts?.queueUnitAnimation(id, animation),
       setUnitAnimationByIndex: (id, index) => this.rts?.setUnitAnimationByIndex(id, index),
       addUnitAnimationProperties: (id, props, add) => this.rts?.addUnitAnimationProperties(id, props, add),
       // --- items (7.18) ---
@@ -4831,6 +5844,12 @@ export class MapViewerScene {
       + (format.editorBuild ? `, editor build ${(format.editorBuild / 100).toFixed(2)}` : "")
       + (format.partialW3i ? ", w3i stops early (protected?)" : "")
       + (format.laterFormat ? " — saved by a later editor (docs/map-compatibility.md)" : ""));
+    // A CAMPAIGN CHAPTER inherits its whole campaign's custom objects: a `.w3n` ships them as
+    // `war3campaign.w3u/.w3a/…` at the ARCHIVE's root rather than inside each chapter, so a
+    // chapter opened on its own has none of the units or abilities the campaign authored. Same
+    // parsers as the map's own files (below), laid down FIRST so a chapter that edits a campaign
+    // type still wins.
+    if (this.campaignArchive) this.loadCampaignObjectData(this.campaignArchive);
     let wts = this.mapArchive.rawBytes("war3map.wts") ?? this.mapArchive.rawBytes("war3map\\wts") ?? undefined;
     // The map's Chinese file, if one sits beside it (i18n/mapLanguage.ts): rewritten ONCE, here,
     // so every consumer below — TRIGSTR in units, abilities, items, upgrades and the tech tree —
@@ -4905,6 +5924,44 @@ export class MapViewerScene {
     });
   }
 
+  /**
+   * The CAMPAIGN's own object data (`war3campaign.w3u/.w3a/.w3t/.w3q` and its `…Skin` half),
+   * from the `.w3n` a chapter was read out of. Its TRIGSTRs resolve through `war3campaign.wts`
+   * — a table separate from every chapter's — so it is read with that, never the map's.
+   *
+   * Non-fatal throughout: a chapter whose campaign data is unreadable is a chapter on the base
+   * game's types, which is a poorer chapter, not a failed boot.
+   */
+  private loadCampaignObjectData(archive: DataSource): void {
+    const at = (name: string): Uint8Array | undefined => archive.rawBytes(name) ?? undefined;
+    const wts = at("war3campaign.wts");
+    const w3u = at("war3campaign.w3u");
+    const w3a = at("war3campaign.w3a");
+    const w3t = at("war3campaign.w3t");
+    const w3q = at("war3campaign.w3q");
+    if (!w3u && !w3a && !w3t && !w3q) return;
+    try {
+      const meta = this.vfs.rawBytes("Units\\AbilityMetaData.slk");
+      const upgradeMeta = this.vfs.rawBytes("Units\\UpgradeMetaData.slk");
+      // A Reign of Chaos campaign keeps its item edits in the unit file too, as its maps do.
+      if (w3u) console.info(`[campaign] custom object data: ${applyMapUnitData(this.registry, w3u, wts)} unit(s) (war3campaign.w3u).`);
+      if (w3a && meta) console.info(`[campaign] custom object data: ${applyMapAbilityData(this.abilities, w3a, meta, wts)} abilit(ies) (war3campaign.w3a).`);
+      if (w3u) applyMapItemData(this.items, w3u, wts);
+      if (w3t) console.info(`[campaign] custom object data: ${applyMapItemData(this.items, w3t, wts)} item(s) (war3campaign.w3t).`);
+      if (w3q && upgradeMeta) console.info(`[campaign] custom object data: ${applyMapUpgradeData(this.upgrades, w3q, upgradeMeta, wts)} upgrade(s) (war3campaign.w3q).`);
+      applyMapTechData(this.tech, { w3u, w3t, w3a, w3q }, wts);
+      // …and the skin half, on the rows just built (ObjectLayer in data/objectData.ts).
+      const skinU = at("war3campaignSkin.w3u");
+      const skinA = at("war3campaignSkin.w3a");
+      const skinT = at("war3campaignSkin.w3t");
+      if (skinU) applyMapUnitData(this.registry, skinU, wts, { skin: true });
+      if (skinA && meta) applyMapAbilityData(this.abilities, skinA, meta, wts, { skin: true });
+      if (skinT) applyMapItemData(this.items, skinT, wts, { skin: true });
+    } catch (err) {
+      console.warn("[campaign] campaign object data failed (non-fatal):", err);
+    }
+  }
+
   /** The map's own GAMEPLAY CONSTANTS (`war3mapMisc.txt` — see src/data/mapMisc.ts). Read
    *  beside the object data because it is the same kind of thing: the map's overlay on the
    *  install's tables, cleared and re-read per map. Applied in `beginMatch`, which is the first
@@ -4946,10 +6003,21 @@ export class MapViewerScene {
   /** The script's sky (`SetSkyModel` — render/sky.ts), made on the first call. */
   private sky: SkyDome | null = null;
 
+  /** The script's `SetTerrainFogEx` (start, end, r, g, b), or null for the map's own — a saved
+   *  game re-makes the fog from these, since the fog itself holds GPU-shaped arrays. */
+  private terrainFog: [number, number, number, number, number] | null = null;
+
+  /** What the script asked of the music, for a saved game. */
+  private music: { map: [string, boolean, number] | null; play: string | null; thematic: string | null; stopped: boolean } = { map: null, play: null, thematic: null, stopped: false };
+
+  /** The sky the script asked for last, for a saved game ("" = none). */
+  private skyPath = "";
+
   /** SetSkyModel: the named sky around the eye from now on; "" takes it away. */
   private setSky(path: string): void {
     const world = this.viewer.map?.worldScene;
     if (!world) return;
+    this.skyPath = path;
     if (!this.sky) {
       if (!skyModelPath(path)) return; // no sky asked for, and none up
       this.sky = new SkyDome(this.viewer as unknown as SkyViewer, this.solver, world);
@@ -4977,6 +6045,7 @@ export class MapViewerScene {
     }
     setMapSkinOverlay(this.mapSkin);
     this.skins = undefined; // skinPath re-reads through the new layer
+    this.consoleSkinCache = undefined; // …and the console chrome it resolves may have changed
     console.info(`[jass] map interface (${MAP_SKIN_FILE}): ${[...this.mapSkin.skins.keys()].join(", ") || "no"} skin key(s), ${this.mapSkin.strings.size} string(s).`);
   }
 
@@ -5008,7 +6077,7 @@ export class MapViewerScene {
     }
   }
 
-  private runMapScript(opts: { melee: boolean; races?: Map<number, PlayableRace>; slots: SlotConfig[] }): MapScriptEngine | null {
+  private runMapScript(opts: { melee: boolean; races?: Map<number, PlayableRace>; slots: SlotConfig[]; restore?: boolean }): MapScriptEngine | null {
     if (!this.mapArchive) return null;
     try {
       const lobby = {
@@ -5050,10 +6119,13 @@ export class MapViewerScene {
       const engine = loadMapScript(this.vfs, this.mapArchive, {
         melee: opts.melee,
         runMain: true,
+        // A saved game is being loaded: parse and declare, run nothing (see applySave).
+        restore: opts.restore,
         hooks: this.textHooks(),
         worldWritingHooks: this.worldWritingHookNames(),
         localViewHooks: this.localViewHookNames(),
         lobby,
+        mapFlags: this.mapFlags,
         // What `GetPlayerColor(Player(PLAYER_NEUTRAL_AGGRESSIVE))` answers — a campaign map
         // (UndeadX05) colours its sleeping guards off it so they read as creeps.
         neutralColor: neutralTeamColor(this.vfs),
@@ -5363,6 +6435,7 @@ export class MapViewerScene {
     this.portraitTalkKey = "";
     this.destructibleDeaths = []; // …and out of any gate the last one broke
     this.chatHistory = []; // last match's conversation is not this one's
+    this.messageLog = []; // …nor its Message Log
     this.mutedPlayers.clear(); // …nor its mutes
     // Chat arriving over the wire lands in the same place a locally typed line does.
     if (this.rts) {
@@ -5443,23 +6516,27 @@ export class MapViewerScene {
     // orc music: SetMapMusic("Music", …) → [Orc] Music_V1 (7.20).
     const skin = SKIN_SECTION[this.localRace];
     if (this.sounds) this.sounds.musicSkin = skin;
+    // …but the INTERFACE's section may be another race's, if the player chose one in Options →
+    // Gameplay ("UI Theme:", src/data/uiTheme.ts). The overlays below are in-game panels, so they
+    // follow the theme; the music above follows the race.
+    const uiSkin = uiThemeSkin(skin);
     // Floating combat text is world-anchored (project() hands it canvas CSS pixels), so it
     // belongs in the world layer — the leaderboard/multiboard/timers below are SCREEN-anchored
     // UI and belong in #ui, which CSS has already fitted to the same stage.
     this.textTags = new TextTagOverlay(worldLayer());
     this.combatText.clear(); // last match's numbers are not this one's
-    this.leaderboard = new LeaderboardOverlay(ui, this.vfs, skin, (p) => this.rts?.playerColor(p) ?? p);
+    this.leaderboard = new LeaderboardOverlay(ui, this.vfs, uiSkin, (p) => this.rts?.playerColor(p) ?? p);
     // The map's own frames (BlzCreateFrame …), drawn out of its archive over the install, and
     // the mouse on them raised as the frame events its triggers registered — on this machine,
     // for the local player, as a dialog button's click is.
-    this.scriptFrames = new ScriptFrameOverlay(ui, () => this.assetFiles(), skin, (frame, event) => {
+    this.scriptFrames = new ScriptFrameOverlay(ui, () => this.assetFiles(), uiSkin, (frame, event) => {
       if (!this.replayPlayback) this.mapScript?.interp.fireFrameEvent(frame, event, this.localPlayer);
     });
-    this.multiboard = new MultiboardOverlay(ui, this.vfs, skin);
-    this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, skin);
-    this.suspendDialog = new SuspendDialogOverlay(ui, this.vfs, skin);
-    this.cinematic = new CinematicPanelOverlay(ui, this.vfs, skin);
-    this.dialog = new GameDialogOverlay(ui, this.vfs, skin, {
+    this.multiboard = new MultiboardOverlay(ui, this.vfs, uiSkin);
+    this.timerDialogs = new TimerDialogOverlay(ui, this.vfs, uiSkin);
+    this.suspendDialog = new SuspendDialogOverlay(ui, this.vfs, uiSkin);
+    this.cinematic = new CinematicPanelOverlay(ui, this.vfs, uiSkin);
+    this.dialog = new GameDialogOverlay(ui, this.vfs, uiSkin, {
       // WC3 closes a dialog on ANY button click, and a QUIT button additionally ends the
       // game — both are the engine's doing, which is why blizzard.j's MeleeVictoryDialogBJ
       // registers a trigger on its quit button and gives it no action. Order matters: the
@@ -5672,6 +6749,42 @@ export class MapViewerScene {
     for (const [id, row] of Object.entries(this.viewer.unitsData.map)) {
       for (const col of ["unitid", "itemid"]) {
         if (row.string(col) !== undefined && row.string(col) !== id) row.set(col, id);
+      }
+    }
+  }
+
+  /**
+   * Give the viewer a model path for every row its own tables left without one.
+   *
+   * A 3.0 install's `UnitUI.slk` has no `file` column — the path moved to `unitSkin.txt` — and
+   * the vendored `War3MapViewer` merges that file only when `isReforged` is on. Classic
+   * graphics therefore left EVERY row model-less, and `loadUnitsAndItems` skipped every placed
+   * unit with "Unknown unit ID": the gold mine (a `war3mapUnits.doo` entry) was simply absent,
+   * while the sim still selected it and its ground splat still drew. Our registry has already
+   * resolved the active art set's spelling for each type, so lend it to the rows (the viewer
+   * appends `.mdx` itself — see `loadUnitsAndItems`). */
+  private seedUnitModels(): void {
+    // 3.0's `unitSkin.txt` stores the model scale PER GRAPHICS SET (`modelScale:sd|hd|de`) and
+    // a few rows — the gold mine among them — carry no plain `modelScale` at all. The vendored
+    // `Unit` constructor reads only `row.number('modelScale')`, and a missing column is 0, so
+    // `uniformScale(0)` made the widget present but INVISIBLE: the mine's health bar and its
+    // NGOL splat drew around nothing. Resolve the flavour's own key (or 1) once, here.
+    const flavorKey = `modelScale:${isHd() ? "de" : "sd"}`;
+    for (const [id, row] of Object.entries(this.viewer.unitsData.map)) {
+      // The 3.0 files also move `file` out of UnitUI.slk, so on Classic graphics — where the
+      // viewer never merges `unitSkin.txt` — every placed unit had no model ("Unknown unit
+      // ID"). Our registry already resolved the active art set's spelling for each type.
+      if (!row.string("file")) {
+        const model = this.registry.get(id)?.model;
+        if (model) row.set("file", model.replace(/\.(mdx|mdl)$/i, ""));
+      }
+      if (!row.string("modelScale")) {
+        row.set("modelScale", row.string(flavorKey) || row.string("modelScale:sd") || "1");
+      }
+      // Same hole for the vertex tint: absent red/green/blue is 0 in `Unit`, which paints the
+      // widget black. The game's own default is white.
+      for (const channel of ["red", "green", "blue"]) {
+        if (!row.string(channel)) row.set(channel, "255");
       }
     }
   }
@@ -5938,9 +7051,11 @@ export class MapViewerScene {
     // it stands, not off the event, so a hex and its undoing arriving together land on the truth.
     const typeId = su.typeId || toTypeId;
     const hexForm = su.hexForm;
+    const skinId = su.skinId;
     const def = this.registry.get(typeId);
     if (!def) return;
-    const skin = hexForm ? this.registry.get(hexForm) ?? null : null;
+    // A Hex's critter outranks a Reforged skin: the critter is what the unit IS right now.
+    const skin = (hexForm ? this.registry.get(hexForm) ?? null : null) ?? this.skinDefFor(su);
     const drawn = skin ?? def;
     // Out of a hex: the body it wore before is still standing by, hidden (RtsController.unskin),
     // so it goes straight back with nothing to load. Ahead of the dead-unit guard, because a hero
@@ -5958,7 +7073,7 @@ export class MapViewerScene {
       // …and a unit that changed shape AGAIN while this streamed in belongs to the swap that
       // changed it (a Hex dispelled before the sheep finished loading).
       const now = this.rts.simView.units.get(simId);
-      if (!now || now.typeId !== typeId || now.hexForm !== hexForm) return;
+      if (!now || now.typeId !== typeId || now.hexForm !== hexForm || now.skinId !== skinId) return;
       const instance = model.addInstance();
       instance.setScene(map.worldScene);
       instance.setTeamColor(this.rts.unitColor(su.owner)); // the owner's COLOUR, not its slot (and the ally-colour filter over it)
@@ -5977,6 +7092,15 @@ export class MapViewerScene {
       this.simBuildingSplats.add(simId);
       this.addBuildingSplat(simId, def, su.x, su.y);
     }
+  }
+
+  /** The Reforged skin variant a unit is drawn as, or null for its own body. HD only: SD has no
+   *  skins and must draw exactly what it drew before (P5). */
+  private skinDefFor(su: { skinId: number }): UnitDef | null {
+    if (!isHd() || !su.skinId) return null;
+    const id = unitIdFromRaw(su.skinId);
+    const skin = id ? this.registry.get(id) : undefined;
+    return skin?.model ? skin : null;
   }
 
   /**
@@ -6070,8 +7194,12 @@ export class MapViewerScene {
     if (fp && this.grid) [x, y] = this.grid.snapForBuildingRect(x, y, fp.w, fp.h);
     const simId = this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
     this.stampBuilding(def, simId, x, y, fp, false);
-    if (def.model) {
-      void this.spawnUnit(def, x, y, owner, team, constructionTime, facing, simId, true).then((id) => {
+    // A `BlzCreateUnitWithSkin` skin is set on the unit the instant it is made, so the FIRST body
+    // is already the skin's — never the base model swapped a frame later (P5).
+    const su = this.rts.simView.units.get(simId);
+    const body = (su && this.skinDefFor(su)) ?? def;
+    if (body.model) {
+      void this.spawnUnit(def, x, y, owner, team, constructionTime, facing, simId, true, body).then((id) => {
         if (id !== null) onBody?.(id);
       });
     }
@@ -6104,6 +7232,9 @@ export class MapViewerScene {
     facing = (3 * Math.PI) / 2, reservedId?: number,
     /** The record's stamp and decal are already down (`spawnUnitNow`): attach the body only. */
     stamped = false,
+    /** The def whose MODEL the body wears, when it is not `def`'s — a Reforged skin variant.
+     *  Everything the world needs (footprint, splat, food, stats) stays `def`'s. */
+    drawnDef: UnitDef = def,
   ): Promise<number | null> {
     const map = this.viewer.map;
     if (!map || !this.rts) return null;
@@ -6115,7 +7246,7 @@ export class MapViewerScene {
     // A type with NO model is invisible, not absent — WC3's dummy-unit convention (see
     // `normModel`). It is still a unit in every other respect, so it gets a record and no
     // body. A model path that names no file ends up the same way, after the load below.
-    if (!def.model) {
+    if (!drawnDef.model) {
       // A reserved id means the record already exists (the JASS CreateUnit path) and this
       // call was only here to hand it a body. There is none. Every other caller is asking
       // for the unit itself, so make it.
@@ -6123,7 +7254,7 @@ export class MapViewerScene {
         ? null
         : this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
     }
-    const model = await this.viewer.load(def.model, this.solver);
+    const model = await this.viewer.load(drawnDef.model, this.solver);
     // A model that is not there is an INVISIBLE unit, not an absent one — the standard dummy
     // trick is a path to a file that does not exist (RtsController.seedModellessPlaced), and a
     // trained or summoned dummy must still be made. Same as the no-model branch above.
@@ -7077,7 +8208,12 @@ export class MapViewerScene {
 
   /** SetTerrainType. Changes land at once — nothing says a re-tiled patch waits for the
    *  player to look, as blight's spreading does. */
+  /** Every SetTerrainType the script made, in order — a saved game re-lays them on the map's own
+   *  tiles (docs/save-games.md); each one overwrites what it covers, so replaying in order is exact. */
+  private terrainEdits: Array<[number, number, string, number, number, number]> = [];
+
   private setTerrainType(x: number, y: number, tile: string, variation: number, area: number, shape: number): void {
+    this.terrainEdits.push([x, y, tile, variation, area, shape]);
     const t = this.terrainData;
     const at = this.terrainCorner(x, y);
     const map = this.viewer.map as unknown as W3xMap | null;
@@ -8390,7 +9526,7 @@ export class MapViewerScene {
     if (!model) return -1;
     const id = this.nextSpecialFxId++;
     const fx: SpecialFx = {
-      inst: null, age: 0, spent: false, standing: false, standIdx: -1,
+      path: model, inst: null, age: 0, spent: false, standing: false, standIdx: -1,
       clips: { hasBirth: false, birthStart: 0, birthSecs: 0, hasStand: false, standSecs: 0 },
       hidden: true, hostId, attach, parented: false, x, y, doomed: false,
       z: null, yaw: 0, pitch: 0, roll: 0, scale: 1, color: [1, 1, 1, 1], teamColor: -1, tags: [], played: null,
@@ -9093,7 +10229,7 @@ export class MapViewerScene {
     // model's default, so every snowy tree turned back into a summer tree the moment it was hit
     // or felled — reported on (4)LostTemple. The override is copied across, whatever it is.
     for (const [index, texture] of src.textureOverrides ?? []) inst.setTexture?.(index, texture);
-    const stand = this.seqByName(inst.model.sequences, /^stand$/i);
+    const stand = this.seqByName(inst.model.sequences, clipRe("stand"));
     if (stand >= 0) {
       inst.setSequence(stand);
       inst.setSequenceLoopMode(2); // idle until it wobbles or dies
@@ -9133,7 +10269,7 @@ export class MapViewerScene {
     this.advanceDoodadClips(dt);
     for (const a of this.doodadActors.values()) {
       if (a.dead || a.revertEnd <= 0 || a.inst.frame < a.revertEnd) continue; // wobble still playing
-      const stand = this.seqByName(a.inst.model.sequences, /^stand$/i);
+      const stand = this.seqByName(a.inst.model.sequences, clipRe("stand"));
       if (stand >= 0) {
         a.inst.setSequence(stand);
         a.inst.setSequenceLoopMode(2); // settle into the looping idle
@@ -9479,7 +10615,7 @@ export class MapViewerScene {
    *  it plays its death clip and holds the last frame (swung open), and its collider drops to
    *  the two posts `pathTexDeath` keeps. Idempotent, so a script that opens an open gate is a
    *  no-op rather than a double-unstamp. */
-  killDestructible(id: number, clip: RegExp = /^death$/i): void {
+  killDestructible(id: number, clip: RegExp = clipRe("death")): void {
     const d = this.destructibleById(id);
     if (!d || d.life <= 0) return;
     d.life = 0;
@@ -9507,7 +10643,7 @@ export class MapViewerScene {
     d.life = Math.max(0, Math.min(life, d.maxLife || life));
     this.syncDestructibleToSim(d);
     this.restampDestructible(d, wasAlive);
-    if (d.life > 0) this.playDestructibleClip(d, birth ? /^birth$/i : /^stand$/i, false);
+    if (d.life > 0) this.playDestructibleClip(d, clipRe(birth ? "birth" : "stand"), false);
   }
 
   /** `SetDestructableLife` — the collider follows life across zero in either direction.
@@ -9799,8 +10935,15 @@ export class MapViewerScene {
   // wheel stops are not documented anywhere we trust, so the range is ours; the distance the real
   // client OPENS on is not — it is bj_CAMERA_DEFAULT_DISTANCE, 1650, which through the 32° lens
   // is exactly the real client's opening view. We deliberately open elsewhere: see MELEE_START.)
-  private static readonly ZOOM_MIN = ZOOM_MIN_DISTANCE;
-  private static readonly ZOOM_MAX = ZOOM_MAX_DISTANCE;
+  // The wheel's bounds and opening now come from Options → Gameplay → the three camera rows
+  // (render/cameraOptions.ts). With "Enable Improved Zoom" off they are exactly the constants
+  // above, so nothing moves for a player who never opens the screen.
+  private static get ZOOM_MIN(): number {
+    return minCameraDistance();
+  }
+  private static get ZOOM_MAX(): number {
+    return maxCameraDistance();
+  }
   /** What a match OPENS on — the far end of the wheel, i.e. zoom stop 0.
    *
    *  This is a deliberate departure from the real client, which opens on
@@ -9812,7 +10955,9 @@ export class MapViewerScene {
    *
    *  (If this is ever reverted to match the original, `CAMERA.DEFAULT_DISTANCE` is the value to
    *  come back to — do not re-tune GAME_FOV to chase the framing; see docs/camera.md.) */
-  private static readonly MELEE_START = OPENING_DISTANCE;
+  private static get MELEE_START(): number {
+    return defaultCameraDistance();
+  }
   // The wheel moves in STOPS, not continuously: WC3's zoom is a fixed ladder of camera
   // distances and one notch is one rung. The rungs are geometric (each is the same RATIO
   // closer than the last), because what a distance is worth on screen is a ratio — the same
@@ -9987,6 +11132,13 @@ export class MapViewerScene {
       const w = this.sounds?.modelClipWindow(art, "death");
       if (w) this.sounds?.playModelEventsIn(art, w[0], w[1], { x, y, z: this.rts!.groundHeightAt(x, y) + z });
     }
+    // …and the SPELL sound a missile parks in its own Death, for every missile and under the
+    // same rule. Healing Spray's bottles are why: `SNDXSHSI` on HealBottleMissile.mdx's Death
+    // (AnimLookups SHSI → "HealingSprayImpact" → HealingSprayDeath1.wav) is the splash of each
+    // wave landing, and the bottles are thrown at a SPOT (SimWorld.spawnSpotMissile), so no
+    // HIT ever comes to voice them the way rts.playImpacts voices an arrow. Nothing else plays
+    // an S event, so this cannot double one (Sounds.playModelSpellEventsIn).
+    if (art && this.pointVisible(x, y)) this.sounds?.playModelSpellEventsIn(art, "death", { x, y, z: this.rts!.groundHeightAt(x, y) + z });
     const inst = this.projectileInsts.get(id);
     if (!inst) return;
     this.projectileInsts.delete(id);
@@ -10211,7 +11363,9 @@ export class MapViewerScene {
       panelOpen: (panel) => this.panelOpen(panel),
       togglePanel: (panel) => { this.togglePanel(panel); },
       pause: (on) => {
-        if (on === this.playerPaused) return;
+        // A player's pause is multiplayer-only, as the F10 menu's button is (`canPause`): in a
+        // single-player game the menu being open already stops the world.
+        if (on === this.playerPaused || (on && !this.multiplayerMatch)) return;
         // 和 F10 菜单里的 Pause/Resume 按钮同一条路：先收起菜单，再同步面板暂停，最后请求暂停。
         this.gameMenu?.hide();
         this.syncPanelPause();
@@ -10867,7 +12021,7 @@ export class MapViewerScene {
     if (!name) return null;
     const art = tilesetOverlay(this.vfs)(`TerrainArt\\Blight\\${name}_Blight.blp`, letter);
     const bytes = art.source.rawBytes(art.path);
-    const canvas = bytes ? blpToCanvas(bytes) : null;
+    const canvas = bytes ? imageToCanvas(bytes) : null;
     if (!canvas || !canvas.width || !canvas.height) return null;
     const px = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
     let r = 0, g = 0, b = 0;
@@ -10953,6 +12107,12 @@ export class MapViewerScene {
   private mountHud(): void {
     this.hud?.dispose();
     const ui = document.getElementById("ui") ?? document.body;
+    // Which war3skins section this match's interface is decorated from: the player's "UI Theme"
+    // choice, or the local race when it follows it. Read once here — every panel and skinned
+    // HUD widget below is built from it — and kept for skinPath(), which the HUD calls while it
+    // is being built. The console cache is dropped too: the art may be a different race's.
+    this.uiSkin = uiThemeSkin(SKIN_SECTION[this.localRace]);
+    this.consoleSkinCache = undefined;
     // The dim that says "stopped", laid down BEFORE anything else goes into `#ui` so every
     // piece of interface built below paints over it. `#ui` is the layer above both the map
     // canvas and the world overlays (z-index 3 vs 0 and 2), so one element parked at the
@@ -11078,10 +12238,7 @@ export class MapViewerScene {
       commandIcon: (name) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${name}.blp`),
       blpUrl: (path) => this.blpIcon(path),
       illusionIconUrl: (path) => this.illusionIcon(path),
-      blpCanvas: (path) => {
-        const bytes = this.vfs.rawBytes(path);
-        return bytes ? blpToCanvas(bytes) : null;
-      },
+      blpCanvas: (path) => vfsImage(this.vfs, path),
       modelBytes: (path) => this.vfs.rawBytes(path),
       chatPrompt: (target) =>
         chatPrompt(this.chatTargetFor(target), this.multiplayerMatch, (p) => this.playerLabel(p), (k) => this.globalStrings?.strings.get(k)),
@@ -11260,15 +12417,21 @@ export class MapViewerScene {
     // strip's gap, the message column) stack over the console chrome rather than under it.
     // Its art is read through the map's archive too: a war3mapSkin.txt [CustomSkin] may name an
     // icon the map imports for the resource bar (data/mapSkin.ts).
-    this.consoleUi = new ConsoleUi(ui, this.assetFiles(), SKIN_SECTION[this.localRace], {
+    this.consoleUi = new ConsoleUi(ui, this.assetFiles(), this.uiSkin, {
       openPanel: (panel) => this.togglePanel(panel),
       disabledPanels: () => this.deadPanels(),
       mountClock: (slot) => this.mountClock(slot),
       resourceHover: (kind) => this.hud?.showResourceTip(kind),
       clockHover: (on) => this.hud?.showClockTip(on),
+      questGlow: () => this.hud?.questGlow() ?? null,
+      // A campaign's fourth button is Log, not Chat — same frame, the game's other caption.
+      chatCaption: () => (this.campaign
+        ? { live: this.globalStrings?.strings.get("KEY_LOG") ?? "Log (|Cfffed312F12|R)", dead: this.globalStrings?.strings.get("LOG") ?? "Log" }
+        : null),
     });
     this.consoleUi.setObserver(this.observer);
     this.hud = new GameHud(ui, driver);
+    this.consoleUi.mountQuestGlow(); // the strip may have built before there was a HUD to ask
     this.installGamepad();
     this.installVoiceControl(ui, driver);
     this.mountScriptUi(ui);
@@ -11281,7 +12444,7 @@ export class MapViewerScene {
       // except Exit Program, which leaves the GAME (see `leave`).
       void this.leave(scores);
     };
-    this.gameMenu = new EscMenu(ui, this.vfs, SKIN_SECTION[this.localRace], {
+    this.gameMenu = new EscMenu(ui, this.vfs, this.uiSkin, {
       // Return to Game puts back only what OPENING the menu took away. A match somebody
       // deliberately stopped stays stopped — that pause is not this panel's to lift, and the
       // button that does lift it is sitting right above this one wearing KEY_RESUME_GAME.
@@ -11303,15 +12466,28 @@ export class MapViewerScene {
         this.askPause(!this.playerPaused);
       },
       isPaused: () => this.playerPaused,
+      // …and only where somebody else is on the clock: a player's pause is a MULTIPLAYER
+      // feature, and in single player the button is not on the panel at all (the menu being
+      // open already stops the world there — `panelPaused`).
+      canPause: () => this.multiplayerMatch,
       // …and what the Options panels behind this menu need: the board a volume drag is heard
       // on (ui/escOptions.ts).
       sounds: () => this.sounds,
       // …and the Gameplay panel's Game Speed slider: live in single player, the host's in LAN.
       gameSpeed: () => this.gameSpeedState(),
       setGameSpeed: (speed) => { if (!this.gameSpeedState().locked) this.setGameSpeed(speed); },
+      // SAVED GAMES (issue #159): the panels are the menu's, the writing and the loading main.ts's.
+      saves: () => (this.onSaveGame ? saveSink() : null),
+      saveRefusal: () => this.saveRefusal(),
+      suggestedSaveName: () => this.suggestedSaveName(),
+      onSaveGame: (name) => this.onSaveGame?.(name) ?? Promise.reject(new Error("saving is not available")),
+      onLoadGame: (name) => {
+        this.gameMenu?.hide();
+        this.onLoadGame?.(name);
+      },
     });
     this.allies?.dispose();
-    this.allies = new AllianceDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
+    this.allies = new AllianceDialogOverlay(ui, this.vfs, this.uiSkin, {
       localPlayer: this.localPlayer,
       colorOf: (p) => this.rts?.playerColor(p) ?? p,
       // Everyone but yourself, and only seated slots — the matrix has 16 rows (12 players
@@ -11344,7 +12520,7 @@ export class MapViewerScene {
       lockedTeams: this.lockTeams,
     });
     this.questLog?.dispose();
-    this.questLog = new QuestDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
+    this.questLog = new QuestDialogOverlay(ui, this.vfs, this.uiSkin, {
       quests: () => this.mapScript?.interp.rt.quests ?? [],
       // The w3i name is routinely a TRIGSTR_ placeholder; the script's runtime holds the
       // table that resolves it (empty until a script loads one, which resolves to itself).
@@ -11354,8 +12530,13 @@ export class MapViewerScene {
       // single-player this panel STOPS THE WORLD. Recompute from what is actually open.
       onClose: () => this.syncPanelPause(),
     });
+    this.logDialog?.dispose();
+    this.logDialog = new LogDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
+      lines: () => this.messageLog,
+      onClose: () => this.syncPanelPause(), // OK and Escape — doors `togglePanel` never sees
+    });
     this.chatDialog?.dispose();
-    this.chatDialog = new ChatDialogOverlay(ui, this.vfs, SKIN_SECTION[this.localRace], {
+    this.chatDialog = new ChatDialogOverlay(ui, this.vfs, this.uiSkin, {
       // Rendered on the way out, never on the way in: the colours are today's (see renderChat).
       history: () => this.chatHistory.map((line) => this.renderChat(line)),
       peers: () => [...this.meleeTeams.keys()]
@@ -11739,8 +12920,17 @@ export class MapViewerScene {
    * arriving, control changing hands — is a line of record, and it reads with the map's
    * own text and stays there to be read.
    */
+  /** Keep a shown message for the Message Log (ui/logDialog.ts). */
+  private logMessage(text: string): void {
+    if (!text.trim()) return;
+    this.messageLog.push(text);
+    if (this.messageLog.length > LOG_MAX_LINES) this.messageLog.shift();
+  }
+
   private announce(text: string): void {
-    if (text) this.hud?.showMessage(text, -1); // -1: the log's own default dwell
+    // "Game Info Messages" — the announcements (control granted, resources received, a player
+    // victorious). Errors and map text come through other paths and are never silenced here.
+    if (text && gameInfoMessagesEnabled()) this.hud?.showMessage(text, -1); // -1: the log's own default dwell
   }
 
   /** "Received %d gold and %d lumber from %s." — one row per combination the gift can be,
@@ -12239,13 +13429,15 @@ export class MapViewerScene {
     };
   }
 
-  /** Give the HUD's clock slot the local race's real TimeIndicator model, on its own
+  /** Give the HUD's clock slot the interface theme's real TimeIndicator model, on its own
    *  little canvas. We drive it from this scene's frame loop (see updateClock) rather
    *  than letting it play, because its animation IS the day/night clock. */
   private mountClock(slot: HTMLElement): boolean {
     this.clock?.dispose();
     this.clock = null;
-    if (!this.vfs.exists(timeIndicatorPath(this.localRace))) return false;
+    // The medallion is part of the console strip's look, so it follows the interface THEME,
+    // not the player's race (this.uiSkin — src/data/uiTheme.ts). Forsaken ships its own model.
+    if (!this.vfs.exists(timeIndicatorPath(this.uiSkin))) return false;
     const canvas = document.createElement("canvas");
     canvas.className = "hud-clock-canvas";
     slot.appendChild(canvas);
@@ -12254,7 +13446,7 @@ export class MapViewerScene {
     // to lay out with before the model has loaded and told us the real ratio.
     slot.style.aspectRatio = "2";
     const clock = new TimeIndicatorClock(canvas, this.vfs);
-    void clock.load(this.localRace).then((ok) => {
+    void clock.load(this.uiSkin).then((ok) => {
       if (!ok) return;
       slot.style.aspectRatio = String(clock.aspect);
       this.clock = clock;
@@ -12326,21 +13518,32 @@ export class MapViewerScene {
     if (this.consoleSkinCache !== undefined) return this.consoleSkinCache;
     // The same four files ConsoleUI.fdf's ConsoleTexture01…04 decorate to (war3skins.txt).
     // Present ⇒ the FDF screen will have chrome to draw; absent ⇒ it will not.
-    this.consoleSkinCache = [1, 2, 3, 4].every((i) => this.vfs.exists(this.skinPath(`ConsoleTexture0${i}`)));
+    //
+    // Asked through `imageCandidates`, not as the `.blp` the table spells: a 3.0 install has
+    // NO `HumanUITile0N.blp` at all — the console tiles ship as `.dds` only (verified against
+    // the store's root listing). Probing the literal name therefore answered "no art" on every
+    // HD install even though `vfsImage` happily drew the `.dds`, and the HUD fell back to its
+    // own CSS strip on top of the real console — a flat gradient bar with the widgets in grid
+    // columns instead of the art's sockets. Same candidate list as the loader, so the two can
+    // never disagree again.
+    this.consoleSkinCache = [1, 2, 3, 4].every((i) =>
+      imageCandidates(this.skinPath(`ConsoleTexture0${i}`)).some((path) => this.vfs.exists(path)),
+    );
     return this.consoleSkinCache;
   }
 
-  /** Resolve a `UI\war3skins.txt` skin key against the LOCAL player's race — the same lookup
-   *  the FDF's `DecorateFileNames` does, but synchronous and without a whole `FdfLibrary`,
-   *  because the HUD asks for these one at a time while it is being built. A key the table
-   *  doesn't have passes through, exactly as `FdfLibrary.decorate` lets a literal path do; a
-   *  value with no extension (the console tiles are stored that way) gets `.blp`. */
+  /** Resolve a `UI\war3skins.txt` skin key against the section this match's interface is
+   *  decorated from (the player's "UI Theme", else the local race — see mountHud). The same
+   *  lookup the FDF's `DecorateFileNames` does, but synchronous and without a whole
+   *  `FdfLibrary`, because the HUD asks for these one at a time while it is being built. A key
+   *  the table doesn't have passes through, exactly as `FdfLibrary.decorate` lets a literal path
+   *  do; a value with no extension (the console tiles are stored that way) gets `.blp`. */
   private skinPath(key: string): string {
     if (!this.skins) {
       const bytes = this.vfs.rawBytes(WAR3SKINS);
       this.skins = bytes ? parseWar3Skins(new TextDecoder("latin1").decode(bytes)) : new Map();
     }
-    const value = skinValue(this.skins, SKIN_SECTION[this.localRace], key) ?? key;
+    const value = skinValue(this.skins, this.uiSkin, key) ?? key;
     return /\.[a-z]{3,4}$/i.test(value) ? value : `${value}.blp`;
   }
 
@@ -12445,6 +13648,7 @@ export class MapViewerScene {
     const duration = scene.sceneDuration;
     const speaker = scene.speaker.trim();
     const text = speaker ? `|cfffcd312${speaker}:|r ${scene.text}` : scene.text;
+    this.logMessage(text);
     this.hud?.showMessage(text, duration > 0 ? duration : -1);
     if (!scene.portraitUnitId) {
       // A transmission from nobody (DoTransmissionBasicsXYBJ's null unit): text only.
@@ -12557,6 +13761,7 @@ export class MapViewerScene {
     if (panel === "quests") this.questLog?.show();
     else if (panel === "menu") this.gameMenu?.show();
     else if (panel === "allies") this.allies?.show();
+    else if (this.campaign) this.logDialog?.show(); // the fourth button is Log there (ui/logDialog.ts)
     else this.chatDialog?.show();
     this.syncPanelPause();
     return true;
@@ -12576,7 +13781,7 @@ export class MapViewerScene {
     if (panel === "quests") return this.questLog?.visible === true;
     if (panel === "menu") return this.gameMenu?.visible === true;
     if (panel === "allies") return this.allies?.visible === true;
-    return this.chatDialog?.visible === true;
+    return this.chatDialog?.visible === true || this.logDialog?.visible === true;
   }
 
   /** Is anything MODAL on screen — one of the four panels, or a dialog (a script's own
@@ -12594,7 +13799,9 @@ export class MapViewerScene {
    * Three reasons, and two of them are "there is already something in front of you":
    *
    *  • **A CAMPAIGN chapter** is single-player against the map's own AI, so there is nobody to
-   *    ally with and nobody to talk to. WC3 leaves Allies and Chat dead for the whole mission.
+   *    ally with and nobody to talk to. WC3 leaves Allies dead for the whole mission, and the
+   *    fourth button is not Chat there at all: it is **Log** (`KEY_LOG`), live, and opens the
+   *    Message Log (ui/logDialog.ts).
    *  • **Something MODAL is up** — a panel, a script's dialog, the match-over screen. All four
    *    go grey, the open one included: its button is behind that panel's own scrim and cannot
    *    be clicked at all, so drawing it live would be a lie. Its KEY still closes it
@@ -12612,10 +13819,7 @@ export class MapViewerScene {
    */
   private deadPanels(): ReadonlySet<ConsolePanel> {
     const dead = new Set<ConsolePanel>();
-    if (this.campaign) {
-      dead.add("allies");
-      dead.add("chat");
-    }
+    if (this.campaign) dead.add("allies");
     if (!this.mapScript?.interp.rt.quests.some((q) => q.enabled)) dead.add("quests");
     if (this.modalUp) for (const p of MapViewerScene.ALL_PANELS) dead.add(p);
     else if (this.hardPaused) for (const p of MapViewerScene.ALL_PANELS) if (p !== "menu") dead.add(p);
@@ -12628,6 +13832,7 @@ export class MapViewerScene {
     this.questLog?.hide();
     this.allies?.hide();
     this.chatDialog?.hide();
+    this.logDialog?.hide();
     this.syncPanelPause();
   }
 
@@ -12973,6 +14178,18 @@ export class MapViewerScene {
     // watcher's — the end screen's Continue Game above all, which has no game to continue. They
     // are still SHOWN, greyed, so the screen is the one the match showed.
     if (d && this.replayPlayback) d = { ...d, buttons: d.buttons.map((b) => (b.quit ? b : { ...b, disabled: true })) };
+    // A dialog OUTRANKS the ESC-skip cover, and the cover must go when one comes up. The cover
+    // is lifted on the SIM's clock (`tickCinematicSkip`), and the dialog that ends a chapter
+    // stops that clock: blizzard.j's CustomVictoryDialogBJ calls `PauseGame(true)` in single
+    // player before `DialogDisplay`. Skip the last line of RoC Orc01's victory cinematic and
+    // its cancel trigger fades out for 1.00 s, sleeps 1.00 s and raises Victory — the cover
+    // held black for the fade, then froze there, over a dialog whose hotkeys still worked
+    // behind it. The skip has landed by then (or never will), and what the player should see
+    // under the dialog is the MAP's own fade, which sits beneath the dialogs already.
+    if (d && this.cinematicSkip) {
+      this.cinematicSkip = null;
+      this.cinematic?.setSkipCover(0);
+    }
     this.dialog?.update(d);
     this.dialogUp = !!d;
     document.body.classList.toggle("dialog-on", !!d);
@@ -13054,6 +14271,14 @@ export class MapViewerScene {
    *  fallback for anything selected before warming reaches it. */
   private warmPortraits(): void {
     if (!this.hud || !this.rts) return;
+    // On a Reforged mount a bust is another MDX plus its own diffuse/normal/ORM DDS, and this
+    // queue is drained one model per idle slice in the PORTRAIT viewer — after the loading
+    // screen, while the player is already playing. Measured on a melee map: ~62 busts kept the
+    // first ~30 s of the match at 5–25 fps even after the future-tech warmer was turned off
+    // (docs/perf-research.md's HD probe). Nothing is drawn with a bust until a unit is
+    // selected, and `updatePortrait` already loads the selected one on demand, so HD takes the
+    // reference client's path: fetch it on the click. Classic keeps its warmer byte-for-byte.
+    if (isHd()) return;
     const consider = (typeId: string) => {
       const def = this.registry.get(typeId);
       if (!def?.model) return;
@@ -13346,6 +14571,10 @@ export class MapViewerScene {
       const have = state?.researchLevel(this.localPlayer, upId) ?? 0;
       const next = have + 1;
       if (next > d.maxLevel) continue; // fully researched — the button is gone, as in WC3
+      // A rank the MAP has capped away is gone the same way, not greyed: Prologue02's
+      // `SetPlayerTechMaxAllowed(Player(0), 'Ropg', 0)` is why its Great Hall offers no Pillage.
+      const cap = state?.researchCap(this.localPlayer, upId) ?? -1;
+      if (cap >= 0 && next > cap) continue;
       const cost = this.upgrades.cost(upId, next);
       const tier = next - 1; // requirement tier is 0-based on the LEVEL for an upgrade
       const metTech = !state || state.meets(this.localPlayer, upId, tier);
@@ -13391,6 +14620,10 @@ export class MapViewerScene {
     for (const toId of this.tech.upgradesTo(sel.typeId)) {
       const d = this.registry.get(toId);
       if (!d) continue;
+      // Capped at zero (a map's `SetPlayerTechMaxAllowed(p, 'ostr', 0)`, or an `rtma` upgrade)
+      // is a HIDE, exactly as on the train card: unmet requirements grey a button, a
+      // withdrawn type has none.
+      if (world.tech?.maxAllowed(this.localPlayer, toId) === 0) continue;
       const metTech = world.canMake(this.localPlayer, toId, 0);
       const [gold, lumber] = this.upgradeCost(sel.typeId, d); // the DIFFERENCE, not the full price
       const afford = stash.gold >= gold && stash.lumber >= lumber;
@@ -13998,6 +15231,11 @@ export class MapViewerScene {
       for (const bid of this.tech.builds(sel.typeId)) {
         const d = this.registry.get(bid);
         if (!d) continue;
+        // …but a structure the MAP has capped at zero is not greyed, it is not there: the
+        // real client's Prologue02 build card is five buttons and a greyed Watch Tower, with
+        // no Spirit Lodge, Bestiary or Tauren Totem (`SetPlayerTechMaxAllowed(p, 'osld', 0)`
+        // in the map's own InitTechTree). Same rule as the train card.
+        if (world.tech?.maxAllowed(this.localPlayer, bid) === 0) continue;
         const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
         const metTech = world.canMake(this.localPlayer, bid, 0);
         out.push(this.cmd({
@@ -15552,24 +16790,24 @@ export class MapViewerScene {
    *  cursor sprite sheet) as the in-game mouse cursor. */
   private applyRaceCursor(): void {
     const dirs: Record<PlayableRace, string> = { human: "Human", orc: "Orc", undead: "Undead", nightelf: "NightElf" };
-    const bytes = this.vfs.rawBytes(`UI\\Cursor\\${dirs[this.localRace]}Cursor.blp`);
-    const sheet = bytes ? blpToCanvas(bytes) : null;
+    const sheet = vfsImage(this.vfs, `UI\\Cursor\\${dirs[this.localRace]}Cursor.blp`);
     if (!sheet) return;
     this.cursorSheet = sheet; // reused to build the target reticle (row 2) + tinted hand
     this.reticleImgs.clear();
     this.handImgs.clear();
     this.overlayCursors.clear();
     // The sheet is a grid of animation frames; the top-left cell is the idle
-    // pointer. Cells are one-eighth of the sheet width, blown up by cursorPx.
+    // pointer. Cells are one-eighth of the sheet width, drawn at the SD cell's size whatever
+    // the sheet's own resolution is (Reforged ships the same art at 4× — see cursorDrawPx).
     const cell = Math.round(sheet.width / 8);
-    const size = cursorPx(cell);
+    const size = cursorDrawPx(cell);
     // The DOM stand-in for the pointer that is left, the scroll chevron, is sized in style.css
     // off this same number, so it cannot drift from the art we cut here.
     document.documentElement.style.setProperty("--cursor-px", `${size}px`);
     // Hotspot near the gauntlet's fingertip (top-left). With a 32 px twin behind the enlarged
     // cell rather than `auto`, so the OS pointer never shows through near the right or bottom
     // edge — which is where the whole command card is (ui/cursor.ts `cursorValue`).
-    const rule = cursorValue(sheet, cell);
+    const rule = cursorValue(sheet, cell, size);
     document.body.style.cursor = rule;
     // The other two states this sheet answers for, both read off `UI\Cursor\<race>Cursor.mdx`
     // rather than guessed at — the model names its sequences and drives the cell with a
@@ -15633,7 +16871,7 @@ export class MapViewerScene {
     const sheet = this.cursorSheet;
     if (!sheet) return null;
     const cell = Math.round(sheet.width / 8);
-    const size = cursorPx(cell);
+    const size = cursorDrawPx(cell);
     const c = document.createElement("canvas");
     c.width = size * count;
     c.height = size;
@@ -15657,7 +16895,7 @@ export class MapViewerScene {
     // arms: teal is the armed cursor at rest, the other three what it turns over a target.
     const color = { teal: [64, 255, 255], green: [0, 255, 0], yellow: [255, 255, 0], red: [255, 0, 0] }[colorKey];
     const cell = Math.round(sheet.width / 8);
-    const size = cursorPx(cell);
+    const size = cursorDrawPx(cell);
     const c = document.createElement("canvas");
     c.width = size;
     c.height = size;
@@ -15693,7 +16931,7 @@ export class MapViewerScene {
     // (x,0,0) on an enemy, (0,y,0) on a friend and (x,y,0) on a neutral, with the same x and y.
     const color = { green: [0, 255, 0], yellow: [255, 255, 0], red: [255, 0, 0] }[colorKey];
     const cell = Math.round(sheet.width / 8);
-    const size = cursorPx(cell);
+    const size = cursorDrawPx(cell);
     const c = document.createElement("canvas");
     c.width = size;
     c.height = size;
@@ -15773,7 +17011,7 @@ export class MapViewerScene {
     let url = this.iconCache.get(key);
     if (url === undefined) {
       const bytes = read();
-      url = bytes ? blpToDataUrl(bytes) : null;
+      url = bytes ? imageToDataUrl(bytes) : null;
       // The LAST RESORT (docs/icons.md): a button icon that is neither in the install nor
       // derivable from it (vfs/derivedArt.ts) is drawn as a flat fuchsia square — "this art is
       // missing", said the way the game says it — rather than as an empty slot, so the ability
@@ -15792,7 +17030,7 @@ export class MapViewerScene {
    *  `Art` is a `.blp`). `key` names the source for the icon cache; `bytes` reads lazily, so a
    *  cache hit costs no decode. */
   private iconFile(path: string): { key: string; bytes: () => Uint8Array | null } {
-    const files = iconFileCandidates(path);
+    const files = iconFileCandidates(path).flatMap((f) => imageCandidates(f));
     const map = this.mapFiles.archive;
     const inMap = map ? files.find((f) => map.exists(f)) : undefined;
     if (inMap) return { key: `map${this.mapFiles.epoch}:${path}`, bytes: () => map!.rawBytes(inMap) };
@@ -15819,7 +17057,7 @@ export class MapViewerScene {
     let url = this.iconCache.get(key);
     if (url === undefined) {
       const bytes = file.bytes();
-      const canvas = bytes ? blpToCanvas(bytes) : null;
+      const canvas = bytes ? imageToCanvas(bytes) : null;
       url = null;
       if (canvas) {
         const ctx = canvas.getContext("2d")!;
@@ -16160,6 +17398,11 @@ export class MapViewerScene {
       void this.spawnUnit(d, sx, sy, t.owner, team, 0, TRAINED_FACING, simId);
     }
     this.raiseEntangledMines(world);
+    // A script's `BlzSetUnitSkin` — the body changes, nothing else does (P5).
+    for (const id of world.drainSkinChanges()) {
+      const su = world.units.get(id);
+      if (su && su.hp > 0) void this.remodelUnit(id, su.typeId);
+    }
     const summonClaimed = new Set<string>(); // cells handed out this call (see summonSpot)
     for (const s of world.drainSummonRequests()) {
       const d = this.registry.get(s.unitId);
@@ -16381,6 +17624,8 @@ export class MapViewerScene {
       this.simTick++;
       this.stepStage = null;
       this.replayStepDone();
+      if (this.pendingScriptSave !== null || this.pendingScriptLoad !== null) this.servePendingScriptSave();
+      if (import.meta.env.DEV) this.devStepHook?.(this.simTick);
       this.simAccum -= SIM_DT;
       steps++;
       this.stepCost = this.stepCost * 0.9 + (performance.now() - stepAt) * 0.1;
@@ -16756,7 +18001,7 @@ export class MapViewerScene {
       // …and scaled by the Game Speed, so a clip plays at the rate the sim under it walks.
       const wdt = this.paused ? 0 : dt * this.speedRate;
       this.updateCamera(dt);
-      this.metrics.frame(dt, this.rts?.unitCount() ?? 0, this.rts?.pingMs());
+      this.metrics.frame(dt, this.rts?.unitCount() ?? 0, this.rts?.pingMs(), this.rts?.localApm());
       this.hud?.frame(dt);
       this.updateClock(wdt);
       this.updatePortrait();
@@ -17065,7 +18310,9 @@ export class MapViewerScene {
           // client's (the same one the minimap dots and a cinematic's speaker names use).
           const credit = t.kind === "crit" || t.kind === "deny" ? undefined : CREDIT_TEXT[t.kind];
           this.combatText.spawn({
-            text: t.text,
+            // A miss carries no text of its own: the word is the client's (GlobalStrings.fdf
+            // `MISS` = "miss"), so a localized install prints its own.
+            text: t.kind === "miss" ? (this.globalStrings?.strings.get("MISS") ?? "miss") : t.text,
             color:
               credit?.color ??
               (t.colorSlot >= 0
@@ -17295,6 +18542,12 @@ export class MapViewerScene {
         // draws over its own ring, which reads as sitting under it).
         if (this.ringSplats) this.ringSplats.render(fogScene.camera.viewProjectionMatrix);
         fogScene.renderTranslucent();
+        // Reforged PopcornFX (CORN) — particles belong to the translucent layer: they blend, they
+        // test depth against the world, and the fog-of-war veil below covers them like a unit.
+        if (this.pkb) {
+          this.pkb.update(wdt / 1000, fogScene as unknown as PkbScene, fogScene.camera.location);
+          this.pkb.render(fogScene.camera.viewProjectionMatrix, fogScene.camera.directionX, fogScene.camera.directionY);
+        }
         // Lightning LAST of the world's own passes: a bolt is additive and depth-TESTS
         // (a cliff in front of it hides it) but writes no depth, so it must come after the
         // units it arcs between rather than punching a hole in them.
@@ -17388,6 +18641,7 @@ export class MapViewerScene {
    *  `cine-on` still on the body so the menu had no cursor. */
   dispose(): void {
     this.disposed = true;
+    this.preloadEpoch++; // stop any future-tech warmer the match left running
     setGamepadHost(null); // the pad's match actions die with the match
     this.stop();
     // The listeners first: they are the only leak that would keep FIRING — every keydown
@@ -17447,6 +18701,8 @@ export class MapViewerScene {
     this.multiboard = null;
     this.weather?.dispose();
     this.weather = null;
+    this.pkb?.dispose();
+    this.pkb = null;
     this.leaderboard = null;
     this.timerDialogs?.dispose();
     this.timerDialogs = null;
@@ -17481,6 +18737,7 @@ export class MapViewerScene {
     // everything else this map brought (see mountMap).
     this.sounds?.mountMap(null);
     this.mapFiles.archive = null;
+    this.campaignArchive = null; // the next match's, if it has one, is set by its loadMap
     this.registry.clearCustom(); // drop this map's custom object data
     this.abilities.clearCustom();
     this.items.clearCustom();
@@ -17490,6 +18747,8 @@ export class MapViewerScene {
     this.allies = null;
     this.chatDialog?.dispose();
     this.chatDialog = null;
+    this.logDialog?.dispose();
+    this.logDialog = null;
     this.questLog?.dispose();
     this.questLog = null;
     this.consoleUi?.dispose();
@@ -18504,7 +19763,9 @@ export class MapViewerScene {
     // In a cinematic the lens frames the strip BETWEEN the letterbox bars (cinematicLens).
     const cine = !this.interfaceShown;
     const fov = cine ? 2 * Math.atan(Math.tan(this.fov / 2) / CINE_STRIP) : this.fov;
-    scene.camera.perspective(fov, this.aspect(), 16, this.farZ > 0 ? this.farZ : this.distance * 8);
+    // The NEAR plane is the game's own 100 (CAMERA.NEARZ has why it matters): a cinematic's
+    // camera object may sit inside a doodad the real client never draws from there.
+    scene.camera.perspective(fov, this.aspect(), CAMERA.NEARZ, this.farZ > 0 ? this.farZ : this.distance * 8);
     scene.camera.moveToAndFace(eye, this.target, this.upVector(eye));
     if (cine) cinematicLens(scene.camera);
     this.sky?.follow(scene.camera); // the sky surrounds the EYE (render/sky.ts)
@@ -18602,14 +19863,29 @@ export class MapViewerScene {
     };
   }
 
+  /** An angle in (−π, π] — the same direction, without the whole turns. */
+  private static principal(rad: number): number {
+    const t = rad % (2 * Math.PI);
+    return t > Math.PI ? t - 2 * Math.PI : t <= -Math.PI ? t + 2 * Math.PI : t;
+  }
+
   private writeCamera(c: CameraState): void {
     const RAD = Math.PI / 180;
     this.target[0] = c.targetX;
     this.target[1] = c.targetY;
     this.zOffset = c.zOffset; // followGround adds the terrain under the focus back on
     this.distance = c.distance;
-    this.yaw = c.rotationDeg * RAD;
-    this.pitch = -c.aoaDeg * RAD;
+    // Both angles are written in their PRINCIPAL range, because a script speaks in whichever
+    // turn it likes and the player's own controls then ease from what is stored. WC3's default
+    // angle of attack is 304 (bj_CAMERA_DEFAULT_AOA) and a cinematic's `ResetToGameCamera`
+    // ends on it, which as a pitch is −304°: the same view as +56°, one whole turn away. The
+    // wheel eases `pitch` to the zoom stop's 56° as plain numbers, so the first notch after
+    // any cutscene swung the camera through a full 360° loop on its way to where it already
+    // was (measured: −304 → −264 → … → 8.9 → 56 across the 0.44 s ease).
+    // (The rotation keeps to [0, 2π) rather than straddling zero: `GetCameraField` reads it
+    // back, and a script that set 270 should not be told −90.)
+    this.yaw = ((c.rotationDeg * RAD) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    this.pitch = MapViewerScene.principal(-c.aoaDeg * RAD);
     // A camera setup with a 0 or absurd FOV would render nothing at all; keep it sane.
     this.fov = clamp(MapViewerScene.fovFromWc3(c.fovDeg), 0.1, Math.PI * 0.9);
     this.roll = c.rollDeg * RAD;
@@ -19056,7 +20332,7 @@ export class MapViewerScene {
     if (this.holdHandUrl && !this.carryHandEl) {
       this.carryHandEl = document.createElement("div");
       this.carryHandEl.className = "carried-hand";
-      const cell = cursorPx(Math.round((this.cursorSheet?.width ?? 256) / 8));
+      const cell = cursorDrawPx(Math.round((this.cursorSheet?.width ?? 256) / 8));
       this.carryHandEl.style.width = `${cell}px`;
       this.carryHandEl.style.height = `${cell}px`;
       this.carryHandEl.style.backgroundImage = `url(${this.holdHandUrl})`;
@@ -19122,6 +20398,10 @@ export class MapViewerScene {
   /** Set by `dispose`. Background work that outlives the frame loop (the idle icon warm)
    *  checks it: the scene is gone and anything it produces now would never be freed. */
   private disposed = false;
+
+  /** Bumped when a map is torn down or replaced: the post-load model warmer checks it so the
+   *  previous map's future tech cannot keep loading into the next one. */
+  private preloadEpoch = 0;
 
   /**
    * A skip in flight: seconds since ESC, and whether the event has gone out yet. Null when
@@ -19420,7 +20700,7 @@ export class MapViewerScene {
           // Modifiers: Shift = add/remove from group; Ctrl or a double-click =
           // select all on-screen units of the same type.
           const t = performance.now();
-          const dbl = t - this.lastClickAt < 350 && Math.hypot(e.offsetX - this.lastClickX, e.offsetY - this.lastClickY) < 8;
+          const dbl = peonDoubleTapFocus() && t - this.lastClickAt < 350 && Math.hypot(e.offsetX - this.lastClickX, e.offsetY - this.lastClickY) < 8;
           this.lastClickAt = t;
           this.lastClickX = e.offsetX;
           this.lastClickY = e.offsetY;
@@ -19628,9 +20908,15 @@ const REGION_COLORS = { outline: [0.2, 0.95, 1.0, 0.9] as const, fill: [0.2, 0.8
  *  region-name DOM labels over the 3D scene. */
 /** An MDX sequence-name matcher for a clip a script asked for by name ("death alternate").
  *  Anchored so "death" can't select "death alternate" — a gate that shatters instead of
- *  swinging open is a different animation. */
+ *  swinging open is a different animation.
+ *
+ *  …with an optional VARIATION NUMBER on the end. Reforged's models number every sequence
+ *  ("Stand 1", "Stand Hit 1", "Death Alternate 1", "Death 1") where the classic ones say
+ *  "Stand", "Stand Hit", "Death Alternate", "Death", and an exact match found nothing on an HD
+ *  gate: `KillDestructable` returned without touching the model, so a broken gate went on
+ *  standing there in its intact art while its collider had already dropped to the posts. */
 function clipRe(name: string): RegExp {
-  return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+  return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*\\d+)?$`, "i");
 }
 
 function projectToScreen(m: Float32Array, x: number, y: number, z: number, w: number, h: number): [number, number] | null {

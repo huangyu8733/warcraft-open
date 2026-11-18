@@ -1,5 +1,5 @@
 import { showSaveReplayPanel, type SaveReplayPanelOptions } from "./saveReplayDialog";
-import { blpToCanvas } from "../render/blputil";
+import { vfsImage } from "../render/blputil";
 import { ScoreScreenScene, type ScoreBar } from "../render/scoreScreenScene";
 import { ALLY_FILTER_COLOR } from "../game/allyColor";
 import { totalScore, type ScoreRow, type ScoreTable } from "../game/scoreTable";
@@ -64,7 +64,7 @@ interface Column {
 
 const n = (v: number): string => String(Math.round(v));
 
-const TABS: Column[][] = [
+export const TABS: Column[][] = [
   [
     { key: "OVERVIEW_COLUMN0", value: (r) => n(r.unitScore), sort: (r) => r.unitScore },
     { key: "OVERVIEW_COLUMN1", value: (r) => n(r.heroScore), sort: (r) => r.heroScore },
@@ -161,6 +161,12 @@ export interface ScoreScreenOptions {
    *  a web build with no disk — the button is not shown, as the reference shows OK alone when
    *  there is nothing to save. */
   replay?: Omit<SaveReplayPanelOptions, "container" | "vfs" | "onSaved">;
+  /** The map the match was played on — the HD screen's match-info page draws its preview and
+   *  name from here. The FDF screen has no such page and ignores it. */
+  map?: { name: string; previewImage?: Uint8Array | null; minimap?: Uint8Array | null };
+  /** Play the match that just ended again — the HD info page's WATCH REPLAY. Absent when there
+   *  is no recording to play (a watched replay, or a build with no disk). */
+  onWatchReplay?: () => void;
 }
 
 export interface ScoreScreen {
@@ -406,8 +412,7 @@ function cachedBlp(vfs: DataSource): (path: string) => string | null {
   return (path) => {
     if (!path) return null;
     if (cache.has(path)) return cache.get(path)!;
-    const bytes = vfs.rawBytes(path);
-    const canvas = bytes ? blpToCanvas(bytes) : null;
+    const canvas = vfsImage(vfs, path);
     const url = canvas ? canvas.toDataURL() : null;
     cache.set(path, url);
     return url;

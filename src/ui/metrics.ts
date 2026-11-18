@@ -18,6 +18,7 @@
 // means "no match link" (single player), `null` "linked, no echo home yet".
 
 import { setGameTip } from "./gameTip";
+import { displayApm, displayFps, displayPing } from "../render/gameplayOptions";
 
 const UPDATE_PERIOD = 500; // ms between DOM updates (readable, not flickery)
 
@@ -33,6 +34,12 @@ export class MetricsOverlay {
   private visible = false; // off until F4 — the corner is the player's, not the debugger's
   private frames = 0;
   private accMs = 0;
+  /** The last set of Gameplay rows we reacted to, so a strip the player dismissed with F4 is
+   *  not re-opened every frame by a setting that never changed. */
+  private optsSig = "";
+  /** True while the strip is up because an option asked for it, so turning that option off
+   *  can put it away again. */
+  private autoShown = false;
 
   /** Toggled when the mute button is clicked (new muted state). Host wires audio. */
   onToggleMute: ((muted: boolean) => void) | null = null;
@@ -70,23 +77,64 @@ export class MetricsOverlay {
    *  kept in sync for the gamepad toast stack, which measures the strip by it. */
   toggle(): boolean {
     this.visible = !this.visible;
+    this.autoShown = false; // the player's own choice wins from here on
     this.el.hidden = !this.visible;
     this.el.classList.toggle("metrics-live", this.visible);
     return this.visible;
+  }
+
+  /** Show or hide without going through F4 (the Options rows). */
+  private setLive(on: boolean): void {
+    this.visible = on;
+    this.el.hidden = !on;
+    this.el.classList.toggle("metrics-live", on);
+  }
+
+  /** "Display FPS" / "Display APM" are the two rows that ASK for the strip; ping only adds a
+   *  segment to whichever strip is already up. Reacts only when the rows actually change. */
+  private syncFromOptions(): void {
+    const fps = displayFps();
+    const apm = displayApm();
+    const sig = `${fps}|${apm}`;
+    if (sig === this.optsSig) return;
+    this.optsSig = sig;
+    const wanted = fps || apm;
+    if (wanted && !this.visible) {
+      this.setLive(true);
+      this.autoShown = true;
+    } else if (!wanted && this.autoShown) {
+      this.setLive(false);
+      this.autoShown = false;
+    }
   }
 
   /** Call once per rendered frame with the frame delta in ms. `ping` as `RtsController.pingMs`
    *  answers it: a number, null (linked, nothing measured yet) or undefined (single player).
    *  Counts every frame regardless, so a freshly toggled-on strip reads true at once; it
    *  writes the DOM only while visible. */
-  frame(dtMs: number, units: number, ping: number | null | undefined): void {
+  frame(dtMs: number, units: number, ping: number | null | undefined, apm?: number): void {
+    this.syncFromOptions();
     this.frames++;
     this.accMs += dtMs;
     if (!this.visible || this.accMs < UPDATE_PERIOD) return;
     const avg = this.accMs / this.frames;
     const fps = `${Math.round(1000 / avg)} fps`;
     const pingText = ping === undefined ? "" : ` · ping ${ping === null ? "—" : `${Math.round(ping)} ms`}`;
-    this.text.textContent = DEV_READOUT ? `${fps} · ${avg.toFixed(1)} ms · ${units} units${pingText}` : `${fps}${pingText}`;
+    const anyRow = displayFps() || displayPing() || displayApm();
+    // F4's own readout is the developer's, unchanged; once the Gameplay rows speak, each one
+    // decides whether its segment is printed.
+    if (!anyRow) {
+      this.text.textContent = DEV_READOUT ? `${fps} · ${avg.toFixed(1)} ms · ${units} units${pingText}` : `${fps}${pingText}`;
+    } else {
+      const parts: string[] = [];
+      if (displayFps()) {
+        parts.push(fps);
+        if (DEV_READOUT) parts.push(`${avg.toFixed(1)} ms`, `${units} units`);
+      }
+      if (displayPing() && ping !== undefined) parts.push(`ping ${ping === null ? "—" : `${Math.round(ping)} ms`}`);
+      if (displayApm()) parts.push(`apm ${apm === undefined ? "—" : Math.round(apm)}`);
+      this.text.textContent = parts.join(" · ");
+    }
     this.frames = 0;
     this.accMs = 0;
   }

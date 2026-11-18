@@ -35,6 +35,7 @@
 
 import { anyModalOpen } from "./modal";
 import { virtualCursor, type VirtualButton } from "./virtualCursor";
+import { confineMouseEnabled, reduceMouseLag } from "../render/inputOptions";
 
 /** What the clamped point has to stay inside. */
 interface Box {
@@ -177,15 +178,23 @@ export function installMouseCapture(): void {
  */
 export function startMouseCapture(): void {
   if (captured || stopping || !canCapture(null)) return;
+  // The default deltas carry the OS's acceleration curve — the feel the player's WC3 mouse has
+  // always had. "Reduce Mouse Lag" asks for `unadjustedMovement`, the raw device deltas; a
+  // browser that refuses them falls back to the ordinary lock below.
+  const request = document.body.requestPointerLock as (
+    options?: { unadjustedMovement?: boolean },
+  ) => Promise<void> | void;
   try {
-    // NOT `{ unadjustedMovement: true }`: without it the deltas carry the OS's acceleration
-    // curve, which is the feel the player's WC3 mouse has always had — raw deltas would move the
-    // drawn cursor by a different amount than the pointer they were used to.
-    const p: unknown = document.body.requestPointerLock();
-    if (p && typeof (p as Promise<void>).catch === "function") {
-      // A refusal is expected and silent: no gesture, or the browser's short cooldown after an
-      // Esc exit. The next click asks again.
-      (p as Promise<void>).catch(() => { /* refused */ });
+    const p = request(reduceMouseLag() ? { unadjustedMovement: true } : undefined);
+    if (p && typeof p.catch === "function") {
+      p.catch(() => {
+        if (!reduceMouseLag()) return;
+        try {
+          request(undefined);
+        } catch {
+          /* refused again — silent */
+        }
+      });
     }
   } catch {
     // refused the synchronous way (no user gesture, or not the active tab)
@@ -247,6 +256,9 @@ function end(): void {
  * need the OS pointer to point and click like a page.
  */
 function canCapture(target: EventTarget | null): boolean {
+  // "Confine Mouse Cursor" → Off: the page never parks the OS pointer. A lock already held is
+  // released by `watch`, which asks this every frame.
+  if (!confineMouseEnabled()) return false;
   const body = document.body.classList;
   if (!body.contains("in-game")) return false;
   if (body.contains("game-menu-open") || body.contains("game-paused")) return false;

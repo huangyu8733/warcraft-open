@@ -4,8 +4,8 @@ import { DEFAULT_LOCALE, isLocale } from "@/i18n/config";
 // 所有前台页面都带语言前缀（/zh/…、/en/…）。这里只做两件事：
 // 1. 没有前缀的路径补上用户偏好的语言（cookie）或默认语言；
 // 2. 前缀不是已注册语言时，同样回落。
-// 后台、API、下载跳转与静态资源不参与语言前缀。
-const BYPASS = ["/admin", "/api", "/download", "/_next"];
+// 后台、API、下载跳转、游戏页与静态资源不参与语言前缀（/play 是独立的游戏包，见 next.config.ts）。
+const BYPASS = ["/admin", "/api", "/download", "/play", "/_next"];
 
 export default function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

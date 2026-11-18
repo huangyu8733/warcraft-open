@@ -1,5 +1,6 @@
 import { DEFAULT_LOCALE } from "@/i18n/config";
 import { listPublishedMaps } from "@/lib/db/queries/maps";
+import { isMapFlavor, parseFlavors } from "@/lib/mapFlavors";
 import { mapFileName } from "@/lib/mapFile";
 
 // 桌面启动器读取的公开地图列表。只暴露已发布地图的展示字段，不返回后台信息。
@@ -24,10 +25,13 @@ export async function GET(request: Request): Promise<Response> {
   const locale = url.searchParams.get("locale") || DEFAULT_LOCALE;
   const requested = Number(url.searchParams.get("limit"));
   const limit = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), 60) : 12;
+  // The launcher asks for the maps it can actually run: `?flavor=sd` or `?flavor=hd`.
+  const flavorParam = url.searchParams.get("flavor");
 
   const maps = listPublishedMaps(locale, {
     q: url.searchParams.get("q") || undefined,
     category: url.searchParams.get("category") || undefined,
+    flavor: isMapFlavor(flavorParam) ? flavorParam : undefined,
     limit,
   }).map((map) => ({
     slug: map.slug,
@@ -38,6 +42,7 @@ export async function GET(request: Request): Promise<Response> {
     version: map.version,
     author: map.author,
     players: map.players,
+    flavors: parseFlavors(map.flavors),
     category: map.category,
     updatedAt: map.updated_at,
     fileName: mapFileName(map),

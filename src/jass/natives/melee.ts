@@ -48,10 +48,19 @@ export function registerMeleeNatives(rt: Runtime): void {
   // expansion — common.ai's PickMeleeHero reads exactly that to draw from three heroes, not four.
   def(rt, "VersionCompatible", (c, a) => jBool(c.rt.enumIndex(a[0]) <= versionIndex()));
   def(rt, "VersionSupported", (c, a) => jBool(c.rt.enumIndex(a[0]) <= VERSION_FROZEN_THRONE));
-  // IsMapFlagSet(MAP_RANDOM_HERO) — a lobby melee option. We expose none of them yet, so
-  // every flag reads false: WC3's default melee game (no random hero → each player gets a
-  // free-hero token instead; no random races; no fixed teams).
-  def(rt, "IsMapFlagSet", () => jBool(false));
+  // The map flags (Runtime.mapFlags, issue #296): the lobby's Advanced Options seed them, a
+  // script's `SetMapFlag` writes them and Blizzard.j reads them back — `IsMapFlagSet(
+  // MAP_RANDOM_HERO)` swaps each player's free-hero token for a rolled hero standing by the
+  // hall. A `mapflag`'s index is its own bit (common.j: every one is a power of two).
+  def(rt, "IsMapFlagSet", (c, a) => {
+    const bit = c.rt.enumIndex(a[0]);
+    return jBool(bit > 0 && (c.rt.mapFlags & bit) !== 0);
+  });
+  def(rt, "SetMapFlag", (c, a) => {
+    const bit = c.rt.enumIndex(a[0]);
+    if (bit > 0) c.rt.mapFlags = truthy(a[1]) ? c.rt.mapFlags | bit : c.rt.mapFlags & ~bit;
+    return JNULL;
+  });
 
   // --- the game clock (MeleeStartingVisibility) ---
   // A melee game opens at 08:00 (bj_MELEE_STARTING_TOD), set through
@@ -130,6 +139,15 @@ export function registerMeleeNatives(rt: Runtime): void {
     c.rt.hooks?.setPlayerTechResearched?.(playerIndex(c, a[0]), intToRawcode(asInt(a[1])), asInt(a[2]));
     return JNULL;
   });
+  // AddPlayerTechResearched(p, techid, levels) — the RELATIVE form: the level the player has
+  // now (GetPlayerTechCount's path, which for an upgrade IS its researched level) plus
+  // `levels`, written back through SetPlayerTechResearched's path (TechState floors it at 0).
+  def(rt, "AddPlayerTechResearched", (c, a) => {
+    const player = playerIndex(c, a[0]), tech = intToRawcode(asInt(a[1]));
+    const have = c.rt.hooks?.playerTechCount?.(player, tech, false) ?? 0;
+    c.rt.hooks?.setPlayerTechResearched?.(player, tech, have + asInt(a[2]));
+    return JNULL;
+  });
   def(rt, "GetPlayerTechResearched", (c, a) => {
     // "researched at level N or better" — the 3rd arg is the level being asked about.
     const have = c.rt.hooks?.playerTechCount?.(playerIndex(c, a[0]), intToRawcode(asInt(a[1])), true) ?? 0;
@@ -166,6 +184,14 @@ export function registerMeleeNatives(rt: Runtime): void {
   def(rt, "GetResourceAmount", (c, a) => {
     const u = c.rt.data<{ simId: number }>(a[0]);
     return jInt(u && u.simId >= 0 ? c.rt.hooks?.getResourceAmount?.(u.simId) ?? 0 : 0);
+  });
+  // AddResourceAmount(u, amount) — the relative SetResourceAmount (Blizzard.j's
+  // AddResourceAmountBJ is nothing but it): read the mine's gold, write back gold + amount.
+  def(rt, "AddResourceAmount", (c, a) => {
+    const u = c.rt.data<{ simId: number }>(a[0]);
+    const hooks = c.rt.hooks;
+    if (u && u.simId >= 0 && hooks) hooks.setResourceAmount?.(u.simId, (hooks.getResourceAmount?.(u.simId) ?? 0) + asInt(a[1]));
+    return JNULL;
   });
   // The Undead start haunts the nearest mine: BlightGoldMineForPlayerBJ saves the mine's
   // gold, RemoveUnit's the mine, and calls this to raise a Haunted Gold Mine in its place.

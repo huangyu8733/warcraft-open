@@ -1,3 +1,4 @@
+import { flavor } from "./flavor";
 import { profileKey } from "./profiles";
 
 // GAME CACHES — what a campaign carries from one chapter to the next.
@@ -21,9 +22,12 @@ import { profileKey } from "./profiles";
 // `warcraft-open.gamecache.Bob.campaigns.w3v` are indistinguishable without knowing every profile
 // name. One blob per profile keeps profiles.ts's rule exactly as it is.
 //
-// The file NAME is the whole of the separation between the two editions, and it is the game's
-// own: Reign of Chaos's chapters all say `InitGameCacheBJ("Campaigns.w3v")` and The Frozen
-// Throne's all say `InitGameCacheBJ("Campaigns.w3x")`. Nothing else has to know about editions.
+// The file NAME separates the two EDITIONS (the game's own `Campaigns.w3v` for Reign of Chaos,
+// `Campaigns.w3x` for The Frozen Throne), but it does NOT separate the two DATA LINES: both
+// sd and hd run Frozen Throne campaigns and both ask for `Campaigns.w3x`. A profile is shared
+// between the lines (it is the player, not the install), so the store is split by `flavor()`
+// as well — a hero carried through the classic chapters must not arrive in a Reforged one,
+// where the unit and item data behind it is a different build's.
 //
 // This module is deliberately dumb — it knows nothing about units or heroes, only about reading
 // and writing a blob of JSON under a name. What is IN a cache is
@@ -39,16 +43,36 @@ export type CacheFileData = Record<string, Record<string, unknown>>;
 
 /** Every cache file this profile has, by the name the script called it (lower-cased, because
  *  a script types the name by hand and the reference's store is a file system). */
-type CacheStore = Record<string, CacheFileData>;
+type CacheFiles = Record<string, CacheFileData>;
+
+/** A profile's cache files, one bucket per data line. */
+interface CacheStore {
+  sd: CacheFiles;
+  hd: CacheFiles;
+}
+
+function side(value: unknown): CacheFiles {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: CacheFiles = {};
+  for (const [file, data] of Object.entries(value as Record<string, unknown>)) {
+    if (data && typeof data === "object" && !Array.isArray(data)) out[file] = data as CacheFileData;
+  }
+  return out;
+}
 
 function readStore(): CacheStore {
   try {
     const raw = localStorage.getItem(profileKey(GAME_CACHE_KEY));
     const parsed = raw ? (JSON.parse(raw) as unknown) : null;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return parsed as CacheStore;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { sd: {}, hd: {} };
+    // Before the two data lines shared a profile this blob was ONE flat file map. Those caches
+    // were written on the classic line (Reforged came later), so they stay there and hd starts
+    // empty — carrying them into hd is the exact mix-up this split exists to stop.
+    if (!("sd" in parsed) && !("hd" in parsed)) return { sd: side(parsed), hd: {} };
+    const store = parsed as Record<string, unknown>;
+    return { sd: side(store.sd), hd: side(store.hd) };
   } catch {
-    return {}; // private mode, corrupt JSON — see readGameCache
+    return { sd: {}, hd: {} }; // private mode, corrupt JSON — see readGameCache
   }
 }
 
@@ -61,7 +85,7 @@ function readStore(): CacheStore {
  * the game has.
  */
 export function readGameCache(file: string): CacheFileData {
-  const data = readStore()[file.toLowerCase()];
+  const data = readStore()[flavor()][file.toLowerCase()];
   if (!data || typeof data !== "object" || Array.isArray(data)) return {};
   const out: CacheFileData = {};
   for (const [mission, keys] of Object.entries(data)) {
@@ -75,7 +99,7 @@ export function readGameCache(file: string): CacheFileData {
 export function writeGameCache(file: string, data: CacheFileData): boolean {
   try {
     const store = readStore();
-    store[file.toLowerCase()] = data;
+    store[flavor()][file.toLowerCase()] = data;
     localStorage.setItem(profileKey(GAME_CACHE_KEY), JSON.stringify(store));
     return true;
   } catch {

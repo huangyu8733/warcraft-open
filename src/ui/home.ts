@@ -1,21 +1,39 @@
-import { bindHotkeys, createGlueButton, createPanel, createProgressBar, type GlueButton } from "@warcraft-open/ui/dom";
+import { bindHotkeys, createGlueButton, createPanel, type GlueButton } from "@warcraft-open/ui/dom";
 import { currentLocale, t } from "../i18n";
 import { createLanguagePicker } from "../i18n/switch";
 import { downloadedMapKey, safeMapName } from "../assets/downloadedMaps";
 import {
   deleteDownloadedMap, downloadedMapExists, isDesktopApp, listDownloadedMaps, loadNativeInstall,
-  pickNativeInstall, quitNative, rememberedInstall, saveMapToDownload,
+  openGameWindow, pickNativeInstall, quitNative, rememberedInstall, saveMapToDownload,
   checkUpdate, downloadUpdate, installUpdate, onUpdateState,
   type DownloadedMap, type InstalledFolder,
 } from "../assets/nativeInstall";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
+import type { DataSource } from "../vfs/types";
 import { loadProfile } from "../vfs/loader";
 import {
-  pickInstall, readInstallDir, rememberedInstallHandle, requestPersistence,
+  pickInstall, readInstallDir, rememberInstallHandle, rememberedInstallHandle, requestPersistence,
   type DirHandle, type PickedInstall,
 } from "../assets/opfs";
-import { wrongVersionMessage } from "../vfs/version";
-import type { GateLoad } from "./gate";
+import { HD_REQUIRED_VERSION, versionVerdict } from "../vfs/version";
+import { buildInfoVersion } from "../vfs/casc";
+import { flavor, type GameFlavor } from "../data/flavor";
+import { dismissBootSplash, mountBootSplash, type BootSplash } from "./bootSplash";
+import { createGestureHelp } from "./gestureHelp";
+
+/** A mounted install, as the launcher hands it to the game (main.ts `mountInstall`). */
+export interface GateLoad {
+  vfs: DataSource;
+  mounted: string[];
+  missing: string[];
+  fileCount: number;
+  /** The install's `Maps\` folder — what the Custom Game screen lists (issue #61). */
+  maps: Map<string, File>;
+  /** Which game files this is, as a replay's header names it (vfs/loader.ts). */
+  flavour: string;
+  /** The install's exact build, for an HD room's `gameVersion` (vfs/loader.ts). */
+  gameVersion: string | null;
+}
 
 // The launcher's front page — the desktop app's and the browser build's alike: the same shell as
 // the site (top bar, side nav, hero, footer), with three views of its own — Launch, Maps and
@@ -44,6 +62,7 @@ interface SiteMap {
   version: string | null;
   author: string | null;
   players: string | null;
+  flavors: string[];
   category: string;
   updatedAt: string;
   fileName: string;
@@ -60,6 +79,18 @@ const SITE = (
 
 const siteLocale = (): string => (currentLocale() === "zhCN" ? "zh" : "en");
 
+/** The two data lines the launcher can boot (src/data/flavor.ts), in the order they are shown. */
+const LINES = ["sd", "hd"] as const;
+
+/**
+ * The launcher page and the game page are the same page; `?play=` says which one this is.
+ *
+ * A game window is opened BY the launcher (`ow3:open-game`) with the line in `?flavor=`, and
+ * starts loading on its own. The launcher itself never enters a game: it stays on the front page
+ * so the other line can be started too — which is the whole point of one window per line.
+ */
+const PLAY_PARAM = "play";
+
 function formatBytes(value: number | null): string {
   if (!value || value <= 0) return "";
   if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
@@ -72,13 +103,26 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   const abort = new AbortController();
   const native = isDesktopApp();
   let busy = false;
-  let install: InstalledFolder = { path: null, valid: false, present: false, version: null };
-  /** Browser: the folder an earlier visit picked. Its grant does not survive a reload, so it is
-   *  kept only to hand to the Play button — a press is what may ask for it back. */
-  let browserHandle: DirHandle | null = null;
-  /** Browser: the folder this page has already mounted. Pressing Play again reuses it rather
-   *  than putting the picker up a second time. */
-  let browserInstall: PickedInstall | null = null;
+  /** A Launch press is in flight (it may be waiting on the folder dialog): a second press would
+   *  open a second window for the same line. */
+  let launching = false;
+  /** The line this WINDOW booted on — `data/*` has already parsed its tables against it, so it
+   *  never changes. The other line is another window, not a rebuild. */
+  const running = flavor();
+  /** What each line's folder is, as the shell remembers it — one per line, never shared: SD and
+   *  HD keep separate settings keys (electron/install.mjs `installPathKey`). */
+  const installs: Record<GameFlavor, InstalledFolder> = {
+    sd: { path: null, valid: false, present: false, version: null },
+    hd: { path: null, valid: false, present: false, version: null },
+  };
+  /** Browser: the folders earlier visits picked, one per line. Their grants do not survive a
+   *  reload, so they are kept only to hand to a Launch press — a press is what may ask again.
+   *  Keyed by line because the two rows are two installs: picking a Reforged folder must never
+   *  take the classic one away (or answer for it). */
+  const browserHandles: Record<GameFlavor, DirHandle | null> = { sd: null, hd: null };
+  /** Browser: the folder a line has already mounted in this page. Pressing Play again reuses it
+   *  rather than putting the picker up a second time. */
+  const browserInstalls: Record<GameFlavor, PickedInstall | null> = { sd: null, hd: null };
   /** What the map page last read, so a detail route can be opened without another request. */
   let loadedMaps: SiteMap[] = [];
   /** Maps already kept in the install's `Maps\Download\`, by slug — the shelf's "downloaded". */
@@ -126,6 +170,9 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   const topActions = document.createElement("div");
   topActions.className = "home-topbar-actions";
   topActions.append(createLanguagePicker());
+  // A browser tab is the only place a swipe can leave the page (back / forward), so only the
+  // browser build carries the way to turn it off.
+  if (!native) topActions.append(createGestureHelp());
   topbar.append(brand, topnav, topActions);
 
   // ── Body: side nav + content ──────────────────────────────────────────────
@@ -186,23 +233,71 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   lede.className = "home-hero-lede";
   lede.textContent = t("home.lede");
 
-  const actions = document.createElement("div");
-  actions.className = "home-actions";
-  const playBtn = createGlueButton({ label: t("home.play"), hotkey: "P", size: "lg", bordered: true });
-  const changeBtn = createGlueButton({ label: t("home.changeFolder"), size: "lg" });
-  actions.append(playBtn.root, changeBtn.root);
+  // ── The two lines, each with its own Launch and its own folder ────────────
+  // SD and HD are separate data lines with separate remembered folders AND separate windows:
+  // neither row is "the current one", and pressing either opens a game window of that line
+  // (ow3:open-game) while this launcher stays put. Both may run at the same time.
+  const lineName = (line: GameFlavor): string => t(line === "hd" ? "flavor.hd" : "flavor.sd");
+  const editions = document.createElement("div");
+  editions.className = "home-editions";
+  interface LineRow {
+    root: HTMLElement;
+    state: HTMLElement;
+    play: GlueButton;
+    change: GlueButton;
+  }
+  const rows = {} as Record<GameFlavor, LineRow>;
+  /** `HD_REQUIRED_VERSION` blanked = no Reforged data line in this build: the row is shown but
+   *  dead, exactly as the load gate's own SD/HD pair is (ui/gate.ts). */
+  const hdOpen = HD_REQUIRED_VERSION.length > 0;
 
-  const installLine = document.createElement("p");
-  installLine.className = "home-install";
+  for (const line of LINES) {
+    const box = document.createElement("div");
+    box.className = "home-edition";
+    if (line === "hd" && !hdOpen) box.classList.add("is-locked");
+    box.dataset.line = line;
 
-  const bar = createProgressBar({ scale: 1.4 });
-  bar.root.classList.add("home-progress");
-  bar.root.hidden = true;
+    const info = document.createElement("div");
+    info.className = "home-edition-info";
+    const head = document.createElement("div");
+    head.className = "home-edition-head";
+    const name = document.createElement("span");
+    name.className = "home-edition-name";
+    name.textContent = lineName(line);
+    head.append(name);
+    const state = document.createElement("p");
+    state.className = "home-edition-state";
+    info.append(head, state);
+
+    const buttons = document.createElement("div");
+    buttons.className = "home-edition-actions";
+    // Two Launch buttons would answer the same letter, so the classic line keeps P and the
+    // Reforged one takes H — the first letter of its own name in both languages' spelling.
+    const play = createGlueButton({
+      label: t("home.play"),
+      hotkey: line === "sd" ? "P" : "H",
+      bordered: true,
+    });
+    const change = createGlueButton({ label: t("home.changeFolder") });
+    // The captions are identical on both rows; the accessible name says which line it acts on.
+    play.button.setAttribute("aria-label", `${t("home.play")} · ${lineName(line)}`);
+    change.button.setAttribute("aria-label", `${t("home.changeFolder")} · ${lineName(line)}`);
+    if (line === "hd" && !hdOpen) {
+      play.setDisabled(true);
+      change.setDisabled(true);
+      box.title = t("flavor.hdLocked");
+    }
+    buttons.append(play.root, change.root);
+
+    box.append(info, buttons);
+    editions.append(box);
+    rows[line] = { root: box, state, play, change };
+  }
 
   const status = document.createElement("p");
   status.className = "home-status";
 
-  heroContent.append(kicker, logo, tagline, lede, actions, installLine, bar.root, status);
+  heroContent.append(kicker, logo, tagline, lede, editions, status);
   hero.append(heroBg, heroContent);
 
   // ── Maps page ─────────────────────────────────────────────────────────────
@@ -410,22 +505,94 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   }
   page.append(corner);
 
-  // ── Install state ─────────────────────────────────────────────────────────
-  const paintInstall = (): void => {
-    if (!native) {
-      installLine.classList.remove("is-error");
-      installLine.textContent = t(browserHandle ? "home.folderRemembered" : "home.folderNone");
-      return;
+  /** What a remembered browser folder holds, as last READ: its own name and the version off its
+   *  `.build.info`. The handle itself cannot be read again without a fresh grant, so without this
+   *  the row could only say "a folder is remembered" rather than what is in it. Keyed by the
+   *  line and the language, like the handle it describes (both are one pick, i18n/switch.ts). */
+  const INSTALL_INFO_KEY = "warcraft-open.installInfo";
+  const installInfoKey = (line: GameFlavor): string =>
+    `${INSTALL_INFO_KEY}:${line}:${currentLocale()}`;
+  const rememberedInstallInfo = (
+    line: GameFlavor,
+  ): { label: string; version: string | null } | null => {
+    try {
+      const raw = localStorage.getItem(installInfoKey(line));
+      if (!raw) return null;
+      const info = JSON.parse(raw) as { label?: unknown; version?: unknown };
+      if (typeof info.label !== "string" || !info.label) return null;
+      return { label: info.label, version: typeof info.version === "string" ? info.version : null };
+    } catch {
+      return null;
     }
-    installLine.classList.toggle("is-error", !!install.path && !install.valid);
-    if (!install.path) {
-      installLine.textContent = t("home.folderNone");
-    } else if (install.valid) {
-      installLine.textContent = t("home.folder", { version: install.version ?? "", path: install.path });
-    } else if (!install.present) {
-      installLine.textContent = t("home.folderMissing", { path: install.path });
-    } else {
-      installLine.textContent = wrongVersionMessage(install.version);
+  };
+  const rememberInstallInfo = (line: GameFlavor, picked: PickedInstall): void => {
+    if (!picked.label) return;
+    try {
+      localStorage.setItem(
+        installInfoKey(line),
+        JSON.stringify({
+          label: picked.label,
+          version: picked.casc ? buildInfoVersion(picked.casc.buildInfo) : null,
+        }),
+      );
+    } catch {
+      /* not remembered — the row keeps the "remembered" hint */
+    }
+  };
+
+  // ── Install state ─────────────────────────────────────────────────────────
+  /** The sentence under one line's name: where its folder is, or why it cannot be booted.
+   *  A remembered folder's verdict is asked per line, because the SAME folder can be right for
+   *  one and wrong for the other: 3.0.x is HD's, and SD refuses anything that is not 1.x. */
+  const lineState = (line: GameFlavor): { text: string; error: boolean } => {
+    if (line === "hd" && !hdOpen) return { text: t("flavor.hdLocked"), error: false };
+    if (!native) {
+      // The browser gets a HANDLE, not a path: the folder's own name is all there is to show,
+      // and the version is in that folder's `.build.info` — the same file the mount reads.
+      const picked = browserInstalls[line];
+      if (picked) {
+        const where = picked.label ?? "";
+        const version = picked.casc ? buildInfoVersion(picked.casc.buildInfo) : null;
+        if (!where) return { text: t("home.folderPicked"), error: false };
+        return {
+          text: version
+            ? t("home.lineInstalled", { version, path: where })
+            : t("home.folderAt", { path: where }),
+          error: false,
+        };
+      }
+      const handle = browserHandles[line];
+      if (handle) {
+        // A handle restored from IndexedDB cannot be read again without a fresh grant, so the
+        // pick's own answer (name + build) is what the row shows until the next Launch asks.
+        const memo = rememberedInstallInfo(line);
+        if (memo && memo.label === handle.name) {
+          return {
+            text: memo.version
+              ? t("home.lineInstalled", { version: memo.version, path: memo.label })
+              : t("home.folderAt", { path: memo.label }),
+            error: false,
+          };
+        }
+        return { text: t("home.folderRemembered", { path: handle.name }), error: false };
+      }
+      return { text: t("home.folderNone"), error: false };
+    }
+    const info = installs[line];
+    if (!info.path) return { text: t("home.folderNone"), error: false };
+    if (!info.present) return { text: t("home.folderMissing", { path: info.path }), error: true };
+    const verdict = versionVerdict(info.version, line);
+    // The path is said even when the folder is refused: "wrong build" alone leaves the player
+    // looking at two rows and no way to tell which folder either one means.
+    if (!verdict.ok) return { text: t("home.folderIssue", { path: info.path, reason: verdict.message }), error: true };
+    return { text: t("home.lineInstalled", { version: info.version ?? "", path: info.path }), error: false };
+  };
+
+  const paintInstall = (): void => {
+    for (const line of LINES) {
+      const { text, error } = lineState(line);
+      rows[line].state.textContent = text;
+      rows[line].state.classList.toggle("is-error", error);
     }
   };
 
@@ -436,14 +603,34 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
 
   const refreshInstall = async (): Promise<void> => {
     if (!native) {
-      browserHandle = await rememberedInstallHandle();
+      for (const line of LINES) browserHandles[line] = await rememberedInstallHandle(line);
+      // The single un-lined handle predates per-line memory; it can only ever have served the
+      // line this page booted on, so it is adopted there once and re-filed under that line —
+      // with the memo that goes with it, so the row keeps naming the install it did before.
+      if (!browserHandles[running]) {
+        const legacy = await rememberedInstallHandle();
+        if (legacy) {
+          browserHandles[running] = legacy;
+          void rememberInstallHandle(legacy, running);
+          try {
+            const oldKey = `${INSTALL_INFO_KEY}:${currentLocale()}`;
+            const raw = localStorage.getItem(oldKey);
+            const info = raw ? (JSON.parse(raw) as { label?: unknown }) : null;
+            if (raw && info?.label === legacy.name && !localStorage.getItem(installInfoKey(running))) {
+              localStorage.setItem(installInfoKey(running), raw);
+            }
+          } catch {
+            /* no memo to carry over */
+          }
+        }
+      }
       paintInstall();
       downloaded.clear();
       for (const map of loadedMaps) applyDownloadState(map);
       void refreshDownloaded();
       return;
     }
-    install = await rememberedInstall();
+    for (const line of LINES) installs[line] = await rememberedInstall(line);
     paintInstall();
     // A different folder has different maps in its `Maps\Download\`: forget the old answers and
     // ask again for whatever the shelf is showing.
@@ -454,8 +641,11 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
 
   const setBusy = (on: boolean): void => {
     busy = on;
-    playBtn.setDisabled(on);
-    changeBtn.setDisabled(on);
+    for (const line of LINES) {
+      const locked = line === "hd" && !hdOpen;
+      rows[line].play.setDisabled(on || locked);
+      rows[line].change.setDisabled(on || locked);
+    }
   };
 
   /** The whole screen, taken as the game is ENTERED — and only ever entered.
@@ -488,115 +678,251 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     });
   };
 
+  /** What the bar says. The loader's own words are English — they are the same lines a developer
+   *  reads in the console — so a Chinese page keeps to its own phase word rather than wearing two
+   *  languages at once. */
+  const phaseCaption = (message?: string): string =>
+    currentLocale() === "zhCN" ? t("boot.mounting") : message || t("boot.mounting");
+
+  /** The launch's progress screen (ui/bootSplash.ts), fed by the mount's own narration.
+   *
+   *  A 3.0 store takes minutes to mount, and the launcher's hero is the wrong thing to stare at
+   *  while it happens — so the press hands the screen over entirely, exactly as the `?dev` boot
+   *  does. The loader's fraction is used when it has one and the bar simply holds when it does
+   *  not; only the caption moves, so a phase without a number never reads as a stall. */
+  const openSplash = (): { splash: BootSplash; report: (message?: string, fraction?: number) => void } => {
+    const splash = mountBootSplash();
+    let shown = 0.02;
+    return {
+      splash,
+      report: (message, fraction) => {
+        shown = Math.max(shown, Math.min(1, fraction ?? shown));
+        splash.progress(shown, phaseCaption(message));
+      },
+    };
+  };
+
+  /** Browser: make sure `line` has a folder this page may mount, asking for one when the press
+   *  that got us here can still open the picker (that gesture is the only door). False when the
+   *  player cancelled or would not grant the folder. */
+  const ensureBrowserFolder = async (line: GameFlavor): Promise<boolean> => {
+    if (browserInstalls[line]) return true;
+    const remembered = browserHandles[line];
+    if (remembered) {
+      const allowed = (await remembered.requestPermission?.({ mode: "read" })) ?? "granted";
+      if (allowed === "granted") {
+        browserInstalls[line] = await readInstallDir(remembered);
+        rememberInstallInfo(line, browserInstalls[line]);
+        paintInstall();
+        return true;
+      }
+    }
+    const picked = await pickInstall(line);
+    if (!picked) return false;
+    browserInstalls[line] = picked;
+    rememberInstallInfo(line, picked);
+    browserHandles[line] = await rememberedInstallHandle(line);
+    paintInstall();
+    return true;
+  };
+
   /** The browser's door: the folder is asked for HERE, by the press that also starts the game —
    *  a page may only open the folder picker from a gesture. The mount itself is the gate's: the
    *  same profile, the same progress narration. */
-  const startBrowser = async (): Promise<void> => {
+  const startBrowser = async (line: GameFlavor): Promise<void> => {
     setBusy(true);
     setStatus("");
-    bar.set(null);
-    bar.setLabel(t("gate.loading"));
-    bar.root.hidden = false;
     try {
-      let picked = browserInstall;
-      if (!picked && browserHandle) {
-        const allowed = (await browserHandle.requestPermission?.({ mode: "read" })) ?? "granted";
-        if (allowed === "granted") {
-          picked = await readInstallDir(browserHandle);
-          browserInstall = picked;
-        }
+      if (!(await ensureBrowserFolder(line))) {
+        setBusy(false);
+        setStatus(t("gate.noFolder"), true);
+        return;
       }
+      const picked = browserInstalls[line];
       if (!picked) {
-        picked = await pickInstall();
-        if (!picked) {
-          bar.root.hidden = true;
-          setBusy(false);
-          setStatus(t("gate.noFolder"), true);
-          return;
-        }
-        browserInstall = picked;
-        browserHandle = await rememberedInstallHandle();
+        setBusy(false);
+        setStatus(t("gate.noFolder"), true);
+        return;
       }
-      paintInstall();
+      // The screen is handed over only once the folder is settled: the picker is the browser's
+      // own dialog and has to be over anything the page put up.
+      const { splash, report } = openSplash();
       // Browser only: the desktop app reads the folder off disk and has no quota to be evicted
       // from, which is the other half of why the export is native.
       await requestPersistence();
-      const load = await loadProfile(picked, DEFAULT_PROFILE, (_message, fraction) => bar.set(fraction ?? null));
-      bar.set(1);
-      bar.setLabel(t("gate.loaded"));
+      const load = await loadProfile(picked, DEFAULT_PROFILE, (message, fraction) => {
+        report(message || t("boot.mounting"), fraction);
+      });
+      splash.progress(1, t("boot.starting"));
       // Let the full bar be READ before the menu build holds the main thread.
       await new Promise((r) => setTimeout(r, 600));
       await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
       // The game is mounted and about to be shown: this is the screen to take.
       enterPlayFullscreen();
-      onLoaded(load);
+      onLoaded(load); // `showMenu` takes the progress screen down once the menu stands
     } catch (err) {
-      bar.root.hidden = true;
+      dismissBootSplash();
       setBusy(false);
       setStatus(t("home.loadFailed", { error: (err as Error).message }), true);
     }
   };
 
-  const start = async (): Promise<void> => {
-    if (busy) return;
+  /** Is this line's remembered folder one the mount would take? Asked before mounting so the
+   *  answer is the row's own words — `valid` from the shell only says the folder exists and is
+   *  SOME accepted build, which is not the same question per line. */
+  const usable = (line: GameFlavor): boolean => {
+    const info = installs[line];
+    return !!info.path && info.present && versionVerdict(info.version, line).ok;
+  };
+
+  /** Make sure `line` has a folder the mount would take, asking for one when it has none (or the
+   *  one it has is the other line's). False when the player cancelled or the answer will not do —
+   *  in which case the row already says why. */
+  const ensureInstall = async (line: GameFlavor): Promise<boolean> => {
+    if (usable(line)) return true;
+    const picked = await pickNativeInstall(line);
+    if (!picked) {
+      setStatus(t("gate.noWar3Folder"), true);
+      return false;
+    }
+    await refreshInstall();
+    if (usable(line)) return true;
+    const info = installs[line];
+    setStatus(
+      info.present
+        ? t("home.folderIssue", { path: info.path ?? picked, reason: versionVerdict(info.version, line).message })
+        : t("home.folderMissing", { path: info.path ?? picked }),
+      true,
+    );
+    return false;
+  };
+
+  /** THIS page becomes the game. Used by a game window (desktop) and by a browser tab; the
+   *  launcher's own buttons do not take this route on the desktop — they open a window, so the
+   *  launcher survives the launch. */
+  const startInThisPage = async (line: GameFlavor): Promise<void> => {
     if (!native) {
-      await startBrowser();
+      await startBrowser(line);
       return;
     }
-    if (!install.valid) {
-      // A first run (or a folder that moved): the press below IS the folder choice.
-      const picked = await pickNativeInstall();
-      if (!picked) {
-        setStatus(t("gate.noWar3Folder"), true);
-        return;
-      }
-      await refreshInstall();
-      if (!install.valid) {
-        setStatus(install.present ? wrongVersionMessage(install.version) : t("home.folderMissing", { path: install.path ?? picked }), true);
-        return;
-      }
-    }
+    if (!(await ensureInstall(line))) return;
 
     setBusy(true);
     setStatus("");
-    bar.set(null);
-    bar.setLabel(t("gate.loading"));
-    bar.root.hidden = false;
+    const { splash, report } = openSplash();
     try {
-      const load = await loadProfile(await loadNativeInstall(), DEFAULT_PROFILE, (_message, fraction) => bar.set(fraction ?? null));
-      bar.set(1);
-      bar.setLabel(t("gate.loaded"));
+      const load = await loadProfile(await loadNativeInstall(), DEFAULT_PROFILE, (message, fraction) => {
+        report(message || t("boot.mounting"), fraction);
+      });
+      splash.progress(1, t("boot.starting"));
       // Let the full bar be READ before the menu build holds the main thread.
       await new Promise((r) => setTimeout(r, 600));
       await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
-      onLoaded(load);
+      onLoaded(load); // `showMenu` takes the progress screen down once the menu stands
     } catch (err) {
-      bar.root.hidden = true;
+      dismissBootSplash();
       setBusy(false);
       setStatus(t("home.loadFailed", { error: (err as Error).message }), true);
     }
   };
 
-  const changeFolder = async (): Promise<void> => {
-    if (busy) return;
-    if (!native) {
-      const picked = await pickInstall();
-      if (!picked) return;
-      browserInstall = picked;
-      browserHandle = await rememberedInstallHandle();
-      paintInstall();
-      setStatus(t("home.folderChangedBrowser"));
+  /** The address a game window / tab loads: this page, one line, in play mode. */
+  const playUrl = (line: GameFlavor): string => {
+    const url = new URL(location.href);
+    url.searchParams.set("flavor", line);
+    url.searchParams.set(PLAY_PARAM, "1");
+    url.hash = "";
+    return url.toString();
+  };
+  /** A page opened to play (a game window, or a browser tab the launcher opened). It differs
+   *  from the launcher in exactly one way: its Launch press starts the game HERE, because it is
+   *  already the game's own page. */
+  const isGamePage = new URLSearchParams(location.search).has(PLAY_PARAM);
+
+  /** A Launch press.
+   *
+   *  Desktop: a window of its own (`ow3:open-game`), so the launcher survives and the other line
+   *  can be started too — one window per line is that build's own rule.
+   *
+   *  Browser: THIS page becomes the game. There is no second tab: the press settles the folder
+   *  (only a gesture may open the picker) and then starts here. The one exception is the OTHER
+   *  data line, whose tables this page did not parse — a line switch is a reload with
+   *  `?flavor=`, so the same tab navigates to that line's play page, the grant already carried
+   *  over through IndexedDB.
+   */
+  const launch = async (line: GameFlavor): Promise<void> => {
+    if (busy || launching) return;
+    if (line === "hd" && !hdOpen) return;
+    // A browser Launch checks that this line HAS a folder before it starts: with none there is
+    // nothing the game could mount. The rows already say which line has one; a missing one is
+    // answered here, on the page.
+    if (!native && !browserInstalls[line] && !browserHandles[line]) {
+      setStatus(t("gate.noWar3Folder"), true);
       return;
     }
-    const picked = await pickNativeInstall();
-    if (!picked) return;
-    await refreshInstall();
-    if (install.valid) setStatus(t("home.folderChanged", { path: install.path ?? picked }));
-    else setStatus(install.present ? wrongVersionMessage(install.version) : t("home.folderMissing", { path: install.path ?? picked }), true);
+    // One press, one launch: a double-click on the same row would otherwise start two.
+    launching = true;
+    try {
+      if (native) {
+        if (isGamePage) {
+          await startInThisPage(line);
+          return;
+        }
+        if (!(await ensureInstall(line))) return;
+        setStatus(t("home.launchedWindow", { line: lineName(line) }));
+        if (await openGameWindow(line)) return;
+        // A shell older than the window-per-line split has nowhere else to put a game of this
+        // line's own; this page can still start the line it booted on.
+        if (line === running) {
+          await startInThisPage(line);
+          return;
+        }
+        setStatus(t("home.launchUnsupported"), true);
+        return;
+      }
+      // Browser: settle the folder with this press, then take THIS page over — never a new tab.
+      if (!(await ensureBrowserFolder(line))) {
+        setStatus(t("gate.noFolder"), true);
+        return;
+      }
+      if (line === running) {
+        await startInThisPage(line);
+        return;
+      }
+      location.assign(playUrl(line));
+    } finally {
+      launching = false;
+    }
   };
 
-  playBtn.button.onclick = (): void => void start();
-  changeBtn.button.onclick = (): void => void changeFolder();
+  /** Change ONE line's folder. The shell keeps them apart (`installPath` / `installPathHd`), so
+   *  picking a Reforged folder here cannot take the classic one away. */
+  const changeFolder = async (line: GameFlavor): Promise<void> => {
+    if (busy) return;
+    if (!native) {
+      const picked = await pickInstall(line);
+      if (!picked) return;
+      browserInstalls[line] = picked;
+      rememberInstallInfo(line, picked);
+      browserHandles[line] = await rememberedInstallHandle(line);
+      paintInstall();
+      setStatus(picked.label ? t("home.folderChanged", { path: picked.label }) : t("home.folderChangedBrowser"));
+      return;
+    }
+    const picked = await pickNativeInstall(line);
+    if (!picked) return;
+    installs[line] = await rememberedInstall(line);
+    paintInstall();
+    const info = installs[line];
+    const verdict = versionVerdict(info.version, line);
+    if (info.present && verdict.ok) setStatus(t("home.folderChanged", { path: info.path ?? picked }));
+    else setStatus(t("home.folderIssue", { path: info.path ?? picked, reason: verdict.message }), true);
+  };
+
+  for (const line of LINES) {
+    rows[line].play.button.onclick = (): void => void launch(line);
+    rows[line].change.button.onclick = (): void => void changeFolder(line);
+  }
 
   // ── Map shelf ─────────────────────────────────────────────────────────────
   const message = (text: string, retry = false): void => {
@@ -639,7 +965,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       // entry it collected is a map this install already keeps.
       downloaded.clear();
       const kept = new Set<string>();
-      for (const key of browserInstall?.files.keys() ?? []) {
+      for (const key of browserInstalls[running]?.files.keys() ?? []) {
         if (!key.toLowerCase().startsWith("maps\\download\\")) continue;
         const last = key.split("\\").pop();
         if (last) kept.add(last.toLowerCase());
@@ -651,7 +977,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       }
       return;
     }
-    if (!install.valid) return;
+    if (!installs[running].valid) return;
     await Promise.all(loadedMaps.map(async (map) => {
       const name = safeMapName(map.fileName);
       if (!name) return;
@@ -665,12 +991,16 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
    *  A folder read through `<input webkitdirectory>` has no writer, so there the file is handed to
    *  the browser's own downloads instead. */
   const browserKeepMap = async (map: SiteMap, btn: GlueButton): Promise<void> => {
-    let folder = browserInstall;
-    if (!folder && browserHandle) {
+    let folder = browserInstalls[running];
+    const remembered = browserHandles[running];
+    if (!folder && remembered) {
       // A remembered folder may be re-opened from this click, which is also the gesture that
       // lets the browser ask for write access.
-      const allowed = (await browserHandle.requestPermission?.({ mode: "readwrite" })) ?? "granted";
-      if (allowed === "granted") folder = browserInstall = await readInstallDir(browserHandle);
+      const allowed = (await remembered.requestPermission?.({ mode: "readwrite" })) ?? "granted";
+      if (allowed === "granted") {
+        folder = await readInstallDir(remembered);
+        browserInstalls[running] = folder;
+      }
     }
     if (!folder) {
       showToast(t("home.pickFirst"));
@@ -734,7 +1064,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       await browserKeepMap(map, btn);
       return;
     }
-    if (!install.valid) {
+    if (!installs[running].valid) {
       showToast(t("home.pickFirst"));
       return;
     }
@@ -774,6 +1104,15 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       btn.setLabel(t("home.download"));
       showToast(t("home.mapFailed", { name: map.name, error: (err as Error).message }));
     }
+  };
+
+  // 支持版本：接口给数组；老版本接口没有该字段时按「两版都支持」处理。
+  const flavorsOf = (map: SiteMap): string => {
+    const list = map.flavors?.length ? map.flavors : ["sd", "hd"];
+    const sd = list.includes("sd");
+    const hd = list.includes("hd");
+    if (sd && hd) return t("home.flavorBoth");
+    return hd ? t("home.flavorHd") : t("home.flavorSd");
   };
 
   const card = (map: SiteMap): HTMLElement => {
@@ -816,7 +1155,9 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
 
     const meta = document.createElement("ul");
     meta.className = "home-map-card-meta";
-    const facts = [map.players, map.version, formatBytes(map.fileSize)].filter((v): v is string => !!v);
+    const facts = [flavorsOf(map), map.players, map.version, formatBytes(map.fileSize)].filter(
+      (v): v is string => !!v,
+    );
     for (const fact of facts) {
       const li = document.createElement("li");
       li.textContent = fact;
@@ -860,6 +1201,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   // once, then filters in place (60 maps at most), so typing never waits for a round trip.
   let filterQuery = "";
   let filterCategory = "";
+  let filterFlavor = "";
   const chipButtons: HTMLButtonElement[] = [];
   const chipsSpec: Array<[string, string]> = [
     ["", t("home.allCategories")],
@@ -883,6 +1225,32 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     chipButtons.push(chip);
     chips.append(chip);
   }
+
+  // 支持版本筛选：和分类一样在已加载的 60 张地图里就地过滤，不额外请求。
+  const flavorChips = document.createElement("div");
+  flavorChips.className = "home-map-chips home-map-chips--flavor";
+  flavorChips.setAttribute("role", "group");
+  flavorChips.setAttribute("aria-label", t("home.flavorsLabel"));
+  const flavorChipButtons: HTMLButtonElement[] = [];
+  const flavorSpec: Array<[string, string]> = [
+    ["", t("home.allFlavors")],
+    ["sd", t("home.flavorSd")],
+    ["hd", t("home.flavorHd")],
+  ];
+  for (const [key, label] of flavorSpec) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = `home-map-chip${key === "" ? " is-active" : ""}`;
+    chip.textContent = label;
+    chip.onclick = (): void => {
+      filterFlavor = key;
+      for (const [i, button] of flavorChipButtons.entries()) button.classList.toggle("is-active", flavorSpec[i][0] === key);
+      renderShelf();
+    };
+    flavorChipButtons.push(chip);
+    flavorChips.append(chip);
+  }
+  toolbar.append(flavorChips);
   searchBtn.addEventListener("click", (): void => {
     search.focus();
     search.select();
@@ -901,6 +1269,10 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     const needle = filterQuery.trim().toLowerCase();
     const visible = loadedMaps.filter((map) => {
       if (filterCategory && map.category !== filterCategory) return false;
+      if (filterFlavor) {
+        const flavors = map.flavors?.length ? map.flavors : ["sd", "hd"];
+        if (!flavors.includes(filterFlavor)) return false;
+      }
       if (!needle) return true;
       return [map.name, map.description, map.author ?? ""]
         .some((text) => text.toLowerCase().includes(needle));
@@ -1009,12 +1381,13 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   const refreshInstalled = async (): Promise<void> => {
     if (!native) {
       // The same walk the mount made — `Maps\Download\` as the picked folder gave it to us.
-      if (!browserInstall) {
+      const mounted = browserInstalls[running];
+      if (!mounted) {
         installedBody.replaceChildren(installedEmpty(t("home.pickFirst")));
         return;
       }
       const kept: DownloadedMap[] = [];
-      for (const [key, file] of browserInstall.files) {
+      for (const [key, file] of mounted.files) {
         if (!key.toLowerCase().startsWith("maps\\download\\")) continue;
         const name = key.split("\\").pop();
         if (!name || !/\.(w3m|w3x)$/i.test(name)) continue;
@@ -1025,7 +1398,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       );
       return;
     }
-    if (!install.valid) {
+    if (!installs[running].valid) {
       installedBody.replaceChildren(installedEmpty(t("home.pickFirst")));
       return;
     }
@@ -1072,6 +1445,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     if (map.author) rows.push(metaRow(t("home.author"), map.author));
     if (map.players) rows.push(metaRow(t("home.playersLabel"), map.players));
     if (map.version) rows.push(metaRow(t("home.versionLabel"), map.version));
+    rows.push(metaRow(t("home.flavorsLabel"), flavorsOf(map)));
     if (map.fileSize) rows.push(metaRow(t("home.sizeLabel"), formatBytes(map.fileSize)));
     rows.push(metaRow(t("home.updatedLabel"), formatDate(map.updatedAt)));
     detailMeta.replaceChildren(...rows);
@@ -1125,7 +1499,30 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   window.addEventListener("hashchange", route);
   route();
 
-  void refreshInstall();
+  void refreshInstall().then(async () => {
+    if (!isGamePage) return; // the launcher itself never enters a game
+    if (native) {
+      // A game window: the shell opened it for this line and autoplay is already allowed, so it
+      // starts without a press. The launcher's own rows are untouched — they open windows.
+      void startInThisPage(running);
+      return;
+    }
+    // A browser tab opened to play. The launcher settled the folder BEFORE opening this tab, and
+    // a handle's grant is per origin — so when it is still alive the tab starts on its own and
+    // the player gets the progress screen rather than a second button to press. Only a grant that
+    // has lapsed (a new browser session) needs the press, because asking needs a gesture.
+    const handle = browserHandles[running];
+    if (handle) {
+      const allowed = (await handle.queryPermission?.({ mode: "read" })) ?? "granted";
+      if (allowed === "granted") {
+        browserInstalls[running] = await readInstallDir(handle);
+        rememberInstallInfo(running, browserInstalls[running]);
+        void startInThisPage(running);
+        return;
+      }
+    }
+    setStatus(t("home.playHere", { line: lineName(running) }));
+  });
   void loadMaps();
 
   return {

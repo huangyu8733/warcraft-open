@@ -36,27 +36,7 @@ export function isBlte(bytes: Uint8Array): boolean {
  * something that identifies the file when you have it.
  */
 export function decodeBlte(bytes: Uint8Array, label = "blte"): Uint8Array {
-  if (!isBlte(bytes)) throw new Error(`${label}: not a BLTE payload`);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const headerSize = view.getUint32(4);
-
-  // headerSize 0 is the degenerate single-chunk form: no chunk table, the payload is
-  // everything after the 8-byte magic+size.
-  const chunks: Array<{ start: number; end: number }> = [];
-  if (headerSize === 0) {
-    chunks.push({ start: 8, end: bytes.length });
-  } else {
-    const count = (view.getUint8(9) << 16) | (view.getUint8(10) << 8) | view.getUint8(11);
-    let info = 12;
-    let data = headerSize; // chunk data begins where the header ends
-    for (let i = 0; i < count; i++) {
-      const compressed = view.getUint32(info);
-      info += CHUNK_INFO_SIZE;
-      chunks.push({ start: data, end: data + compressed });
-      data += compressed;
-    }
-  }
-
+  const chunks = chunkTable(bytes, label);
   const parts: Uint8Array[] = [];
   let total = 0;
   for (const { start, end } of chunks) {
@@ -64,8 +44,54 @@ export function decodeBlte(bytes: Uint8Array, label = "blte"): Uint8Array {
     parts.push(part);
     total += part.length;
   }
-  if (parts.length === 1) return parts[0];
+  return join(parts, total);
+}
 
+/**
+ * The same decode, but every zlib chunk goes through the platform's own inflater
+ * (`DecompressionStream`) instead of pako. The VFS' `read()` is async, and on a Reforged
+ * mount that is the path every model and texture takes: a melee map pulls ~800 DDS files
+ * (1–2 MB each, zlib-compressed) during its first minute, and pako inflating them on the
+ * main thread is exactly the "unaccounted" time the frame log shows between `render` and
+ * the next rAF. A DecompressionStream is implemented off the main thread by Chromium, and
+ * chunks are independent, so they are inflated in parallel.
+ *
+ * `decodeBlte` stays synchronous because `rawBytes()` is (vfs/types.ts) and MPQ/CASC table
+ * readers depend on that; this is only for callers that can await.
+ */
+export async function decodeBlteAsync(bytes: Uint8Array, label = "blte"): Promise<Uint8Array> {
+  const chunks = chunkTable(bytes, label);
+  const parts = await Promise.all(
+    chunks.map(({ start, end }) => decodeChunkAsync(bytes, start, end, label)),
+  );
+  return join(parts, parts.reduce((n, part) => n + part.length, 0));
+}
+
+/** The chunk table at the head of a BLTE payload (see the format note above). */
+function chunkTable(bytes: Uint8Array, label: string): Array<{ start: number; end: number }> {
+  if (!isBlte(bytes)) throw new Error(`${label}: not a BLTE payload`);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const headerSize = view.getUint32(4);
+
+  // headerSize 0 is the degenerate single-chunk form: no chunk table, the payload is
+  // everything after the 8-byte magic+size.
+  if (headerSize === 0) return [{ start: 8, end: bytes.length }];
+
+  const count = (view.getUint8(9) << 16) | (view.getUint8(10) << 8) | view.getUint8(11);
+  const chunks: Array<{ start: number; end: number }> = [];
+  let info = 12;
+  let data = headerSize; // chunk data begins where the header ends
+  for (let i = 0; i < count; i++) {
+    const compressed = view.getUint32(info);
+    info += CHUNK_INFO_SIZE;
+    chunks.push({ start: data, end: data + compressed });
+    data += compressed;
+  }
+  return chunks;
+}
+
+function join(parts: Uint8Array[], total: number): Uint8Array {
+  if (parts.length === 1) return parts[0];
   const out = new Uint8Array(total);
   let at = 0;
   for (const part of parts) {
@@ -94,5 +120,37 @@ function decodeChunk(bytes: Uint8Array, start: number, end: number, label: strin
       );
     default:
       throw new Error(`${label}: unknown BLTE chunk mode '${mode}'`);
+  }
+}
+
+async function decodeChunkAsync(bytes: Uint8Array, start: number, end: number, label: string): Promise<Uint8Array> {
+  const mode = String.fromCharCode(bytes[start]);
+  const body = bytes.subarray(start + 1, end);
+  switch (mode) {
+    case "N":
+      return body;
+    case "Z":
+      return inflateAsync(body);
+    case "F":
+      return decodeBlteAsync(body, label);
+    case "E":
+      throw new Error(
+        `${label}: BLTE chunk is encrypted ('E'). That only happens in a pre-release ` +
+          `build — a shipped Warcraft III install has none.`,
+      );
+    default:
+      throw new Error(`${label}: unknown BLTE chunk mode '${mode}'`);
+  }
+}
+
+/** zlib through the platform, with pako as the fallback for a runtime (or a store that wraps
+ *  the stream in a way Chromium refuses) that has no DecompressionStream. */
+async function inflateAsync(body: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream === "undefined") return inflate(body);
+  try {
+    const stream = new Blob([body as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    return inflate(body);
   }
 }

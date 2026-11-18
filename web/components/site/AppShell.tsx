@@ -7,6 +7,7 @@ import type { Messages } from "@/i18n/dictionaries/zh";
 import type { Locale } from "@/i18n/config";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { SiteNav } from "./SiteNav";
+import { BrowserGestureHelp } from "./BrowserGestureHelp";
 
 /** 前台的应用外壳：顶栏 + 侧边导航 + 内容区，桌面像软件窗口，移动端折叠侧栏。 */
 export function AppShell({
@@ -50,9 +51,12 @@ export function AppShell({
           ))}
         </nav>
         <div className="app-topbar__actions">
-          <a className="topbar-play" href="/play/" title={dict.downloads.playInBrowserHint}>
-            {dict.downloads.playInBrowser}
-          </a>
+          <div className="topbar-play-group">
+            <a className="topbar-play" href="/play/" title={dict.downloads.playInBrowserHint}>
+              {dict.downloads.playOnline}
+            </a>
+            <BrowserGestureHelp dict={dict} />
+          </div>
           <LanguageSwitcher locale={locale} locales={locales} />
           <a
             className="resource"

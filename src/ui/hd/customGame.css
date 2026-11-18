@@ -1,0 +1,595 @@
+.hd-official .GameLobby-Player-Team{width:100%}
+.hd-official .GameLobby-Player-Team,
+.hd-official .GameLobby-Player-Team .GameLobbyDropdown-Selected-Item{border-image:url(Widgets/Buttons/war3_btn_small_blue_normal_4k.png) 39% 33% fill repeat;border-image-width:28px 25px}
+.hd-official .GameLobby-Player-Team .GameLobbyDropdown-Selected-Item:hover{border-image-source:url(Widgets/Buttons/war3_btn_small_blue_hover_4k.png)}
+.hd-official .GameLobby-Player-Team .GameLobbyDropdown-Selected-Item:active{border-image-source:url(Widgets/Buttons/war3_btn_small_blue_pressed_4k.png)}
+.hd-official .GameLobby-Player-Team .GameLobbyDropdown-Selected-Item:active:before,
+.hd-official .GameLobby-Player-Team .GameLobbyDropdown-Selected-Item:hover:before{background-image:unset}
+.hd-official .GameLobby-Player-Team.isDisabled .GameLobbyDropdown-Selected-Item{border-image-source:url(Widgets/Buttons/war3_btn_small_non-interactable_4k.png);pointer-events:none}
+.hd-official .GameLobby-PlayerName{display:flex;align-items:center;height:100%;width:100%;padding-left:13px;padding-right:8px;font-family:var(--game-font);font-variant:small-caps;letter-spacing:.08em;color:#e6e6e6;text-shadow:0 2px 1px #000}
+.hd-official .GameLobby-PlayerName.isSelf{color:#ccc8b8}
+.hd-official .GameLobby-PlayerHandicap,
+.hd-official .GameLobby-PlayerRace{width:100%}
+.hd-official .Handicap-Wrapper .GameLobbyDropdown{letter-spacing:0}
+.hd-official .Handicap-Wrapper .Tooltip{max-width:250px;left:unset;right:150px;top:40px;text-align:center;font-variant:normal}
+.hd-official .Handicap-Wrapper .Tooltip-Item{color:#e6e6e6;font-size:15px;line-height:1.3;letter-spacing:.1em}
+.hd-official .Handicap-Wrapper .Tooltip-Item-Label{font-family:var(--game-font);font-size:18px;text-transform:uppercase;color:#e6e6e6;margin-bottom:5px}
+.hd-official .GameLobby-Player-Color{width:100%}
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Selected-Item{border-image:url(Widgets/Buttons/war3_btn_small_blue_normal_4k.png) 55 50 fill repeat;border-image-width:28px 25px;padding:0;justify-content:center}
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Selected-Item:before{right:10px}
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Selected-Item:hover{border-image-source:url(Widgets/Buttons/war3_btn_small_blue_hover_4k.png)}
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Selected-Item:hover .GameLobby-ColorDropdownItem{border-image-source:url(Widgets/PlayerWidget/player-color-frame-hover.png);border-image-width:5px}
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Selected-Item:active{border-image-source:url(Widgets/Buttons/war3_btn_small_blue_pressed_4k.png)}
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Selected-Item:active .GameLobby-ColorDropdownItem{background:linear-gradient(0deg,rgba(0,0,0,.6),rgba(0,0,0,.7));border-image-source:url(Widgets/PlayerWidget/player-color-frame-pressed.png)}
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Selected-Item:active:before,
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Selected-Item:hover:before{background-image:unset}
+.hd-official .GameLobby-Player-Color .GameLobbyDropdown-Options .GameLobby-Color{padding:0}
+.hd-official .GameLobby-Player-Color.isDisabled .GameLobbyDropdown-Selected-Item{border-image-source:url(Widgets/Buttons/war3_btn_small_non-interactable_4k.png);pointer-events:none}
+.hd-official .GameLobby-Player-Color.isOpen .GameLobbyDropdown-Options{display:flex!important;flex-wrap:wrap;width:252px;padding:10px}
+.hd-official .GameLobby-Player-Color.isOpen .GameLobbyDropdown-Options>div,
+.hd-official .GameLobby-Player-Color.isOpen .GameLobbyDropdown-Options>div:active,
+.hd-official .GameLobby-Player-Color.isOpen .GameLobbyDropdown-Options>div:hover{background-color:none;border:none}
+.hd-official .GameLobby-PlayerMenu,
+.hd-official .GameLobby-PlayerMenu-Interactable{display:flex;pointer-events:auto;justify-content:center;align-items:center;height:100%;border-image:url("Widgets/Buttons/wc3_btn_blue_normal_4k.png") 50 110 fill repeat;border-image-width:25px 55px;z-index:1;flex:1;width:100%;overflow:hidden}
+.hd-official .GameLobby-PlayerMenu-Interactable.isDisabled,
+.hd-official .GameLobby-PlayerMenu.isDisabled{border-image-source:url(Widgets/Buttons/wc3_btn_non-interactable_4k.png);pointer-events:none}
+.hd-official .GameLobby-PlayerMenu-Interactable .nameTag,
+.hd-official .GameLobby-PlayerMenu .nameTag{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+.hd-official .GameLobby-PlayerMenu-Interactable .Tooltip,
+.hd-official .GameLobby-PlayerMenu .Tooltip{top:-20px;left:100%;right:-250px}
+.hd-official .GameLobby-PlayerMenu-Interactable .Tooltip .Whisper-Tooltip,
+.hd-official .GameLobby-PlayerMenu .Tooltip .Whisper-Tooltip{width:225px;display:block;white-space:normal}
+.hd-official .GameLobby-PlayerName-Observer{border-image-source:url(Widgets/Buttons/wc3_btn_non-interactable_4k.png)}
+.hd-official .GameLobby-PlayerName-Observer .GameLobby-PlayerName{color:#666}
+.hd-official .GameLobby-PlayerMenu-Interactable{position:relative;z-index:auto}
+.hd-official .GameLobby-PlayerMenu-Interactable:hover{border-image-source:url(Widgets/Buttons/wc3_btn_blue_hover_4k.png)}
+.hd-official .GameLobby-PlayerMenu-Interactable-Pressed,
+.hd-official .GameLobby-PlayerMenu-Interactable-Pressed:active,
+.hd-official .GameLobby-PlayerMenu-Interactable-Pressed:hover,
+.hd-official .GameLobby-PlayerMenu-Interactable:active{border-image-source:url(Widgets/Buttons/wc3_btn_blue_down_4k.png)}
+.hd-official .GameLobby-EmptyRow{display:flex;flex-direction:row;padding:2px 7px 7px;border-image:url(Widgets/Buttons/wc3_btn_frame_4k.png) 60 100 fill repeat round;border-image-width:12px 36px}
+.hd-official .GameLobby-EmptyRow-AddButton,
+.hd-official .GameLobby-EmptyRow-Button{display:flex;align-items:center;justify-content:center;position:relative;width:100%;height:36px;border-image:url("Widgets/Buttons/wc3_btn_blue_normal_4k.png") 50 110 fill repeat;border-image-width:25px 55px;font-size:18px;letter-spacing:.08em;text-transform:uppercase;font-family:var(--game-font);color:#e6e6e6;text-shadow:0 2px 2px #000}
+.hd-official .GameLobby-EmptyRow-AddButton div,
+.hd-official .GameLobby-EmptyRow-Button div{font-family:var(--game-font)}
+.hd-official .GameLobby-EmptyRow-AddButton:hover,
+.hd-official .GameLobby-EmptyRow-Button:hover{border-image-source:url(Widgets/Buttons/wc3_btn_blue_hover_4k.png);color:#e6e6e6}
+.hd-official .GameLobby-EmptyRow-AddButton:active,
+.hd-official .GameLobby-EmptyRow-Button:active{padding-top:2px;border-image-source:url(Widgets/Buttons/wc3_btn_blue_down_4k.png);color:#e6e6e6}
+.hd-official .GameLobby-EmptyRow-AddButton-Pressed,
+.hd-official .GameLobby-EmptyRow-AddButton-Pressed:active,
+.hd-official .GameLobby-EmptyRow-AddButton-Pressed:hover{border-image-source:url(Widgets/Buttons/wc3_btn_blue_normal_4k.png);color:#e6e6e6}
+.hd-official .GameLobby-EmptyRow-AddButton-Disabled,
+.hd-official .GameLobby-EmptyRow-AddButton-Disabled:active,
+.hd-official .GameLobby-EmptyRow-AddButton-Disabled:hover{border-image-source:url("Widgets/Buttons/wc3_btn_disabled_normal_4k.png");color:#666}
+.hd-official .GameLobby-EmptyRow-Button,
+.hd-official .GameLobby-EmptyRow-Button:active,
+.hd-official .GameLobby-EmptyRow-Button:hover{border-image-source:url(Widgets/Buttons/wc3_btn_non-interactable_4k.png);color:#666}
+.hd-official .GameLobby-EmptyRow-Button.isSlotClosed,
+.hd-official .GameLobby-EmptyRow-Button.isSlotClosed:active,
+.hd-official .GameLobby-EmptyRow-Button.isSlotClosed:hover{border-image-source:url(Widgets/Buttons/wc3_btn_disabled_normal_4k.png);color:#666}
+.hd-official .GameLobbyDropdown{font-size:18px;font-variant:small-caps;text-transform:none;line-height:.9;letter-spacing:.1em;display:flex;flex-direction:row;align-items:center;height:44px;width:calc(100% + 7px);padding:2px 9px 8px 7px;border-image:url(Widgets/Buttons/wc3_btn_frame_4k.png) 60 100 fill repeat round;border-image-width:12px 36px}
+.hd-official .GameLobbyDropdown.isOpen .GameLobbyDropdown-Options{display:block}
+.hd-official .GameLobbyDropdown.isDisabled .GameLobbyDropdown-Selected-Item,
+.hd-official .GameLobbyDropdown.isDisabled .GameLobbyDropdown-Selected-Item:active,
+.hd-official .GameLobbyDropdown.isDisabled .GameLobbyDropdown-Selected-Item:hover{pointer-events:none;border-image-source:url("Widgets/Buttons/wc3_btn_non-interactable_4k.png")}
+.hd-official .GameLobbyDropdown-MultiHolder{display:flex;flex-direction:row;align-items:center;height:44px;width:calc(100% + 7px);padding:2px 2px 10px 4px;border-image:url(Widgets/Buttons/wc3_btn_frame_4k.png) 60 100 fill repeat round;border-image-width:12px 36px}
+.hd-official .GameLobbyDropdown-MultiHolder .GameLobbyDropdown{border-image:unset;margin-top:-1px;height:45px;align-self:flex-start;width:calc(50% - 3px);padding:2px 2px 10px 3px}
+.hd-official .GameLobbyDropdown-MultiHolder .GameLobby-PlayerRow-Divider{position:absolute;margin-left:48px}
+.hd-official .GameLobbyDropdown-MultiHolder .GameLobbyDropdown-Selected-Item{width:100%;height:100%;display:flex;align-items:center;position:relative;color:#e6e6e6;border-image:url("Widgets/Buttons/wc3_btn_blue_normal_4k.png") 50 110 fill repeat;border-image-width:25px 55px}
+.hd-official .GameLobbyDropdown-MultiHolder .GameLobbyDropdown-Selected-Item:before{content:"";width:20px;height:20px;position:absolute;right:12px;background-size:contain;background-image:unset}
+.hd-official .GameLobbyDropdown-MultiHolder .GameLobbyDropdown-Selected-Item:hover{color:#e6e6e6;border-image-source:url("Widgets/Buttons/wc3_btn_blue_hover_4k.png")}
+.hd-official .GameLobbyDropdown-MultiHolder .GameLobbyDropdown-Selected-Item:active{color:#e6e6e6;border-image-source:url("Widgets/Buttons/wc3_btn_blue_down_4k.png")}
+.hd-official .GameLobbyDropdown-Selected-Item{padding-left:12px;width:100%;height:100%;display:flex;align-items:center;position:relative;color:#e6e6e6;border-image:url("Widgets/Buttons/wc3_btn_blue_normal_4k.png") 50 110 fill repeat;border-image-width:25px 55px}
+.hd-official .GameLobbyDropdown-Selected-Item:before{content:"";width:20px;height:20px;position:absolute;right:12px}
+.hd-official .GameLobbyDropdown-Selected-Item:hover{color:#e6e6e6;border-image-source:url("Widgets/Buttons/wc3_btn_blue_hover_4k.png")}
+.hd-official .GameLobbyDropdown-Selected-Item:hover:before{background-image:url(Icons/chevron-up-icon-pressed.png)}
+.hd-official .GameLobbyDropdown-Selected-Item:active{color:#e6e6e6;border-image-source:url("Widgets/Buttons/wc3_btn_blue_down_4k.png")}
+.hd-official .GameLobbyDropdown-Selected-Item:active:before{background-image:url(Icons/chevron-up-icon-pressed.png)}
+.hd-official .GameLobbyDropdown-Options{display:none;position:absolute;top:40px;left:0;border-image:url(Widgets/PopupMenu/popup-menu-frame.png) 27 fill repeat;border-image-width:27px;z-index:10}
+.hd-official .GameLobbyDropdown-Options>div{padding:10px 15px;margin:5px;color:#fff5cc;border:2px solid transparent;text-align:center}
+.hd-official .GameLobbyDropdown-Options>div:hover{color:#fffae5;background-color:rgba(3,45,125,.8);border:2px solid #00349a}
+.hd-official .GameLobbyDropdown-Options>div:active{color:#ccc4a3;background-color:#00349a;border:2px solid #00349a}
+.hd-official .GameLobby-Player-Team{width:66px}
+.hd-official .GameLobby-PlayerName{display:flex;align-items:center;height:100%;width:268px;padding-left:13px;font-family:var(--game-font);font-variant:small-caps;letter-spacing:.08em;color:#ffd428;text-shadow:0 2px 1px #000}
+.hd-official .GameLobby-PlayerRace{width:230px}
+.hd-official .GameLobby-PlayerHandicap{width:96px}
+.hd-official .Handicap-Wrapper .Tooltip{max-width:250px;left:unset;right:100px;top:0;text-align:center;font-variant:normal}
+.hd-official .Handicap-Wrapper .Tooltip-Item-Label{font-family:var(--game-font);font-size:18px;text-transform:uppercase;color:#ffd428;margin-bottom:5px}
+.hd-official .GameLobby-Player-Color{width:40px}
+.hd-official .GameLobby-PlayerMenu,
+.hd-official .GameLobby-PlayerMenu-Interactable{display:flex;pointer-events:auto;justify-content:center;align-items:center;height:100%;border-image:url("Widgets/Buttons/wc3_btn_blue_normal_4k.png") 50 110 fill repeat;border-image-width:25px 55px;z-index:1;flex:1}
+.hd-official .GameLobby-PlayerMenu-Interactable .nameTag,
+.hd-official .GameLobby-PlayerMenu .nameTag{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hd-official .GameLobby-EmptyRow{display:flex;flex-direction:row;margin-bottom:1px}
+.hd-official .GameLobby-EmptyRow-AddButton,
+.hd-official .GameLobby-EmptyRow-Button{display:flex;align-items:center;justify-content:center;position:relative;width:100%;height:40px;border-image:url("Widgets/Buttons/wc3_btn_blue_normal_4k.png") 50 110 fill repeat;border-image-width:25px 55px;font-size:18px;letter-spacing:.08em;text-transform:uppercase;font-family:var(--game-font);color:#ffd428;text-shadow:0 2px 2px #000}
+.hd-official .GameLobby-EmptyRow-AddButton:hover,
+.hd-official .GameLobby-EmptyRow-Button:hover{border-image-source:url(Widgets/Buttons/wc3_btn_blue_hover_4k.png);color:#fd3}
+.hd-official .GameLobby-EmptyRow-AddButton:active,
+.hd-official .GameLobby-EmptyRow-Button:active{padding-top:2px;border-image-source:url(Widgets/Buttons/wc3_btn_blue_down_4k.png);color:#b59513}
+.hd-official .GameLobby-EmptyRow-AddButton-Pressed,
+.hd-official .GameLobby-EmptyRow-AddButton-Pressed:active,
+.hd-official .GameLobby-EmptyRow-AddButton-Pressed:hover{border-image-source:url(Widgets/Buttons/wc3_btn_blue_normal_4k.png);color:#ffd428}
+.hd-official .GameLobbyDropdown{font-size:18px;font-variant:small-caps;text-transform:none;line-height:.9;letter-spacing:.1em;display:flex;flex-direction:row;align-items:center;height:40px;text-shadow:0 2px 4px rgba(0,0,0,.8);position:relative}
+.hd-official .GameLobbyDropdown-Selected-Item{padding-left:12px;width:100%;height:100%;display:flex;align-items:center;position:relative;color:#ffd428;border-image:url("Widgets/Buttons/wc3_btn_blue_normal_4k.png") 50 110 fill repeat;border-image-width:25px 55px}
+.hd-official .GameLobbyDropdown-Selected-Item:before{content:"";width:20px;height:20px;position:absolute;right:12px;background-size:contain}
+.hd-official .GameLobbyDropdown-Selected-Item:hover{color:#fd3;border-image-source:url("Widgets/Buttons/wc3_btn_blue_hover_4k.png")}
+.hd-official .GameLobbyDropdown-Selected-Item:active{color:#b59513;border-image-source:url("Widgets/Buttons/wc3_btn_blue_down_4k.png")}
+.hd-official .GameLobbyDropdown.fk .GameLobbyDropdown-Selected-Item{border-image:url("Widgets/Buttons/wc3_btn_green_normal_FK_4k.png") 50 110 fill repeat;border-image-width:25px 55px}
+.hd-official .GameLobbyDropdown.fk .GameLobbyDropdown-Selected-Item:hover{border-image-source:url("Widgets/Buttons/wc3_btn_green_FK_hover_4k.png")}
+.hd-official .GameLobbyDropdown.fk .GameLobbyDropdown-Selected-Item:active{border-image-source:url("Widgets/Buttons/wc3_btn_green_down_FK_4k.png")}
+.hd-official .GameLobbyDropdown.fk .GameLobbyDropdown-Options>div:active,
+.hd-official .GameLobbyDropdown.fk .GameLobbyDropdown-Options>div:hover{background-color:#00371ccc;border:2px solid #005b2c}
+.hd-official .GameLobbyDropdown.fk .GameLobby-PlayerMenu,
+.hd-official .GameLobbyDropdown.fk .GameLobby-PlayerMenu-Interactable{border-image:url("Widgets/Buttons/wc3_btn_green_normal_FK_4k.png") 50 110 fill repeat;border-image-width:25px 55px}
+.hd-official .GameLobbyDropdown.fk .GameLobby-PlayerMenu-Interactable:hover,
+.hd-official .GameLobbyDropdown.fk .GameLobby-PlayerMenu:hover{border-image-source:url(Widgets/Buttons/wc3_btn_green_FK_hover_4k.png)}
+.hd-official .GameLobbyDropdown.fk .GameLobby-PlayerMenu-Interactable.isDisabled,
+.hd-official .GameLobbyDropdown.fk .GameLobby-PlayerMenu.isDisabled{border-image-source:url(Widgets/Buttons/wc3_btn_green_disabled_FK_4k.png)}
+.hd-official .GameLobby-ColorDropdownItem{display:flex;justify-content:center;align-items:center;width:28px;height:28px;border-radius:8px;box-shadow:0 2px 4px #000;background:linear-gradient(0deg,rgba(0,0,0,.6),rgba(0,0,0,.06));border-image:url(Widgets/PlayerWidget/player-color-frame.png) 5 fill repeat;border-image-width:5px}
+.hd-official .GameLobby-ColorDropdownItem:hover{border-image-source:url(Widgets/PlayerWidget/player-color-frame-hover.png);border-image-width:5px}
+.hd-official .GameLobby-ColorDropdownItem:active{background:linear-gradient(0deg,rgba(0,0,0,.6),rgba(0,0,0,.7));border-image-source:url(Widgets/PlayerWidget/player-color-frame-pressed.png)}
+.hd-official .Checkbox{display:flex;flex-direction:row;color:#e6e6e6;font-size:18px;text-transform:none;line-height:.9;letter-spacing:.1em;font-variant:small-caps}
+.hd-official .Checkbox.Checkbox-Disabled{color:grey}
+.hd-official .Checkbox.Checkbox-Disabled .Checkbox-Button-Unchecked{background-image:url("Icons/checkbox-background-disabled.png");background-size:cover}
+.hd-official .Checkbox.Checkbox-Disabled .Checkbox-Button-Checked{background-image:url("Icons/checked-checkbox-background-disabled.png");background-size:cover}
+.hd-official .Checkbox-Container{display:flex}
+.hd-official .Checkbox-Button-Unchecked{width:36px;height:36px;background-image:url("Icons/checkbox-background.png");background-size:cover}
+.hd-official .Checkbox-Button-Unchecked:hover{background-image:url("Icons/checkbox-background-hover.png")}
+.hd-official .Checkbox-Button-Checked{width:36px;height:36px;background-image:url("Icons/checked-checkbox-background.png");background-size:cover}
+.hd-official .Checkbox-Button-Checked:hover{background-image:url("Icons/checked-checkbox-background-hover.png")}
+.hd-official .Checkbox-Label{display:flex;align-items:center;max-width:400px;margin-left:12px}
+/*
+ * The Custom Game flow of 3.0: the CREATE GAME page (`SPCreateGame` + `CustomGamesCreate`) and
+ * the single-player lobby (`GameLobby`). The rules above this file's additions are copied from
+ * `WebUI\GlueManager.js` (dropdowns, checkboxes, the search field and the blue button); the
+ * additions below place them in this client's screen skeleton and borrow the list-screen frame
+ * already carried by `official.css`.
+ */
+
+/* ---------------------------------------------------------------- CREATE GAME */
+
+/* SPCreateGame's grid: a 73px title band and the section below it. The list screen's third
+ * row is its button strip; this page carries its action in the right column instead. */
+.hd-official .CustomGames-LeftPanel-Grid.Official-CreateGrid {
+  grid-template-rows: 73px minmax(0, 1fr);
+  grid-gap: 8px;
+  padding: 32px 14px 28px 32px;
+}
+
+/* 3.0's MatchLobby/SPCreateGame frame: the thick, dark border and no wood inside. The black
+ * plate under it lets the menu's backdrop through, which is what the reference shows. */
+.hd-official .Official-MatchFrame .frame,
+.hd-official .Official-MatchFrame .frame.tft {
+  border-image-width: 88px 178px;
+  border-image-slice: 241 375 fill;
+}
+
+.hd-official .Official-MatchFrame .background-texture { display: none; }
+
+/* The title band is the sheet's header texture alone, which is near-black at 73px. */
+.hd-official .Official-UpperLeftSection.Official-MatchHeader {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background-image: url(BaseFrames/header-woodtexture.png);
+  background-size: 100% 210px;
+  background-repeat: no-repeat;
+  background-color: transparent;
+}
+
+.hd-official .tft .Official-UpperLeftSection.Official-MatchHeader {
+  background-image: url(BaseFrames/tft_header-woodtexture.png);
+}
+
+.hd-official .Official-MatchHeader .Simple-Header-Title { padding-top: 12px; }
+
+/* The metal rule the reference draws under the title band. */
+.hd-official .Official-MatchHeader::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -5px;
+  height: 6px;
+  background: linear-gradient(180deg, #080808, #55524a 45%, #0a0a0a);
+  box-shadow: 0 0 0 2px #000;
+  pointer-events: none;
+}
+
+.hd-official .Official-CreateBody {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  z-index: 3;
+}
+
+.hd-official .Official-CreateOptions {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 50%;
+  height: 100%;
+  min-height: 0;
+  padding: 20px 26px 24px 24px;
+  z-index: 6;
+}
+
+/* The reference's divider is the sheet's thick riveted metal band between the two columns.
+ * This install does not ship that file, so the same band is drawn with the frame's palette:
+ * a dark rail, a gold rivet every 74px, and a cap at each end. */
+.hd-official .Official-CreateBody .Vertical-Divider {
+  position: absolute;
+  top: -10px;
+  bottom: -10px;
+  left: calc(50% - 9px);
+  width: 18px;
+  background:
+    radial-gradient(circle at 50% 18px, #9a8757 0 2.5px, #2b2417 3.5px 5px, transparent 5.5px) 0 0 / 18px 74px repeat-y,
+    linear-gradient(90deg, #0a0a0a, #4d4a40 30%, #22221e 55%, #4d4a40 75%, #0a0a0a);
+  box-shadow: 0 0 0 2px #000, 0 0 14px rgba(120, 255, 170, 0.12);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hd-official .Official-CreateBody .Vertical-Divider::before,
+.hd-official .Official-CreateBody .Vertical-Divider::after {
+  content: "";
+  position: absolute;
+  left: -11px;
+  width: 40px;
+  height: 18px;
+  border: 2px solid #000;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #0a0a0a, #5a564b 45%, #1a1a16);
+}
+
+.hd-official .Official-CreateBody .Vertical-Divider::before { top: 0; }
+.hd-official .Official-CreateBody .Vertical-Divider::after { bottom: 0; }
+
+.hd-official .Official-CreateListPane {
+  display: flex;
+  flex-direction: column;
+  width: calc(50% - 9px);
+  height: 100%;
+  min-height: 0;
+  padding: 16px 10px 18px 18px;
+  z-index: 6;
+}
+
+.hd-official .Official-CreateListPane .Official-List {
+  height: 100%;
+  padding: 0 6px 40px 0;
+  flex: 1;
+}
+
+/* The right column wears its own, lighter metal frame. The 480px plate is too narrow for the
+ * left column's 178px border-image, so the same sheet's button frame draws it. */
+.hd-official .Official-MatchSide {
+  position: relative;
+  padding: 26px 22px 12px;
+}
+
+.hd-official .Official-MatchSide > .Official-BaseFrame .frame,
+.hd-official .Official-MatchSide > .Official-BaseFrame .frame.tft {
+  border-image: url(BaseFrames/war3_metal_frame_4k.png) 600 600 600 600 fill repeat;
+  border-image-width: 42px 60px;
+  border-image-slice: 241 375 fill;
+}
+
+.hd-official .Official-MatchSide > .Official-BaseFrame .frame.tft {
+  border-image-source: url(BaseFrames/tft_war3_metal_frame_4k.png);
+}
+
+.hd-official .Official-MatchSide > .Official-Background {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+.hd-official .Official-SideInner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  z-index: 6;
+}
+
+.hd-official .Official-MatchSide .Official-PreviewFrame {
+  width: 100%;
+  height: 360px;
+  padding: 18px;
+}
+
+.hd-official .Official-MatchSide .Official-PreviewImage {
+  width: 100%;
+  height: 100%;
+  margin-top: 0;
+}
+
+.hd-official .Official-MatchSide .Official-PreviewHeader {
+  width: 100%;
+  max-width: 100%;
+}
+
+.hd-official .Official-MatchSide .Official-MapName { max-width: 340px; }
+.hd-official .Official-MatchSide .Official-Options { width: 100%; }
+.hd-official .Official-MatchSide .Official-ActionButton { margin-top: 6px; margin-bottom: 8px; }
+
+.hd-official .Official-OptionLabel {
+  margin: 0 0 8px;
+  font-family: var(--game-font);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ccc9b8;
+  text-shadow: 0 1px 1px #000;
+}
+
+.hd-official .Official-OptionBlock { margin-bottom: 18px; }
+.hd-official .Official-OptionBlock:last-child { margin-bottom: 0; }
+
+/* The game-speed slider: the sheet's own three rungs over a dark rail, with the blue glass
+ * thumb the 3.0 options sheet uses. */
+.hd-official .Official-Slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 24px;
+  margin: 2px 0 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.hd-official .Official-Slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border: 1px solid #000;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #0c0c0c, #3d3d3d 55%, #111);
+  box-shadow: inset 0 1px 2px #000;
+}
+
+.hd-official .Official-Slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px;
+  height: 24px;
+  margin-top: -10px;
+  border: 2px solid #08243a;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #b7efff, #2aa6e6 55%, #0b4a78);
+  box-shadow: 0 0 7px rgba(90, 205, 255, 0.75), 0 2px 3px #000;
+}
+
+.hd-official .Official-Slider::-moz-range-track {
+  height: 6px;
+  border: 1px solid #000;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #0c0c0c, #3d3d3d 55%, #111);
+}
+
+.hd-official .Official-Slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #08243a;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #b7efff, #2aa6e6 55%, #0b4a78);
+}
+
+.hd-official .Official-SliderLabels {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  color: #ccc9b8;
+  text-shadow: 0 1px 1px #000;
+}
+
+/* The five Advanced Options checkboxes. */
+.hd-official .Official-AdvancedList {
+  display: flex;
+  flex-direction: column;
+  padding-left: 10px;
+}
+
+.hd-official .Official-AdvancedList .Checkbox {
+  margin: 2px 0;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+}
+
+.hd-official .Official-AdvancedList .Checkbox-Label { margin-left: 10px; }
+.hd-official .Official-AdvancedList .Checkbox-Button-Checked,
+.hd-official .Official-AdvancedList .Checkbox-Button-Unchecked { width: 28px; height: 28px; }
+
+/* OBSERVERS and VISIBILITY sit side by side under the checkboxes. */
+.hd-official .Official-OptionRow {
+  display: flex;
+  flex-direction: row;
+  gap: 28px;
+  width: 100%;
+}
+
+.hd-official .Official-OptionColumn { flex: 1; min-width: 0; }
+
+.hd-official .GameLobbyDropdown.Official-Select {
+  position: relative;
+  width: 100%;
+  height: 38px;
+  padding: 2px 9px 6px;
+  font-size: 15px;
+}
+
+.hd-official .GameLobbyDropdown.Official-Select .GameLobbyDropdown-Selected-Item { padding-left: 10px; }
+.hd-official .GameLobbyDropdown.Official-Select .GameLobbyDropdown-Options { top: 38px; }
+.hd-official .GameLobbyDropdown.Official-Select .GameLobbyDropdown-Options > div { padding: 8px 12px; font-size: 15px; }
+
+/* A row whose seat is Open/Closed shows its race and handicap as unpressable plates. */
+.hd-official .GameLobby-PlayerRace.isDisabled .GameLobbyDropdown-Selected-Item,
+.hd-official .GameLobby-PlayerHandicap.isDisabled .GameLobbyDropdown-Selected-Item {
+  border-image-source: url(Widgets/Buttons/war3_btn_small_non-interactable_4k.png);
+  pointer-events: none;
+}
+
+.hd-official .GameLobbyDropdown-Options > div.isSelected { color: #ffd428; }
+
+/* ---------------------------------------------------------------- lobby page */
+
+.hd-official .Official-LobbyBody {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 18px 8px 30px;
+  overflow-y: auto;
+  z-index: 6;
+  scrollbar-width: thin;
+  scrollbar-color: #6a5a33 transparent;
+}
+
+.hd-official .Official-LobbyTeams {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;
+  width: 100%;
+}
+
+.hd-official .Official-TeamColumn { flex: 1 1 50%; min-width: 0; }
+
+.hd-official .Official-TeamName {
+  margin: 24px 0 8px 4px;
+  font-family: var(--game-font);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #e6e6e6;
+  text-shadow: 0 2px 2px #000;
+}
+
+.hd-official .Official-LobbyRow {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 160px 108px;
+  align-items: center;
+  width: 100%;
+  height: 48px;
+  margin-bottom: 4px;
+  color: #e6e6e6;
+  font-size: 17px;
+}
+
+.hd-official .Official-LobbyRow .GameLobbyDropdown-MultiHolder { height: 44px; }
+
+/* The colour plate inside the row's colour button. */
+.hd-official .Official-LobbyRow .GameLobby-ColorDropdownItem {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+/* The action button in the right column (CREATE / START GAME). */
+.hd-official .Official-ActionButton .Primary-Button-Blue {
+  color: #ffd428;
+  text-shadow: 0 2px 2px #000;
+}
+
+/* The lobby's preview is shorter than the list screens' — the summary under it carries more. */
+.hd-official .Official-PreviewFrame.Official-PreviewFrame-Lobby {
+  width: 100%;
+  height: 330px;
+  padding: 22px 24px 28px;
+}
+
+.hd-official .Official-PreviewFrame.Official-PreviewFrame-Lobby .Official-PreviewImage {
+  width: 100%;
+  height: 100%;
+  margin-top: 0;
+}
+
+.hd-official .Official-LobbySummary { margin-top: 10px; }
+
+.hd-official .Official-LobbySummary .Official-SettingsRow { margin-bottom: 4px; }
+
+.hd-official .Official-LobbySummary .Official-SettingsLabel {
+  font-size: 14px;
+  color: #ffd428;
+}
+
+.hd-official .Official-LobbySummary .Official-SettingsValue { font-size: 14px; }
+
+/* The search field draws itself over the input, so the ornament must not swallow the click. */
+.hd-official .SearchInput-Overlay { pointer-events: none; }
+.hd-official .BaseThreeDivScreen .GridContainer-WoodBG .Simple-Header-Title{justify-content:center;padding-top:0;text-shadow:0 0 5px #000}
+.hd-official .TournamentsMain .GridContainer-WoodBG .Simple-Header-Title{justify-content:center;padding-top:0;text-shadow:0 0 5px #000}
+.hd-official .TournamentsMain .Tournaments-Party-Header .Simple-Header-Title{justify-content:center;padding-top:0;text-shadow:0 0 5px #000}
+.hd-official .TournamentsMain .Tournaments-Upcoming-Header .Simple-Header-Title{justify-content:center;padding-top:0;text-shadow:0 0 5px #000}
+.hd-official .TournamentsMain .Tournament-Right-Panel-Header .Simple-Header-Title{justify-content:center;padding-top:0;text-shadow:0 0 5px #000}
+.hd-official .CustomGames .CustomGames-LeftPanel-Grid .CustomGames-UpperLeftSection .Simple-Header-TitleSubText{margin-left:3px}
+.hd-official .CustomGames .CustomGames-LeftPanel-Grid .CustomGames-UpperLeftSection .Simple-Header-Title{padding-top:18px}
+.hd-official .CustomGames .CustomGames-LeftPanel-Grid .CustomGames-UpperLeftSection .Simple-Header-Listing-SearchSection{margin-top:18px}
+.hd-official .Versus-Setup .GridContainer-WoodBG .Simple-Header-Title{justify-content:center;padding-top:0;text-shadow:0 0 5px #000}
+.hd-official .Versus-Setup .Versus-Setup-Party-Header .Simple-Header-Title{justify-content:center;padding-top:0;text-shadow:0 0 5px #000}
+.hd-official .Versus-Setup .Versus-Setup-Map-Veto-Header .Simple-Header-Title{justify-content:center;padding-top:0;text-shadow:0 0 5px #000}
+.hd-official .MatchLobby .MatchLobby-LeftPanel-Grid-MP .SPCreateGame-UpperLeftSection .Simple-Header-TitleSubText,
+.hd-official .MatchLobby .MatchLobby-LeftPanel-Grid-Small .SPCreateGame-UpperLeftSection .Simple-Header-TitleSubText,
+.hd-official .MatchLobby .MatchLobby-LeftPanel-Grid .SPCreateGame-UpperLeftSection .Simple-Header-TitleSubText{margin-left:3px}
+.hd-official .MatchLobby .MatchLobby-LeftPanel-Grid-MP .MatchLobby-UpperLeftSection .Simple-Header-TitleSubText,
+.hd-official .MatchLobby .MatchLobby-LeftPanel-Grid-Small .MatchLobby-UpperLeftSection .Simple-Header-TitleSubText,
+.hd-official .MatchLobby .MatchLobby-LeftPanel-Grid .MatchLobby-UpperLeftSection .Simple-Header-TitleSubText{margin-left:3px}
+.hd-official .LoadSavedGame .LoadSavedGame-LeftPanel-Grid .Simple-Header-Title{padding-bottom:24px}
+.hd-official .CustomCampaigns .Simple-Header-Title{padding-bottom:24px}
+.hd-official .SPCreateGame .SPCreateGame-LeftPanel-Grid .SPCreateGame-UpperLeftSection .Simple-Header-TitleSubText{margin-left:3px}
+.hd-official .SPCreateGame .SPCreateGame-LeftPanel-Grid .SPCreateGame-UpperLeftSection .Simple-Header-Title{padding-top:18px}
+.hd-official .SPCreateGame .SPCreateGame-LeftPanel-Grid .SPCreateGame-UpperLeftSection .Simple-Header-Listing-SearchSection{margin-top:18px}
+.hd-official .Simple-Header{display:flex;flex-direction:row;height:100%;z-index:0}
+.hd-official .Simple-Header .Simple-Header-Title{display:flex;flex-direction:column;justify-content:center;justify-self:center;position:relative;height:100%;width:100%;top:0;padding-left:16px;padding-top:10px;padding-bottom:10px}
+.hd-official .Simple-Header .Simple-Header-Title .Simple-Header-TitleText{display:flex;font-size:36px;padding-top:4px;line-height:.9;letter-spacing:.04em;text-transform:uppercase;font-family:var(--game-font);color:#ffd428}
+.hd-official .Simple-Header .Simple-Header-Title .Simple-Header-TitleSubText{display:flex;font-size:12px;padding-top:5px;font-family:var(--game-font);font-variant:small-caps;color:#ccc9b8;line-height:.9;letter-spacing:.8px}
+.hd-official .Simple-Header .Simple-Header-Listing-SearchSection{display:flex;flex-direction:row;align-items:center;height:52px;margin-top:12px;width:100%;max-width:400px;justify-content:flex-end;padding-right:12px}
+.hd-official .Simple-Header .Simple-Header-Listing-SearchSection .Simple-Header-Listing-SearchField{width:100%;height:54px;margin-top:12px}
+.hd-official .Simple-Header .Simple-Header-Listing-SearchSection .Simple-Header-Listing-RefreshSection{position:relative;display:flex;height:100%;width:85px;align-items:center;justify-content:center}
+.hd-official .Simple-Header .Simple-Header-Listing-SearchSection .Simple-Header-Listing-RefreshSection .Simple-Header-Listing-RefreshButton{position:relative;width:60px;height:38px;margin-top:3px;z-index:1}
+.hd-official .Simple-Header .Simple-Header-Listing-SearchSection .Simple-Header-Listing-RefreshSection .Simple-Header-Listing-RefreshButton .Simple-Header-Listing-RefreshIcon{width:36px;height:36px;background-image:url(Icons/refresh-icon-resting.png);background-size:cover;margin-top:2px}
+.hd-official .Simple-Header .Simple-Header-Listing-SearchSection .Simple-Header-Listing-RefreshSection .Simple-Header-Listing-RefreshButton-Frame{position:absolute;width:72px;height:50px;border-image:url(Widgets/Buttons/wc3_btn_frame_4k.png) 60 100 fill repeat round;border-image-width:15px 25px;margin-top:4px;z-index:0}
+.hd-official .Simple-Header .Simple-Header-Listing-SearchSection .Simple-Header-Listing-RefreshSection .Simple-Header-Listing-RefreshButton:hover .Simple-Header-Listing-RefreshIcon{background-image:url(Icons/refresh-icon-hover.png)}
+.hd-official .Simple-Header .Simple-Header-Listing-SearchSection .Simple-Header-Listing-RefreshSection .Simple-Header-Listing-RefreshButton:active .Simple-Header-Listing-RefreshIcon{background-image:url(Icons/refresh-icon-pressed.png)}
+.hd-official .CustomCampaigns.tft .Simple-Header,
+.hd-official .CustomGames.tft .Simple-Header,
+.hd-official .Leaderboard.tft .Simple-Header,
+.hd-official .MainMenuHolder.tft .Simple-Header,
+.hd-official .MatchLobby.tft .Simple-Header,
+.hd-official .Multiplayer-Landing.tft .Simple-Header,
+.hd-official .Profile.tft .Simple-Header,
+.hd-official .Replay.tft .Simple-Header,
+.hd-official .SPCreateGame.tft .Simple-Header,
+.hd-official .TournamentsMain .LoadSavedGame.tft .Simple-Header,
+.hd-official .Versus-Setup.tft .Simple-Header{background-image:url(BaseFrames/tft_test_texture-wood-alt.png)}
+.hd-official .TournamentsMain.tft .Simple-Header,
+.hd-official .TournamentsMain.tft .Tournament-Info-Wrapper .Tournament-Map-Pool-Header{background-image:url(BaseFrames/tft_test_texture-wood-alt.png)}
+.hd-official .TournamentsMain.tft .Simple-Header:before{background-image:url(BaseFrames/tft_war3_v2_mainmenu_decal_curly_thing_alt.png)}
+.hd-official .SearchInput-Wrapper{position:relative;width:100%;height:100%}
+.hd-official .SearchInput-Wrapper:hover .SearchInput-Overlay{border-image-source:url("Widgets/TextFields/war3_text_hover_4k.png")}
+.hd-official .SearchInput-Wrapper:hover .SearchInput-Overlay:before{background-image:url("Icons/search-icon-hover.png")}
+.hd-official .SearchInput-Wrapper.isFocused .SearchInput-Overlay,
+.hd-official .SearchInput-Wrapper.isFocused:hover .SearchInput-Overlay{border-image-source:url("Widgets/TextFields/war3_text_focused_4k.png")}
+.hd-official .SearchInput-Wrapper.isFocused .SearchInput-Overlay:before,
+.hd-official .SearchInput-Wrapper.isFocused:hover .SearchInput-Overlay:before{background-image:url("Icons/search-icon-pressed.png")}
+.hd-official .SearchInput-Wrapper.isFocused .SearchInput,
+.hd-official .SearchInput-Wrapper:active .SearchInput{outline:none}
+.hd-official .SearchInput-Overlay{position:absolute;top:0;left:0;width:100%;height:100%;border-image:url("Widgets/TextFields/war3_text_normal_4k.png") 40 350 60 250 fill repeat;border-image-width:20px 175px 30px 125px;transition:border-image .1s}
+.hd-official .SearchInput-Overlay:before{content:"";background-image:url("Icons/search-icon-resting.png");background-repeat:no-repeat;background-size:contain;width:30px;height:30px;position:absolute;top:calc(50% - 20px);left:15px;transition:background-image .1s}
+.hd-official .SearchInput{height:100%;background-color:transparent;border:0;outline:0;font-size:21px;font-variant:normal;text-transform:none;line-height:1.1;letter-spacing:.06em;color:#d8d8d8;padding:5px 10px 5px 40px;z-index:1;position:absolute;top:0;left:8px;width:calc(100% - 16px);height:calc(100% - 10px)}
+.hd-official .SearchInput.isIMEEnabled{padding-right:48px}

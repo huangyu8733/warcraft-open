@@ -13,24 +13,47 @@ import { setDbgEnabled } from "./dev/dbg";
 import { decodeBlp } from "./assets/blp";
 import { mountMainMenu } from "./ui/mainMenu";
 import { mountFdfMainMenu } from "./ui/fdfMainMenu";
+import { mountHdMainMenu } from "./ui/hd/mainMenu";
+import { mountHdSinglePlayer } from "./ui/hd/singlePlayer";
+import { mountHdCampaign } from "./ui/hd/campaign";
+import { mountHdOptions } from "./ui/hd/options";
+import { mountHdSkirmish, type HdCreateState } from "./ui/hd/skirmish";
+import { mountHdCustomLobby } from "./ui/hd/customLobby";
+import { mountHdCustomCampaign } from "./ui/hd/customCampaign";
+import { mountHdViewReplay } from "./ui/hd/replay";
 import { mountSinglePlayerMenu, singlePlayerSides } from "./ui/fdfSinglePlayerMenu";
 import { mountSkirmish } from "./ui/fdfSkirmish";
 import { mountCampaignScreen, type CampaignScreenState } from "./ui/fdfCampaign";
 import { mountCustomCampaignScreen } from "./ui/fdfCustomCampaign";
 import { mountViewReplayScreen, replayMapPath } from "./ui/fdfViewReplay";
+import { mountLoadSavedGameScreen } from "./ui/fdfLoadSavedGame";
 import { replayBoot, replayBridge } from "./replayBoot";
 import { patchLevel, setPatchLevel } from "./patches";
-import { decodeReplay, fnv64, type Replay, type ReplayView } from "./game/replay";
+import { decodeReplay, fnv64, replayRefusalText, REPLAY_EXT, type Replay, type ReplayView } from "./game/replay";
 import { replaySink } from "./game/replaySink";
 
 /** Warcraft Open's version, from package.json (vite.config.ts `define`). */
 declare const __OW3_VERSION__: string;
+declare const __OW3_COMMIT__: string;
+declare const __OW3_SIM_FINGERPRINT__: string;
 import { creditsMap, loadCampaigns, type Campaign, type CampaignEntry } from "./data/campaigns";
 import { isRoc, setEdition, setMapDataSet } from "./data/edition";
+import { flavor, isHd } from "./data/flavor";
+import { gameVersion, setGameVersion } from "./data/gameVersion";
+import { setSaveHost } from "./game/saveManager";
+import {
+  decodeSave, encodeSave, saveIncompatibility, saveLine, SAVE_FORMAT, SAVE_GAME_VERSION,
+  type SaveFile, type SaveHeader,
+} from "./game/save/saveFile";
+import { saveSink } from "./game/save/saveSink";
+import { activeProfile } from "./data/profiles";
 import {
   isCampaignOpen, loadDifficulty, markMissionComplete, saveDifficulty, type Difficulty,
 } from "./data/campaignProgress";
 import { mountLanScreen, observerSeats, savedPlayerName, toConfig } from "./ui/fdfLan";
+import { mountHdLanScreen } from "./ui/hd/lan";
+import { mountHdLanCreateScreen } from "./ui/hd/lanCreate";
+import { mountHdLanLobbyScreen } from "./ui/hd/lanLobby";
 import { localMapPath } from "./assets/downloadedMaps";
 import { mountLanCreateScreen } from "./ui/fdfLanCreate";
 import { mountLanLobbyScreen } from "./ui/fdfLanLobby";
@@ -46,19 +69,26 @@ import { installMouseCapture } from "./ui/mouseCapture";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
 import { profilePlayerName } from "./data/profiles";
-import { applyVideoOptions } from "./render/videoQuality";
+import { applyVideoOptions, videoSettings } from "./render/videoQuality";
+import { applyContextQuality, installContextQuality } from "./render/contextQuality";
 import { applyHealthBarOptions } from "./render/worldOverlays";
 import { applyHotkeyOptions } from "./data/hotkeys";
 import { applyScrollOptions } from "./render/scrollOptions";
+import { applyGameplayOptions } from "./render/gameplayOptions";
+import { applyCameraOptions } from "./render/cameraOptions";
+import { applyInputOptions } from "./render/inputOptions";
+import { applyArtCategories } from "./data/artCategories";
 import { applyVoiceOptions, setMenuVoiceHost, voiceHear, voicePrerollState, voiceSay } from "./voice/control";
 import { forgetOldVoiceModels } from "./voice/model";
 import { makeMenuVoiceHost } from "./voice/menu";
 import { GlueManager, WORLD_FADE_MS, type GlueScreenDef } from "./ui/glue";
 import { mountLoadingScreen, type LoadingScreen } from "./ui/loadingScreen";
+import { mountHdLoadingScreen } from "./ui/hd/loading";
 import { mountScoreScreen, scoreScreenMusic } from "./ui/scoreScreen";
+import { mountHdScoreScreen } from "./ui/hd/score";
 import type { ScoreTable } from "./game/scoreTable";
-import { mountLoadGate, type GateLoad } from "./ui/gate";
-import { mountHome, type Home } from "./ui/home";
+import { mountHome, type GateLoad, type Home } from "./ui/home";
+import { dismissBootSplash, mountBootSplash, progressBootSplash } from "./ui/bootSplash";
 import { setFdfClickSound, type FdfScreen } from "./ui/fdf/render";
 import { GlueAudio } from "./ui/glueAudio";
 import { SoundBoard } from "./audio/sounds";
@@ -69,6 +99,7 @@ import { showGlueDialog } from "./ui/glueDialog";
 import { startsExplored } from "./world/mapKind";
 import type { MapPreview } from "./world/mapPreview";
 import { parseMapInfo, type MapInfo, type NeutralPlayer, type PlayerSlot } from "./world/mapInfo";
+import { loadUnitRegistry } from "./data/units";
 import { TerrainScene } from "./render/scene";
 import { buildTerrainMesh } from "./render/terrainMesh";
 import { makePlaceholderTerrain } from "./world/placeholderTerrain";
@@ -77,7 +108,7 @@ import { readMapBytes } from "./vfs/mapArchive";
 import { LayeredDataSource } from "./vfs/layered";
 import { MpqDataSource } from "./vfs/mpq";
 import { ModelViewerScene, type SequenceInfo } from "./render/modelViewer";
-import { MapViewerScene, lastRecordedReplay } from "./render/mapViewer";
+import { MapViewerScene, lastRecordedReplay, mapLoadRefusal } from "./render/mapViewer";
 import { matchLinkFrom, type MatchLinkSetup } from "./game/matchLink";
 import { LoadGate } from "./game/loadGate";
 import { MenuScene } from "./render/menuScene";
@@ -115,12 +146,27 @@ const loadingCanvas = document.getElementById("loading") as HTMLCanvasElement;
 const loadingLayer = document.getElementById("loading-layer") as HTMLElement;
 const ui = document.getElementById("ui") as HTMLElement;
 
+// The launch's progress screen (ui/bootSplash.ts). Mounting an install is a fetch and a parse
+// that can run to a minute on a 3.0 store, and there is no screen worth looking at while it
+// happens — neither the launcher's hero nor a freshly opened game window. The launcher mounts it
+// on a Launch press; the `?dev` boot mounts it in front of its scripted fetch. It is dismissed
+// HERE, when a menu — or the match's own loading screen — is standing, so the bar never
+// disappears into a black frame between "mounted" and "menu built".
+
 // The Video panel, before anything can be drawn or loaded (render/videoQuality.ts). It goes
 // HERE, at module scope, rather than beside the audio applier down in the gate: texture quality
 // is read as a texture is uploaded, so a setting applied after the first viewer exists would
 // miss everything that viewer had already loaded.
 const bootOptions = loadOptions();
 applyVideoOptions(bootOptions);
+applyContextQuality(videoSettings());
+installContextQuality();
+// The rest of the Reforged rows, before the first match or menu can read them: camera bounds,
+// pointer confinement, the per-category art switches, and the HUD/chat/overlay flags.
+applyGameplayOptions(bootOptions);
+applyCameraOptions(bootOptions);
+applyInputOptions(bootOptions);
+applyArtCategories(bootOptions);
 // The [dbg] console milestones (src/dev/dbg.ts) — debug builds only. Vite folds this to
 // `setDbgEnabled(false)` in a build, so the deployed site and the desktop app stay silent.
 setDbgEnabled(import.meta.env.DEV);
@@ -216,8 +262,10 @@ async function showMenuBackground(vfs: DataSource | null): Promise<void> {
   }
 }
 
-/** Load a map's bytes into the right scene (authentic with an install, else placeholder). */
-async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
+/** Load a map's bytes into the right scene (authentic with an install, else placeholder).
+ *  `campaign` is the `.w3n` a CHAPTER came out of, when it came out of one: its imported art and
+ *  the campaign's shared data sit in that archive, underneath the map's own files. */
+async function enterMap(bytes: Uint8Array, name: string, campaign?: DataSource): Promise<string> {
   const vfs = resolver.installSource;
   document.body.classList.add("in-game"); // hide the main-menu panel over the map
   if (vfs) {
@@ -237,7 +285,19 @@ async function enterMap(bytes: Uint8Array, name: string): Promise<string> {
     mapScene.onChangeLevel = (path) => void changeLevel(path);
     // …and the defeat dialog's Restart, which plays THIS map again.
     mapScene.onRestart = (difficulty) => void restartMatch(difficulty);
-    mapScene.loadMap(bytes);
+    // The chapter's own "and now play THIS": the campaign screen it came from is put back, so
+    // Continue goes to the same list the player left (0.3.90 — `ForceCampaignSelectScreen`).
+    mapScene.onCampaignSelect = () => {
+      campaignSelectForced = true;
+    };
+    // Save / Load (Esc menu, and the map's own SaveGame/LoadGame natives).
+    mapScene.onSaveGame = async (name) => {
+      await saveCurrentGame(name);
+    };
+    mapScene.onLoadGame = (name) => {
+      void loadSavedGame(name).catch((err) => console.warn("[save] could not load:", err));
+    };
+    await mapScene.loadMap(bytes, campaign);
     mapScene.start();
     return `${name} — authentic render (textures & models stream in)`;
   }
@@ -266,7 +326,30 @@ function quitToStart(): void {
   location.replace(`${location.origin}${location.pathname}`);
 }
 
-function mainMenuScreen(vfs: DataSource): { chrome: "MainMenu"; mount: () => Promise<FdfScreen> } {
+function mainMenuScreen(vfs: DataSource): GlueScreenDef {
+  // The two front ends are different screens, not one screen with a skin: HD wears the 3.0
+  // web UI built from the install's own `WebUI\` art (ui/hd/), SD the classic FDF menu.
+  if (isHd()) {
+    return {
+      chrome: "MainMenu",
+      noChrome: true,
+      mount: async () => {
+        const screen = await mountHdMainMenu(ui, vfs, {
+          onSinglePlayer: () => void glue.goTo(singlePlayerScreen(vfs)),
+          onLan: () => void glue.goTo(lanScreen(vfs)),
+          onReplays: () => void glue.goTo(viewReplayScreen(vfs)),
+          onOptions: () => void glue.goTo(optionsScreen(vfs)),
+          onCredits: () => void startCredits(vfs),
+          onQuit: () => quitToStart(),
+          onCampaign: () => void openCampaignScreen(vfs),
+          onCustomCampaign: () => void glue.goTo(customCampaignScreen(vfs)),
+          onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
+        });
+        void offerReconnect(vfs);
+        return screen;
+      },
+    };
+  }
   return {
     chrome: "MainMenu",
     mount: async () => {
@@ -418,7 +501,17 @@ function editionMaps(): Map<string, File> {
 /** The Options screen (issue #81), built from the game's own OptionsMenu.fdf. Its chrome is
  *  the panel model's own "Options" sequence triple. OK/Cancel both return to the main menu;
  *  the live SoundBoard is handed in so the Sound panel is audible as it's dragged. */
-function optionsScreen(vfs: DataSource): { chrome: "Options"; mount: () => Promise<FdfScreen> } {
+function optionsScreen(vfs: DataSource): { chrome: "Options"; noChrome?: boolean; mount: () => Promise<FdfScreen> } {
+  if (isHd()) {
+    return {
+      chrome: "Options",
+      noChrome: true,
+      mount: () => mountHdOptions(ui, vfs, {
+        sounds,
+        onClose: () => void glue.goTo(mainMenuScreen(vfs)),
+      }),
+    };
+  }
   return {
     chrome: "Options",
     mount: () => mountOptions(ui, vfs, {
@@ -506,7 +599,26 @@ function endLanSession(): void {
  *  Chrome `BattlenetCustom` — read out of the panel model's own sequence table. The game
  *  has no LAN-specific chrome: LocalMultiplayerJoin.fdf is the transport-swapped twin of
  *  BattleNetCustomJoinPanel.fdf and they share this triple (see menuScene.ts). */
-function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
+function lanScreen(vfs: DataSource): {
+  chrome: "BattlenetCustom";
+  noChrome?: boolean;
+  mount: () => Promise<FdfScreen>;
+} {
+  if (isHd()) {
+    return {
+      chrome: "BattlenetCustom",
+      noChrome: true,
+      mount: () => {
+        const { lobby, connected } = lanSession();
+        return mountHdLanScreen(ui, vfs, editionMaps(), lobby, connected, {
+          onCancel: () => { endLanSession(); void glue.goTo(mainMenuScreen(vfs)); },
+          onCreateGame: () => void glue.goTo(lanCreateScreen(vfs)),
+          onJoined: (path, info) => void glue.goTo(lanLobbyScreen(vfs, { path, info })),
+          onMapDownloaded: (path, file) => { installMaps.set(path, file); },
+        });
+      },
+    };
+  }
   return {
     chrome: "BattlenetCustom",
     mount: () => {
@@ -526,30 +638,51 @@ function lanScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => P
 
 /** "Create Game" on the LAN screen: pick the map to host, then announce the room and drop
  *  into the lobby — which is where the real client puts the host too. */
-function lanCreateScreen(vfs: DataSource): { chrome: "BattlenetCustom"; mount: () => Promise<FdfScreen> } {
+function lanCreateScreen(vfs: DataSource): {
+  chrome: "BattlenetCustom";
+  noChrome?: boolean;
+  mount: () => Promise<FdfScreen>;
+} {
+  const onCreate = (
+    path: string,
+    info: MapInfo,
+    gameName: string,
+    advanced: AdvancedOptions,
+    server: string,
+  ): void => {
+    const { lobby, connected } = lanSession();
+    // The room is as big as the lobby: the map's slots, plus the Observers bench when the
+    // host opened one — the relay caps joins at this, so it has to count the bench.
+    const seats = info.slots.length + observerSlots(info.slots.length, advanced);
+    const announce = (): void => {
+      lobby.host(gameName, savedPlayerName(), info.name, path, seats, advanced.observers === "FULL_OBSERVERS", server, advanced.gameSpeed);
+    };
+    if (server) {
+      // A watched SERVER is answering already — the Server menu offers no other kind — so the
+      // room goes up on it at once. It throws only if that server dropped in the instant since
+      // the menu was painted, and then there is no lobby to go to.
+      try { announce(); } catch { return; }
+    } else {
+      // This machine's own relay may still be connecting: WAIT for the socket, since a
+      // `LanLobby` with no transport yet drops a send on the floor without a word.
+      void connected.then(announce).catch(() => {}); // the failure is already on screen, on the list we came from
+    }
+    void glue.goTo(lanLobbyScreen(vfs, { path, info }, advanced));
+  };
+  if (isHd()) {
+    return {
+      chrome: "BattlenetCustom",
+      noChrome: true,
+      mount: () => mountHdLanCreateScreen(ui, vfs, editionMaps(), lanSession().lobby, {
+        onCreate,
+        onCancel: () => void glue.goTo(lanScreen(vfs)),
+      }),
+    };
+  }
   return {
     chrome: "BattlenetCustom",
     mount: () => mountLanCreateScreen(ui, vfs, editionMaps(), lanSession().lobby, {
-      onCreate: (path, info, gameName, advanced, server) => {
-        const { lobby, connected } = lanSession();
-        // The room is as big as the lobby: the map's slots, plus the Observers bench when the
-        // host opened one — the relay caps joins at this, so it has to count the bench.
-        const seats = info.slots.length + observerSlots(info.slots.length, advanced);
-        const announce = (): void => {
-          lobby.host(gameName, savedPlayerName(), info.name, path, seats, advanced.observers === "FULL_OBSERVERS", server, advanced.gameSpeed);
-        };
-        if (server) {
-          // A watched SERVER is answering already — the Server menu offers no other kind — so the
-          // room goes up on it at once. It throws only if that server dropped in the instant since
-          // the menu was painted, and then there is no lobby to go to.
-          try { announce(); } catch { return; }
-        } else {
-          // This machine's own relay may still be connecting: WAIT for the socket, since a
-          // `LanLobby` with no transport yet drops a send on the floor without a word.
-          void connected.then(announce).catch(() => {}); // the failure is already on screen, on the list we came from
-        }
-        void glue.goTo(lanLobbyScreen(vfs, { path, info }, advanced));
-      },
+      onCreate,
       onCancel: () => void glue.goTo(lanScreen(vfs)),
     }),
   };
@@ -563,14 +696,27 @@ function lanLobbyScreen(
   /** The HOST's Advanced Options, straight off the create screen. A joiner passes none — it
    *  renders whatever the host broadcasts. */
   advanced?: AdvancedOptions,
-): { chrome: "MultiplayerPreGameChat"; mount: () => Promise<FdfScreen> } {
+): {
+  chrome: "MultiplayerPreGameChat";
+  noChrome?: boolean;
+  mount: () => Promise<FdfScreen>;
+} {
+  const handlers = {
+    onCancel: () => void glue.goTo(lanScreen(vfs)),
+    onStart: (path: string, info: MapInfo, config: MeleeConfig, link: Parameters<typeof startGame>[3]) =>
+      void startGame(mapFileFor(path), info, config, link, undefined, path),
+    onCountdownTick: () => glueAudio?.countdownTick(),
+  };
+  if (isHd()) {
+    return {
+      chrome: "MultiplayerPreGameChat",
+      noChrome: true,
+      mount: () => mountHdLanLobbyScreen(ui, vfs, editionMaps(), lanSession().lobby, map, handlers, advanced),
+    };
+  }
   return {
     chrome: "MultiplayerPreGameChat",
-    mount: () => mountLanLobbyScreen(ui, vfs, editionMaps(), lanSession().lobby, map, {
-      onCancel: () => void glue.goTo(lanScreen(vfs)),
-      onStart: (path, info, config, link) => void startGame(mapFileFor(path), info, config, link, undefined, path),
-      onCountdownTick: () => glueAudio?.countdownTick(),
-    }, advanced),
+    mount: () => mountLanLobbyScreen(ui, vfs, editionMaps(), lanSession().lobby, map, handlers, advanced),
   };
 }
 
@@ -583,6 +729,24 @@ function mapFileFor(path: string): File {
 }
 
 function singlePlayerScreen(vfs: DataSource): GlueScreenDef {
+  if (isHd()) {
+    return {
+      chrome: "SinglePlayer",
+      noChrome: true,
+      // The default hand comes back HERE rather than when Back was clicked — under the black,
+      // with the campaign screen already gone (GlueScreenDef.onArrived).
+      onArrived: () => applyMenuCursor(vfs),
+      mount: () => mountHdSinglePlayer(ui, vfs, {
+        onCampaign: () => void openCampaignScreen(vfs),
+        onCustomCampaign: () => void glue.goTo(customCampaignScreen(vfs)),
+        onViewReplay: () => void glue.goTo(viewReplayScreen(vfs)),
+        onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
+        onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
+        onOptions: () => void glue.goTo(optionsScreen(vfs)),
+        onCredits: () => void startCredits(vfs),
+      }),
+    };
+  }
   return {
     chrome: "SinglePlayer",
     // Its two halves ride separate clips, and which ones depends on whether the player has a
@@ -595,9 +759,23 @@ function singlePlayerScreen(vfs: DataSource): GlueScreenDef {
       onCampaign: () => void openCampaignScreen(vfs),
       onCustomCampaign: () => void glue.goTo(customCampaignScreen(vfs)),
       onViewReplay: () => void glue.goTo(viewReplayScreen(vfs)),
+      onLoadSaved: () => void glue.goTo(loadSavedScreen(vfs)),
       onCustomGame: () => void glue.goTo(skirmishScreen(vfs)),
       onCancel: () => void glue.goTo(mainMenuScreen(vfs)),
       movePanel: (side, play, wearing) => menuScene?.sidePanel(side, play, wearing) ?? 0,
+    }),
+  };
+}
+
+/** Single Player → Load Saved Game (issue #159). The same chrome as View Replay — the two FDFs
+ *  are the same shape (ui/fdfLoadSavedGame.ts). */
+function loadSavedScreen(vfs: DataSource): GlueScreenDef {
+  return {
+    chrome: "BattlenetCustomCreate",
+    mount: () => mountLoadSavedGameScreen(ui, vfs, installMaps, saveSink(), {
+      onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+      onLoad: (name) => void loadSavedGame(name).catch((err) => console.warn("[save] could not load:", err)),
+      refusal: saveLoadRefusal,
     }),
   };
 }
@@ -607,6 +785,15 @@ function singlePlayerScreen(vfs: DataSource): GlueScreenDef {
  *  their own, and that is the set whose single tall left-hand frame is the shape these two
  *  files are authored for (see ui/fdfCustomCampaign.ts for the full reasoning). */
 function customCampaignScreen(vfs: DataSource): GlueScreenDef {
+  if (isHd()) {
+    return {
+      chrome: "BattlenetCustomCreate",
+      noChrome: true,
+      mount: () => mountHdCustomCampaign(ui, vfs, {
+        onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+      }),
+    };
+  }
   return {
     chrome: "BattlenetCustomCreate",
     mount: () => mountCustomCampaignScreen(ui, vfs, {
@@ -616,6 +803,16 @@ function customCampaignScreen(vfs: DataSource): GlueScreenDef {
 }
 
 function viewReplayScreen(vfs: DataSource): GlueScreenDef {
+  if (isHd()) {
+    return {
+      chrome: "BattlenetCustomCreate",
+      noChrome: true,
+      mount: () => mountHdViewReplay(ui, vfs, installMaps, replaySink(), {
+        onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+        onView: (name) => void watchReplayFile(name),
+      }),
+    };
+  }
   return {
     chrome: "BattlenetCustomCreate",
     mount: () => mountViewReplayScreen(ui, vfs, installMaps, replaySink(), {
@@ -660,6 +857,35 @@ async function openCampaignScreen(vfs: DataSource): Promise<void> {
 
 function campaignScreen(vfs: DataSource): GlueScreenDef {
   const state = campaignState!;
+  // The chapter list's behaviour is the same whichever front end draws it: picking a campaign
+  // opens its chapters, a chapter starts the map, Back walks out one level, and the difficulty
+  // is remembered per profile.
+  const handlers = {
+    onSelectCampaign: (c: Campaign): void => {
+      state.campaign = c;
+      state.chapters = true;
+      void glue.goTo(campaignScreen(vfs)); // the backdrop changes with the campaign
+    },
+    onPlayMission: (c: Campaign, index: number): void => void startCampaignMission(vfs, c, index, state.difficulty),
+    chapterRefusal: (c: Campaign, index: number): Promise<string | null> => campaignChapterRefusal(vfs, c, index),
+    onBack: (): void => {
+      if (state.chapters) { state.chapters = false; void glue.goTo(campaignScreen(vfs)); return; }
+      leaveCampaignScreen();
+      void glue.goTo(singlePlayerScreen(vfs));
+    },
+    onDifficulty: (d: Difficulty): void => saveDifficulty(d),
+  };
+  if (isHd()) {
+    return {
+      chrome: "SinglePlayer",
+      noChrome: true,
+      onArrived: () => applyMenuCursor(vfs, state.campaign.cursor),
+      mount: () => {
+        setCampaignAmbience(state.campaign);
+        return mountHdCampaign(ui, vfs, campaigns, state, handlers);
+      },
+    };
+  }
   return {
     // No chrome: the panel models carry no Campaign sequence triple, because the reference
     // hides the screen edges here entirely. `chrome` is unread while `backdrop` is set.
@@ -672,20 +898,7 @@ function campaignScreen(vfs: DataSource): GlueScreenDef {
     onArrived: () => applyMenuCursor(vfs, state.campaign.cursor),
     mount: () => {
       setCampaignAmbience(state.campaign);
-      return mountCampaignScreen(ui, vfs, campaigns, state, {
-        onSelectCampaign: (c) => {
-          state.campaign = c;
-          state.chapters = true;
-          void glue.goTo(campaignScreen(vfs)); // the backdrop changes with the campaign
-        },
-        onPlayMission: (c, index) => void startCampaignMission(vfs, c, index, state.difficulty),
-        onBack: () => {
-          if (state.chapters) { state.chapters = false; void glue.goTo(campaignScreen(vfs)); return; }
-          leaveCampaignScreen();
-          void glue.goTo(singlePlayerScreen(vfs));
-        },
-        onDifficulty: (d) => saveDifficulty(d),
-      });
+      return mountCampaignScreen(ui, vfs, campaigns, state, handlers);
     },
   };
 }
@@ -720,7 +933,20 @@ function leaveCampaignScreen(): void {
  *  these maps are where WC3's cinematics actually live. */
 async function startCampaignMission(vfs: DataSource, c: Campaign, index: number, difficulty: Difficulty): Promise<void> {
   const mission = c.missions[index];
-  const bytes = mission ? await readMapBytes(vfs, mission.file) : null;
+  // A chapter the campaign's own `.w3n` holds is read from THAT archive: the index names an
+  // encrypted `.w3xd` (below), which is the same chapter only the client cannot open.
+  const archived = mission ? c.archive?.find(mission.file) ?? null : null;
+  // A 3.0 DLC chapter is an encrypted `.w3xd` container (data/campaigns.ts) — the screen
+  // disables it, and the `?dev&chapter=` door lands here, where the refusal is stated instead
+  // of reading random bytes as a map.
+  if (!archived && mission?.encrypted) {
+    console.error(`[campaign] ${mission.file} is an encrypted 3.0 DLC chapter; this engine has no reader for .w3xd`);
+    void showGlueDialog({ container: ui, vfs, buttons: "ok", text: t("campaign.encrypted") });
+    return;
+  }
+  const bytes = archived && c.archive
+    ? await c.archive.read(archived)
+    : mission ? await readMapBytes(vfs, mission.file) : null;
   if (!bytes) {
     console.warn(`[Warcraft Open] campaign map missing from this install: ${mission?.file}`);
     return;
@@ -731,7 +957,46 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
   // The mission is finished the moment its own script declares victory — that is what opens
   // the next chapter (data/campaignProgress.ts).
   pendingCampaign = { key: c.key, index };
-  await startGame(bytes, info, campaignConfig(info, difficulty, mission.name), undefined, undefined, mission.file);
+  campaignSelectForced = false;
+  await startGame(
+    bytes, info, campaignConfig(info, difficulty, mission.name), undefined, undefined, mission.file,
+    archived ? c.archive?.vfs : undefined,
+  );
+}
+
+/**
+ * Why a chapter cannot be played on this install, or null when it can — the SAME door
+ * `startGame` opens (`mapLoadRefusal`), asked ahead of the press so the chapter list can grey
+ * the row with the reason instead of throwing the message box over it. Reforged 3.0's own Blood
+ * Elf chapters edit `harw`, a unit 3.0's UnitData no longer has, so they answer here exactly as
+ * they answered at the load door.
+ *
+ * Cached per campaign+chapter for the process: the answer only depends on the install, and the
+ * screen is repainted every time Back walks into it.
+ */
+const chapterRefusalCache = new Map<string, string | null>();
+
+async function campaignChapterRefusal(vfs: DataSource, c: Campaign, index: number): Promise<string | null> {
+  const key = `${c.key}#${index}`;
+  const cached = chapterRefusalCache.get(key);
+  if (cached !== undefined) return cached;
+  try {
+    const mission = c.missions[index];
+    // The same bytes `startCampaignMission` reads: the campaign's own `.w3n` first, the
+    // install's map folder otherwise.
+    const archived = mission ? c.archive?.find(mission.file) ?? null : null;
+    const bytes = archived && c.archive
+      ? await c.archive.read(archived)
+      : mission ? await readMapBytes(vfs, mission.file) : null;
+    const message = bytes ? mapLoadRefusal(bytes, vfs, loadUnitRegistry(vfs))?.message ?? null : null;
+    chapterRefusalCache.set(key, message);
+    return message;
+  } catch (err) {
+    // A pre-check that cannot read the file must not grey anything: the load door will state
+    // the truth if the player does press the chapter.
+    console.warn(`[campaign] couldn't pre-check chapter ${key}:`, err);
+    return null;
+  }
 }
 
 /**
@@ -756,7 +1021,12 @@ async function startCampaignMission(vfs: DataSource, c: Campaign, index: number,
 async function changeLevel(mapPath: string): Promise<void> {
   const vfs = resolver.installSource;
   if (!vfs) return exitToMenu();
-  const bytes = await readMapBytes(vfs, mapPath);
+  // A chapter of a downloaded `.w3n` names its successor by BARE file name (`SetNextLevelBJ
+  // ("UndeadRE02.w3x")`), and those maps live inside the campaign archive — never in the
+  // install's Maps\ folder. So the campaign that is running is asked first, then the install.
+  const playing = pendingCampaign ? campaigns.find((c) => c.key === pendingCampaign!.key) : undefined;
+  const archived = playing?.archive?.find(mapPath) ?? null;
+  const bytes = archived && playing?.archive ? await playing.archive.read(archived) : await readMapBytes(vfs, mapPath);
   if (!bytes) {
     console.warn(`[Warcraft Open] next chapter missing from this install: ${mapPath}`);
     return exitToMenu();
@@ -764,17 +1034,115 @@ async function changeLevel(mapPath: string): Promise<void> {
   const found = findChapter(mapPath);
   const difficulty = campaignState?.difficulty ?? loadDifficulty();
   endMatch();
+  campaignSelectForced = false; // the next chapter says for itself where it ends
   if (found) {
     // The campaign screen follows the player: quitting out of chapter two must land on
     // chapter two's list, not on the one the session happened to start from.
     campaignState = { campaign: found.campaign, chapters: true, difficulty };
     pendingCampaign = { key: found.campaign.key, index: found.index };
+  } else if (archived && playing) {
+    // A place INSIDE a chapter — `UndeadRE02_01.w3x`, one of a chapter's own set-pieces. The
+    // index names chapters, not the maps within one, so the chapter stays the one that is
+    // running: its victory still finishes that row, and quitting still lands on its list.
+    campaignState = { campaign: playing, chapters: true, difficulty };
   } else {
     pendingCampaign = null;
   }
   const title = found?.entry.name ?? mapPath.replace(/^.*[\\/]/, "").replace(/\.w3[mx]$/i, "");
   const info = parseMapInfo(bytes, title);
-  await startGame(bytes, info, campaignConfig(info, difficulty, title), undefined, undefined, mapPath);
+  await startGame(bytes, info, campaignConfig(info, difficulty, title), undefined, undefined, mapPath, playing?.archive?.vfs);
+}
+
+// --- saved games (game/save/*) -------------------------------------------------------------
+
+/**
+ * Save the match on screen as `name` (the Esc menu's Save Game, or a script's `SaveGame`).
+ * Resolves to the file name it was written as; throws with the reason it could not be.
+ */
+async function saveCurrentGame(name: string): Promise<string> {
+  const scene = mapScene;
+  const m = lastMatch;
+  const config = scene?.matchConfig();
+  if (!scene || !m || !config) throw new Error("there is no match to save");
+  const cap = scene.captureSave();
+  const header: SaveHeader = {
+    format: SAVE_FORMAT,
+    version: __OW3_VERSION__,
+    commit: __OW3_COMMIT__,
+    fingerprint: __OW3_SIM_FINGERPRINT__,
+    gameVersion: SAVE_GAME_VERSION,
+    flavor: flavor(),
+    install: installFlavour,
+    savedAt: new Date().toISOString(),
+    gameTime: cap.gameTime,
+    name,
+    map: { path: m.mapFile ?? m.mapPath ?? m.info.name, name: m.info.name, hash: fnv64(m.bytes), size: m.bytes.length, melee: m.info.isMelee },
+    config,
+    campaign: pendingCampaign ? { ...pendingCampaign, difficulty: campaignState?.difficulty ?? loadDifficulty() } : undefined,
+    profile: activeProfile() ?? undefined,
+    edition: isRoc() ? "roc" : "tft",
+    patch: patchLevel(),
+    localPlayer: cap.localPlayer,
+  };
+  const bytes = await encodeSave({ header, state: cap.state, scene: cap.scene });
+  const written = await saveSink().write(name, bytes);
+  if (!written) throw new Error("the file could not be written");
+  console.info(`[save] ${written}: ${(bytes.length / 1024).toFixed(0)} KB, ${cap.state.nodes.length.toLocaleString()} objects, at ${cap.gameTime.toFixed(1)} s`);
+  return written;
+}
+
+/** Why a save cannot be loaded HERE — in words for the Load screen — or null when it can. */
+function saveLoadRefusal(h: SaveHeader): string | null {
+  if (saveIncompatibility(h) === "game") return `This game was saved on Warcraft III ${h.gameVersion}; Warcraft Open plays ${SAVE_GAME_VERSION}.`;
+  // The two lines' sims are built from different installs (1.30.4 vs 3.0.1), so a save never
+  // crosses them: its state was captured against the other line's unit, ability and item data.
+  const line = saveLine(h);
+  if (line !== flavor()) {
+    return line === "hd"
+      ? "This game was saved on the Reforged game files."
+      : "This game was saved on the classic game files.";
+  }
+  if (h.edition !== (isRoc() ? "roc" : "tft")) return h.edition === "roc" ? "This game was saved in Reign of Chaos." : "This game was saved in The Frozen Throne.";
+  return null;
+}
+
+/**
+ * LOAD a saved game: put its map on the screen as its own start would — the same file, the same
+ * resolved config, the same campaign chapter and balance patch — and hand the scene the save to
+ * write over it (`startGame`'s `restore`). Throws with the reason it could not be loaded.
+ */
+async function loadSavedGame(name: string): Promise<void> {
+  const raw = await saveSink().read(name);
+  if (!raw) throw new Error(`there is no saved game named ${name}`);
+  const save = await decodeSave(raw);
+  const h = save.header;
+  const refusal = saveLoadRefusal(h);
+  if (refusal) throw new Error(refusal);
+  // The map: an install map off a list, else (a campaign chapter, the credits) out of the archives.
+  const vfs = resolver.installSource;
+  const listed = replayMapPath(installMaps, h.map.path);
+  const file = listed ? installMaps.get(listed) : undefined;
+  const bytes = file ? new Uint8Array(await file.arrayBuffer()) : vfs ? await readMapBytes(vfs, h.map.path) : null;
+  if (!bytes) throw new Error(`The map "${h.map.name}" is not in this install.`);
+  if (h.patch && h.patch !== patchLevel()) {
+    try {
+      setPatchLevel(h.patch);
+    } catch (err) {
+      console.warn(`[save] saved on patch ${h.patch}, which this build does not have:`, err);
+    }
+  }
+  const info = parseMapInfo(bytes, h.map.name);
+  // A chapter is still the chapter: its victory is credited to it, and Continue leads on.
+  if (h.campaign) {
+    if (!campaigns.length && vfs) campaigns = await loadCampaigns(vfs);
+    const c = campaigns.find((x) => x.key === h.campaign!.key);
+    pendingCampaign = { key: h.campaign.key, index: h.campaign.index };
+    if (c) campaignState = { campaign: c, chapters: true, difficulty: h.campaign.difficulty as Difficulty };
+  } else {
+    pendingCampaign = null;
+  }
+  if (mapScene) endMatch();
+  await startGame(bytes, info, h.config, undefined, undefined, h.map.path, undefined, save);
 }
 
 /**
@@ -802,6 +1170,7 @@ async function restartMatch(difficulty: number): Promise<void> {
   const m = lastMatch;
   if (!m || matchLink) return exitToMenu();
   endMatch();
+  campaignSelectForced = false; // the chapter starts over, and says so again if it means it
   // The LIVE difficulty is whatever the script left it on; the DEFAULT is the campaign
   // screen's and does not move — "bump the difficulty back up to the default" only means
   // anything if a concession cannot become the default (MeleeConfig.defaultDifficulty).
@@ -810,7 +1179,7 @@ async function restartMatch(difficulty: number): Promise<void> {
     difficulty,
     defaultDifficulty: m.config.defaultDifficulty ?? m.config.difficulty,
     seed: 1 + Math.floor(Math.random() * 2147483645),
-  }, undefined, undefined, m.mapPath);
+  }, undefined, undefined, m.mapPath, m.campaignSource);
 }
 
 /**
@@ -825,8 +1194,21 @@ async function rewindReplay(at: number, view: ReplayView): Promise<void> {
   await startGame(m.bytes, m.info, { ...m.config, replayResume: { at, ...view } }, undefined, undefined, m.mapPath);
 }
 
-/** The match on screen, kept so `RestartGame` can play it again. */
-let lastMatch: { bytes: Uint8Array; info: MapInfo; config: MeleeConfig; mapPath?: string } | null = null;
+/** The match on screen, kept so `RestartGame` can play it again. `mapFile` is the install path
+ *  the map came off — what a saved game names it by, so Load finds the same file again. */
+let lastMatch: { bytes: Uint8Array; info: MapInfo; config: MeleeConfig; mapPath?: string; mapFile?: string; campaignSource?: DataSource } | null = null;
+
+/**
+ * The save screens' door to the running match (game/saveManager.ts — the seam that keeps the
+ * screens from importing this file). Captured lazily: a menu has no world to save, and a fresh
+ * match's `lastMatch` is only set once its bytes are in hand.
+ */
+setSaveHost({
+  canSave: () => !!mapScene && !mapScene.saveRefusal(),
+  suggestion: () => mapScene?.suggestedSaveName() ?? "",
+  save: (name) => saveCurrentGame(name),
+  load: (file) => loadSavedGame(file),
+});
 
 /** Which campaign row a `Maps\…\Foo.w3x` path is, if the index names it. Compared on the
  *  path the index itself carries — case- and separator-insensitively, because a script types
@@ -864,11 +1246,16 @@ async function startCredits(vfs: DataSource): Promise<void> {
   applyMenuCursor(vfs); // no glue screen arrives after this one — the match does
   const info = parseMapInfo(bytes, "Credits");
   pendingCampaign = null;
+  campaignSelectForced = false;
   await startGame(bytes, info, campaignConfig(info, "normal", info.name || "Credits"), undefined, undefined, path);
 }
 
 /** The chapter the player is IN, so a victory can be credited to it. */
 let pendingCampaign: { key: string; index: number } | null = null;
+
+/** The map's script asked for the CAMPAIGN SELECT screen (`ForceCampaignSelectScreen`) — leaving
+ *  goes back to the chapter list rather than the main menu, whatever campaign this was. */
+let campaignSelectForced = false;
 
 /** The `?dev&chapter=` boot (src/dev/devBoot.ts): start the campaign chapter whose map path
  *  contains `name`, straight out of the mounted archives and on the campaign's own config.
@@ -945,11 +1332,41 @@ function campaignConfig(info: MapInfo, difficulty: Difficulty, title: string): M
  *  NORMAL 1 / HARD 2 (INSANE 3 exists in common.j but no screen offers it). */
 const DIFFICULTY_INDEX: Record<Difficulty, number> = { easy: 0, normal: 1, hard: 2 };
 
-function skirmishScreen(vfs: DataSource): { chrome: "SinglePlayerSkirmish"; mount: () => Promise<FdfScreen> } {
+function skirmishScreen(
+  vfs: DataSource,
+  initial: HdCreateState | null = null,
+): { chrome: "SinglePlayerSkirmish"; noChrome?: boolean; mount: () => Promise<FdfScreen> } {
+  if (isHd()) {
+    return {
+      chrome: "SinglePlayerSkirmish",
+      noChrome: true,
+      // 3.0 splits the custom game into CREATE GAME and the lobby; the create page hands its
+      // picked map, seats and options to the lobby, and Back hands them straight back.
+      mount: () => mountHdSkirmish(ui, vfs, editionMaps(), {
+        onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+        onCreate: (state) => void glue.goTo(customLobbyScreen(vfs, state)),
+      }, initial),
+    };
+  }
   return {
     chrome: "SinglePlayerSkirmish",
     mount: () => mountSkirmish(ui, vfs, editionMaps(), {
       onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+      onStart: (file, info, config, path) => void startGame(file, info, config, undefined, undefined, path),
+    }),
+  };
+}
+
+/** 3.0's SINGLE-PLAYER CUSTOM LOBBY: the seats the create page laid out, then START GAME. */
+function customLobbyScreen(
+  vfs: DataSource,
+  state: HdCreateState,
+): { chrome: "SinglePlayerSkirmish"; noChrome?: boolean; mount: () => Promise<FdfScreen> } {
+  return {
+    chrome: "SinglePlayerSkirmish",
+    noChrome: true,
+    mount: () => mountHdCustomLobby(ui, vfs, state, {
+      onCancel: () => void glue.goTo(skirmishScreen(vfs, state)),
       onStart: (file, info, config, path) => void startGame(file, info, config, undefined, undefined, path),
     }),
   };
@@ -968,7 +1385,19 @@ async function watchReplayFile(name: string): Promise<void> {
   const bytes = await replaySink()?.read(name);
   if (!bytes) return;
   const replay = await decodeReplay(bytes);
+  refuseOtherLine(replay);
   await watchReplay(replay);
+}
+
+/** A replay from the other data / asset line cannot be played here — SD and HD read different
+ *  object tables, and an HD replay also needs the Reforged build it was recorded on. The lists
+ *  refuse it before this (ui/fdfViewReplay.ts); this covers the direct doors (a `?replay=` link,
+ *  the replay window, LastReplay). */
+export function refuseOtherLine(replay: Replay): void {
+  const why = replayRefusalText(replay.header, flavor(), gameVersion());
+  if (!why) return;
+  console.error(`[replay] refused: ${why}`);
+  throw new Error(why);
 }
 
 async function watchReplay(replay: Replay): Promise<void> {
@@ -1011,9 +1440,31 @@ async function startGame(
    *  (`i18n/mapLanguage.ts`), and what a REPLAY of the match names it by so View Replay can
    *  find it again. Absent for a campaign chapter, which comes out of an archive. */
   mapPath?: string,
+  /** The `.w3n` a CHAPTER came out of (data/campaignArchive.ts), layered under the map so the
+   *  campaign's imported art and shared object data resolve. Absent for every other match. */
+  campaignSource?: DataSource,
+  /** A SAVED GAME to write over the map once its script has initialised (`loadSavedGame`). */
+  restore?: SaveFile,
 ): Promise<void> {
   meleeConfig = config;
   matchLink = link ?? null;
+  // P4's map door, BEFORE the menus leave and before any table or asset is read: a map from
+  // the other game line, or one whose base ids / models this install cannot supply, is refused
+  // here with a reason and leaves the player where they were. `MapViewerScene.loadMap` repeats
+  // the same check as a backstop for doors that bypass this one (the `?dev` hook).
+  const mapBytes = map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer());
+  const install = resolver.installSource;
+  if (install) {
+    const refusal = mapLoadRefusal(mapBytes, install, loadUnitRegistry(install));
+    if (refusal) {
+      console.error(`[map] refused to load "${info.name}": ${refusal.detail}`);
+      // The player's half: the game's own message box, over whatever screen they started from
+      // (the row they clicked was greyed and already said this on hover, but a dev link, a
+      // replay or a host's map never came through the list). The throw leaves the menus alone.
+      void showGlueDialog({ container: ui, vfs: install, buttons: "ok", text: refusal.message });
+      throw new Error(refusal.message);
+    }
+  }
   // WHICH OBJECT TABLES THIS MATCH PLAYS ON, before a byte of the map is read and before any
   // table is parsed. The install keeps four complete sets and the map's own w3i melee flag
   // picks between two of them (src/data/edition.ts, src/vfs/edition.ts): a melee map plays on
@@ -1024,7 +1475,6 @@ async function startGame(
   // A MAP'S OWN CHINESE FILE (i18n/mapLanguage.ts): `<map file name>.zhCN.json` in the map's
   // folder, read before anything shows the map's text — the loading screen already prints its
   // name. Cleared when the map has none, so one map's dictionary never speaks for the next.
-  const install = resolver.installSource;
   const reader = install ? installReader(install) : null;
   let language = reader && mapPath ? await loadMapLanguage(reader, mapPath) : null;
   // …and if that path does not answer, ask the install for the file BY NAME. A host that hands
@@ -1081,15 +1531,14 @@ async function startGame(
   // browser before running its body — which is not politeness but the whole reason the screen
   // is visible at all: `loadMap` is one long SYNCHRONOUS call, so without a paint between the
   // steps the bar would go up and come down inside a single frame nobody ever saw.
-  // The map's bytes, read ONCE: the loading screen reads its art out of them first (a map may
-  // import its own), and a `File` a browser handed us may not be readable a second time.
-  const mapBytes = map instanceof Uint8Array ? map : new Uint8Array(await map.arrayBuffer());
+  // (The map's bytes were read ONCE at the top, for the P4 gate: the loading screen reads its
+  // art out of the same array, and a `File` a browser handed us may not be readable twice.)
   // The loading screen prints the map's own w3i text, and its TRIGSTR fields resolve through
   // war3map.wts (`world/mapInfo.ts`). `info` above was parsed BEFORE `setMapLanguage` went live,
   // so read the w3i once more now that it has — the loading blurb is the first place a player
   // meets the map's own words, and without this it stayed in the author's language.
   if (language) info = localizedMapInfo(parseMapInfo(mapBytes, info.name), language);
-  const loading = await showLoadingScreen(info, config, mapBytes);
+  const loading = await showLoadingScreen(info, config, mapBytes, campaignSource);
   if (gate && loading) {
     gate.onReady = (peer) => loading.setPeerReady(peer);
     // …including anyone who reported while the screen was still being built.
@@ -1115,18 +1564,24 @@ async function startGame(
     // …kept, so the match can be PLAYED AGAIN without going back to the menu: `RestartGame`,
     // the defeat dialog's first button (see restartMatch). The bytes rather than the `File`,
     // because a file handle a browser handed us once may not be readable a second time.
-    lastMatch = { bytes, info, config, mapPath };
+    lastMatch = { bytes, info, config, mapPath, campaignSource };
     // The minimap's markers are read out of the map itself (its terrain header and its placed
     // units), so they can only be stamped once its bytes are in hand — which is why the loading
     // screen takes them afterwards rather than at mount. Never at the cost of the match: a map
     // whose unit list we cannot read still starts, with a bare picture.
     loading?.setMinimapPreview(previewOf(bytes));
-    await step(0.15, () => enterMap(bytes, info.name));
+    await step(0.15, () => enterMap(bytes, info.name, campaignSource));
     mapScene?.setLoadingScreen(true); // the first match's scene exists only from here
+    // A saved game is applied once `main()` has run (MapViewerScene's begin-match flow), so the
+    // units it names are the ones initialization has just built.
+    mapScene?.setPendingSave(restore ?? null);
     // What a REPLAY of this match names its map by (issue #158): the install's own path for it
     // when it came off a list, the bytes' hash so the same name is not taken for the same map.
+    // …and a SAVED GAME names it the same way (issue #159), so Load finds the same file again.
+    const resolvedPath = mapPath ?? (map instanceof File ? [...installMaps].find(([, f]) => f === map)?.[0] : undefined);
+    if (lastMatch && resolvedPath) lastMatch.mapFile = resolvedPath;
     mapScene?.setReplayMap({
-      path: mapPath ?? (map instanceof File ? [...installMaps].find(([, f]) => f === map)?.[0] : undefined) ?? config.mapName ?? info.name,
+      path: resolvedPath ?? config.mapName ?? info.name,
       name: info.name,
       hash: fnv64(bytes),
       size: bytes.length,
@@ -1273,9 +1728,17 @@ function remotePeers(link: MatchLinkSetup): number[] {
  * same reason the quest log's header takes them: `NightElfX01`'s w3i calls itself "NightElfX01"
  * and the screen the player came from calls it "Chapter One — Rise of the Naga".
  */
-async function showLoadingScreen(info: MapInfo, config: MeleeConfig, map: Uint8Array): Promise<LoadingScreen | null> {
+async function showLoadingScreen(
+  info: MapInfo,
+  config: MeleeConfig,
+  map: Uint8Array,
+  campaign?: DataSource,
+): Promise<LoadingScreen | null> {
   const install = resolver.installSource;
-  if (!install) return null; // the zero-asset fallback has no art to put up
+  if (!install) {
+    glue.releaseHeld(); // no picture to put up — never leave a menu standing over the match
+    return null; // the zero-asset fallback has no art to put up
+  }
   // The screen reads the MAP's archive before the install's, as every other asset of the match
   // does (render/assetSolver.ts). It is where a map's own loading model lives (the w3i's
   // `loadingScreenModel` — which, read off the install alone, could never be found), and where
@@ -1283,12 +1746,16 @@ async function showLoadingScreen(info: MapInfo, config: MeleeConfig, map: Uint8A
   // screen's. Bleach vs One Piece ships `UI\Glues\Loading\Multiplayer\Loading-TopLeft.blp` and
   // the rest of the Human race screen's quarters, and the real 1.30.4 client shows its own
   // picture there; read from the install alone, we showed Blizzard's.
-  let vfs: DataSource = install;
+  // A campaign chapter inserts its `.w3n` between the two: the campaign's own loading art is
+  // there, over the install's, under the chapter's.
+  const layers: DataSource[] = [];
   try {
-    vfs = new LayeredDataSource([new MpqDataSource("map", map), install]);
+    layers.push(new MpqDataSource("map", map), ...(campaign ? [campaign] : []));
   } catch (err) {
     console.warn("[Warcraft Open] loading screen: map archive unreadable, using the install's art:", err);
   }
+  layers.push(install);
+  const vfs: DataSource = layers.length === 1 ? install : new LayeredDataSource(layers);
   const chapter = pendingCampaign
     ? campaigns.find((c) => c.key === pendingCampaign?.key)?.missions[pendingCampaign.index]
     : undefined;
@@ -1298,16 +1765,25 @@ async function showLoadingScreen(info: MapInfo, config: MeleeConfig, map: Uint8A
     // picture instead of to a black canvas that fills in a beat later. The menu's own 3D scene
     // stops in the same breath: it is about to be thrown away, and the load is the one moment
     // the machine has something better to do than draw an invisible seascape.
-    const screen = await mountLoadingScreen({
+    const screen = await (isHd() ? mountHdLoadingScreen : mountLoadingScreen)({
       container: loadingLayer, canvas: loadingCanvas, vfs, info, config,
+      // The HD chrome is the install's art; only the map's own picture comes out of `vfs`.
+      install,
       title: chapter?.header, subtitle: chapter?.name,
     });
     show("none");
     loadingCanvas.hidden = false;
+    // The match's own screen is up: on a `?dev` boot this is the moment the boot splash's
+    // install-fetch wait gives way to the game's loading art.
+    dismissBootSplash();
+    // A Reforged menu was HELD up behind this (ui/glue.ts `leave`): the loading picture covers
+    // the window now, so it can come down without uncovering the classic scene underneath.
+    glue.releaseHeld();
     return screen;
   } catch (err) {
     console.warn("[Warcraft Open] loading screen unavailable:", err);
     loadingCanvas.hidden = true;
+    glue.releaseHeld();
     return null;
   }
 }
@@ -1438,6 +1914,9 @@ function endMatch(): void {
 let replayPatchWas: string | null = null;
 
 function exitToMenu(scores: ScoreTable | null = null): void {
+  // The map the finished match was played on — the HD score screen's match-info page draws it,
+  // and `endMatch` below forgets it.
+  const played = lastMatch;
   endMatch();
   if (replayPatchWas !== null) {
     setPatchLevel(replayPatchWas);
@@ -1454,6 +1933,14 @@ function exitToMenu(scores: ScoreTable | null = null): void {
   // you back on the campaign screen, with the chapter you just finished now behind you.
   const campaign = pendingCampaign;
   pendingCampaign = null;
+  // …unless the chapter asked for the list of CAMPAIGNS (`ForceCampaignSelectScreen`): the last
+  // chapter of a campaign hands the player the next campaign's list, when finishing it opened it.
+  if (campaign && campaignState && campaignSelectForced) {
+    const next = campaigns.findIndex((c) => c.key === campaign.key) + 1;
+    campaignState.chapters = false;
+    if (next > 0 && next < campaigns.length && isCampaignOpen(campaigns, next)) campaignState.campaign = campaigns[next];
+  }
+  campaignSelectForced = false;
   const toMenu = (): void => void showMenuBackground(vfs).then(() => {
     if (!vfs) return;
     // glue.show() plays the chrome's Birth itself, so the DOM and the panel arrive together.
@@ -1461,8 +1948,14 @@ function exitToMenu(scores: ScoreTable | null = null): void {
     else void glue.show(mainMenuScreen(vfs));
   });
   lastScores = scores ?? lastScores;
-  if (scores && vfs) void showScoreScreen(vfs, scores).then(toMenu);
-  else toMenu();
+  if (scores && vfs) {
+    // WATCH REPLAY on that screen plays the recording it just wrote; anything else goes on to
+    // the menu (`toMenu`, or the campaign list the match came from).
+    void showScoreScreen(vfs, scores, played?.info).then((watch) => {
+      if (watch) void watchReplayFile("LastReplay" + REPLAY_EXT);
+      else toMenu();
+    });
+  } else toMenu();
 }
 
 /**
@@ -1475,24 +1968,31 @@ function exitToMenu(scores: ScoreTable | null = null): void {
  *  screen back up without playing a match to its end again. */
 let lastScores: ScoreTable | null = null;
 
-async function showScoreScreen(vfs: DataSource, table: ScoreTable): Promise<void> {
+async function showScoreScreen(vfs: DataSource, table: ScoreTable, mapInfo?: MapInfo): Promise<boolean> {
   show("none");
+  let watch = false;
   try {
     let done: () => void = () => {};
     const ok = new Promise<void>((resolve) => { done = resolve; });
     // The match just played, when it was recorded: Save Replay keeps it under a name. The name
     // offered is the map's and when it was played (render/mapViewer.ts `suggestedName`).
     const rec = lastRecordedReplay();
-    const screen = await mountScoreScreen({
+    const screen = await (isHd() ? mountHdScoreScreen : mountScoreScreen)({
       container: loadingLayer, canvas: loadingCanvas, vfs, table,
       localPlayer: table.viewer, onOk: () => done(),
       replay: rec ? { sink: rec.sink, written: rec.written, suggested: rec.suggested } : undefined,
+      map: mapInfo ? { name: mapInfo.name, previewImage: mapInfo.previewImage, minimap: mapInfo.minimap } : undefined,
+      // The HD info page's WATCH REPLAY: close the screen, then play the recording that was just
+      // written as LastReplay (the caller starts it once this resolves true).
+      onWatchReplay: rec ? () => { watch = true; done(); } : undefined,
     });
     loadingCanvas.hidden = false;
     // The featured race's VictoryMusic / DefeatMusic (war3skins) under it, as the reference plays.
     const music = scoreScreenMusic(vfs, table, table.viewer);
     if (music) sounds?.playMusic(music);
     await ok;
+    // Watching needs the recording on disk before the replay reader looks for it.
+    if (watch) await rec?.written;
     glueAudio?.click();
     // Leave through BLACK: the screen fades out where it stands, and the menu's own cover takes
     // over at full black before the screen comes down — the score screen lives on the loading
@@ -1507,6 +2007,7 @@ async function showScoreScreen(vfs: DataSource, table: ScoreTable): Promise<void
   }
   loadingCanvas.hidden = true;
   loadingLayer.querySelector(".score-fade")?.remove();
+  return watch;
 }
 
 /** Bring a black veil up over everything on `layer` (the loading layer's canvas sits under it
@@ -1522,10 +2023,6 @@ async function fadeOutLayer(layer: HTMLElement, ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-// Boot flow (issue #54): the WC3 menus are constructed from the install's own
-// UI\FrameDef\*.fdf files, so we gate on loading the game files first — a single
-// button over the flying terrain — then build the FDF main menu and continue.
-let gate: { dispose(): void } | null = null;
 // The DESKTOP front page (src/ui/home.ts) — the site's layout with the launcher's own buttons.
 let home: Home | null = null;
 
@@ -1551,9 +2048,8 @@ function mountInstall(load: GateLoad): void {
   resolver.setInstall(load.vfs);
   installMaps = load.maps; // the Custom Game screen's map list
   installFlavour = load.flavour; // …and which game files a replay says it was played on
+  setGameVersion(load.gameVersion); // …and the exact build an HD room puts on the wire
   ((window as unknown as { warcraftOpen: Record<string, unknown> }).warcraftOpen ??= {}).vfs = load.vfs;
-  gate?.dispose();
-  gate = null;
   home?.dispose();
   home = null;
   applyMenuCursor(load.vfs); // WC3 human hand cursor in the menus
@@ -1585,14 +2081,22 @@ function mountInstall(load: GateLoad): void {
 /** Bring up the main menu over its animated 3D scene. The scene has to exist before the menus
  *  do: it owns the panel chrome whose Birth/Death clips time their transitions (ui/glue.ts). */
 function showMenu(load: GateLoad): void {
-  void showMenuBackground(load.vfs).then(() => {
-    glue.setScene(menuScene);
-    void showMainMenu(load.vfs);
-    // The desktop app asked GitHub for a newer version seconds after launch; this is the first
-    // moment there is a screen worth interrupting, and the game's own message box to do it in
-    // (src/ui/updatePrompt.ts). A no-op in a browser, which updates by being reloaded.
-    watchForUpdates(ui, load.vfs);
-  });
+  void showMenuBackground(load.vfs)
+    .then(async () => {
+      glue.setScene(menuScene);
+      await showMainMenu(load.vfs);
+      // The desktop app asked GitHub for a newer version seconds after launch; this is the first
+      // moment there is a screen worth interrupting, and the game's own message box to do it in
+      // (src/ui/updatePrompt.ts). A no-op in a browser, which updates by being reloaded.
+      watchForUpdates(ui, load.vfs);
+    })
+    .catch((err: unknown) => {
+      // A menu that cannot be built must not leave the launch's progress screen up for ever: the
+      // bar has already reached 100% and would sit there saying "starting…" with nothing behind
+      // it. Say what happened in the console and let the screen go.
+      console.error("[Warcraft Open] the main menu could not be built:", err);
+    })
+    .finally(() => dismissBootSplash()); // the menu is standing — or it is not, and the wait is over
 }
 
 /** Hand off from the launcher to the main menu once the archives are mounted. */
@@ -1680,8 +2184,13 @@ if (replayBridge()) {
   // own page (src/replayBoot.ts). It watches the one replay it is handed and nothing else.
   void replayBoot(ui, replayBridge()!, { mountInstall, watchReplay });
 } else if (import.meta.env.DEV && new URLSearchParams(location.search).has("dev")) {
+  // A scripted boot has no gate to press and fetches the whole install before any screen
+  // exists, so the launch's progress screen covers it: the bar's progress comes from the fetch
+  // and the mount, and it comes down in `showMenu` / `showLoadingScreen` once something is
+  // standing.
+  mountBootSplash();
   void import("./dev/devBoot")
-    .then((m) =>
+    .then(async (m) =>
       m.devBoot({
         mountInstall,
         showMenu,
@@ -1689,11 +2198,14 @@ if (replayBridge()) {
         watchReplay,
         startChapter,
         startCredits: () => startCredits(resolver.installSource!),
+        loadSavedGame,
+        progress: (fraction, message) => progressBootSplash(fraction, message),
       }),
     )
     .catch((err) => {
       console.error("[dev-boot] failed:", err);
-      gate = mountLoadGate(ui, onFilesLoaded); // fall back to the human path
+      dismissBootSplash();
+      home = mountHome(ui, onFilesLoaded); // fall back to the launcher
     });
 } else {
   // The launcher's front page is the same page in the browser: /play/ opens on it, and the
@@ -1723,14 +2235,21 @@ if (replayBridge()) {
     const vfs = resolver.installSource;
     const t = table ?? lastScores;
     // Over a menu that is already up there is no `show` to lift the black it leaves through.
-    return vfs && t ? showScoreScreen(vfs, t).then(() => glue.uncover()) : Promise.resolve();
+    return vfs && t
+      ? showScoreScreen(vfs, t, lastMatch?.info).then((watch) => {
+        if (watch) void watchReplayFile("LastReplay" + REPLAY_EXT);
+        else glue.uncover();
+      })
+      : Promise.resolve();
   },
   lastScores: () => lastScores,
   // Watch a replay out of the replay folder by its file name (issue #158).
   watchReplay: async (name = "LastReplay.o3r") => {
     const bytes = await replaySink()?.read(name);
     if (!bytes) throw new Error(`no replay named ${name}`);
-    await watchReplay(await decodeReplay(bytes));
+    const replay = await decodeReplay(bytes);
+    refuseOtherLine(replay);
+    await watchReplay(replay);
   },
   // Voice Control's mapping without a microphone (src/voice/control.ts).
   voiceSay,

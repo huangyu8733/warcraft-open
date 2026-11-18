@@ -36,6 +36,17 @@ export const MAX_STEP_MS = 33;
  *  transition runs at its real speed rather than being clamped down to a fraction of it. */
 const PUMP_MS = 16;
 
+/** How long a scheduled rAF may go unserved before the pump takes over.
+ *
+ *  `document.hidden` is not the only way a tab stops being drawn: an OCCLUDED window (another
+ *  window over it, a minimised shell, an automated capture) keeps `visibilityState === "visible"`
+ *  and still gets no rAF callbacks at all — measured at zero frames in five seconds in the
+ *  desktop capture browser. From in here that is indistinguishable from the compositor taking a
+ *  while, so we wait a quarter of a second before deciding, which no healthy frame interval
+ *  reaches. Without this the panel fades never ran and a glue screen stayed at opacity 0: the
+ *  3D scene behind it drew, the menu on top never appeared. */
+const STARVE_MS = 250;
+
 type FrameFn = (dt: number, now: number) => void;
 
 interface Timer {
@@ -50,6 +61,11 @@ let clock = 0;
 let last = 0;
 let raf = 0;
 let pump: Worker | null = null;
+/** `performance.now()` when `step` last ran — the watchdog's only evidence that frames ARE
+ *  being served. 0 until the first step. */
+let lastStepAt = 0;
+/** The starvation watchdog (see STARVE_MS); null while there is nothing to watch. */
+let starve: ReturnType<typeof setInterval> | null = null;
 /** Each subscriber, against whether it is worth keeping the clock turning for while the tab is
  *  hidden (see `onAnimFrame`). */
 const subs = new Map<FrameFn, boolean>();
@@ -122,6 +138,7 @@ function step(now: number): void {
   }
   for (const cb of [...subs.keys()]) cb(dt, clock);
 
+  lastStepAt = performance.now();
   drive();
 }
 
@@ -135,32 +152,70 @@ function drive(): void {
   const wantPump = hidden && unwatchedWork;
   const wantRaf = !hidden && anything;
 
-  if (!wantPump && pump) {
-    pump.terminate();
-    pump = null;
-  }
+  // The pump is OURS to stop only when the tab is hidden: while visible it may be the
+  // starvation fallback (see STARVE_MS), and a real frame — not this function — retires it.
+  if (!wantPump && hidden && pump) stopPump();
   if (!wantRaf && raf) {
     cancelAnimationFrame(raf);
     raf = 0;
   }
   if (!wantRaf && !wantPump) {
+    stopPump();
+    unwatch();
     last = 0; // a later restart must not be charged for the gap nothing was running across
     return;
   }
   if (wantRaf && !raf) raf = requestAnimationFrame(frame);
-  if (wantPump && !pump) {
-    // Same shape as mapViewer's background pump: a page's own timers are clamped to ~1 Hz when
-    // it is hidden (worse under intensive throttling), a dedicated worker's are not, so the
-    // ticking lives there and the handler runs on the main thread like any other message.
-    const url = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${PUMP_MS});`], { type: "text/javascript" }));
-    pump = new Worker(url);
-    URL.revokeObjectURL(url); // the worker holds its own reference; the URL has done its job
-    pump.onmessage = () => step(performance.now());
-  }
+  if (wantPump) startPump();
+  watch();
+}
+
+/** The worker pump: a page's own timers are clamped to ~1 Hz when it is hidden (worse under
+ *  intensive throttling), a dedicated worker's are not, so the ticking lives there and the
+ *  handler runs on the main thread like any other message. */
+function startPump(): void {
+  if (pump) return;
+  const url = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${PUMP_MS});`], { type: "text/javascript" }));
+  pump = new Worker(url);
+  URL.revokeObjectURL(url); // the worker holds its own reference; the URL has done its job
+  pump.onmessage = () => step(performance.now());
+}
+
+function stopPump(): void {
+  pump?.terminate();
+  pump = null;
+}
+
+/**
+ * Watch for a rAF that is never served. Armed whenever the clock has work, so the first step
+ * starts the countdown; a visible tab whose compositor has stopped delivering frames then
+ * falls back to the pump instead of freezing every fade at its first keyframe.
+ */
+function watch(): void {
+  if (starve || typeof setInterval === "undefined") return;
+  lastStepAt = performance.now();
+  starve = setInterval(() => {
+    if (!subs.size && !timers.size) {
+      unwatch();
+      return;
+    }
+    if (pump) return; // already stepping, whoever started it
+    if (typeof document !== "undefined" && document.hidden) return; // drive() owns that case
+    if (performance.now() - lastStepAt < STARVE_MS) return;
+    last = 0; // the pump starts from now: do not charge it for the stall it is ending
+    startPump();
+  }, STARVE_MS);
+}
+
+function unwatch(): void {
+  if (starve) clearInterval(starve);
+  starve = null;
 }
 
 function frame(t: number): void {
   raf = 0;
+  // A real frame means the compositor is serving us again: retire the starvation pump.
+  stopPump();
   step(t);
 }
 

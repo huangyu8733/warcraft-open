@@ -9,7 +9,7 @@
 // is deliberate — the interpreter must stay engine-agnostic (bridge, not fork).
 
 import type { FunctionDecl } from "./ast";
-import { type JassValue, JNULL, jHandle } from "./values";
+import { type JassValue, JNULL, jHandle, defaultForType } from "./values";
 import { isNeutralSlot, PlayerSlot, widePlayerTable } from "../data/enums";
 import type { StoredUnitState } from "../sim/world";
 
@@ -256,6 +256,12 @@ export interface SoundObj {
    *  It's metadata a script waits on ("play the line, wait its duration, play the next"),
    *  not something that truncates playback. */
   duration: number;
+  /** SetDialogueSpeakerNameKey / SetDialogueTextKey — the line this sound says, attached to the
+   *  handle rather than passed to the transmission. 1.32+ campaign maps (and 3.0's reworked
+   *  classic ones) build every line this way in `InitSounds` and then call
+   *  `PlayDialogueFromSpeaker*BJ`, which reads the pair back with the matching `Get…` natives. */
+  dialogueSpeaker: string;
+  dialogueText: string;
   x: number;
   y: number;
   z: number;
@@ -498,7 +504,7 @@ export interface GameCacheObj {
  *  cross-checked against war3mapUnits.doo (the 7.2 oracle) even with no engine
  *  attached, and so bridge lookups can map a unit handle back to our sim id. */
 /** The columns the GetUnitDefault… natives read (natives/world.ts). */
-export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange" | "pointValue";
+export type UnitTypeDefault = "moveSpeed" | "turnRate" | "flyHeight" | "acquireRange" | "pointValue" | "foodUsed" | "foodMade";
 
 /** The filter UnitRemoveBuffsEx / UnitCountBuffsEx take, argument for argument (jassbot). */
 export interface BuffFilter {
@@ -644,6 +650,9 @@ export interface EngineHooks {
   restoreUnit?(stored: StoredUnitState, player: number, x: number, y: number, facing: number): number;
   setResourceAmount?(unitId: number, amount: number): void;
   setUnitAcquireRange?(unitId: number, range: number): void;
+  /** `BlzCreateUnitWithSkin` / `BlzSetUnitSkin` — the skin the unit is DRAWN as (a render-only
+   *  fact; the authoritative state and the replay hash never see it). */
+  setUnitSkin?(unitId: number, skinId: number): void;
   /** GetUnitAcquireRange — the range the unit auto-acquires at: a script's, else its own
    *  (a creep's placed aggro range, else its weapon's `acquire`). undefined when it is gone. */
   getUnitAcquireRange?(unitId: number): number | undefined;
@@ -651,6 +660,19 @@ export interface EngineHooks {
    *  by TYPE, never by unit: Test of Faith asks it of `GetDyingUnit()`, which has already left
    *  the world. undefined for a type the registry does not have. */
   unitTypeDefault?(typeId: string, field: UnitTypeDefault): number | undefined;
+  /** `SetUnitUseFood` — "Enable/Disable Supply Usage" (UI\TriggerStrings.txt): whether the unit
+   *  EATS its type's food. Only the using half — a Farm that has it turned off still makes six.
+   *  The sim's `SimUnit.foodFree`, which the food bar and both AIs already honour. */
+  setUnitUseFood?(unitId: number, useFood: boolean): void;
+  /** Whether the unit eats food (`!SimUnit.foodFree`); undefined when it is gone. */
+  getUnitUsesFood?(unitId: number): boolean | undefined;
+  /** `UnitAddSleep` — the unit's `SimUnit.canSleep` ("Make Unit Sleep At Night"). */
+  setUnitCanSleep?(unitId: number, canSleep: boolean): void;
+  /** `UnitCanSleep` / `UnitIsSleeping` — `SimUnit.canSleep` / `.asleep`; undefined when it is gone. */
+  getUnitCanSleep?(unitId: number): boolean | undefined;
+  getUnitSleeping?(unitId: number): boolean | undefined;
+  /** `UnitWakeUp` — `SimWorld.wakeUnit`: nocturnal sleep only, and the camp is not roused. */
+  wakeUnit?(unitId: number): void;
   setUnitState?(unitId: number, whichState: number, value: number): void;
   getUnitState?(unitId: number, whichState: number): number; // GetUnitState (life/mana/…)
   setUnitColor?(unitId: number, color: number): void; // SetUnitColor — team-colour tint
@@ -705,6 +727,16 @@ export interface EngineHooks {
   /** …and its pending item pickup/drop/use/sell events, for `NativeCtx.flushItemEvents`. */
   drainItemEvents?(): ReadonlyArray<unknown>;
   issueUnitOrder?(unitId: number, orderId: number, order: string, kind: "immediate" | "point" | "target", x: number, y: number, targetId: number): boolean;
+  /** IssueTargetOrder aimed at an ITEM on the ground (`IssueTargetItemOrder`, the GUI's "Issue
+   *  Order Targeting An Item"): smart walks over and picks it up, attack strikes it. `itemId`
+   *  is the sim's item id — never a unit id (natives/orderTarget.ts). */
+  issueItemOrder?(unitId: number, orderId: number, order: string, itemId: number): boolean;
+  /** IssueTargetOrder aimed at a destructable the sim keeps no unit for — a TREE, known there
+   *  only by where it stands: smart/harvest gathers it, attack swings at it. */
+  issueTreeOrder?(unitId: number, orderId: number, order: string, x: number, y: number): boolean;
+  /** The sim unit standing in for a map destructable (a gate, a crate, a barricade), or 0 when
+   *  it has none (a tree, a bridge, a dead one). */
+  destructableUnit?(id: number): number;
   /** IssueNeutral*OrderById — an order to a neutral building on `player`'s behalf (a purchase:
    *  `orderId` is the ware's rawcode). True when the sale went through. */
   issueNeutralOrder?(player: number, shopId: number, orderId: number, kind: "immediate" | "point" | "target"): boolean;
@@ -854,6 +886,11 @@ export interface EngineHooks {
   isUnitInRangeXY?(unitId: number, x: number, y: number, distance: number): boolean;
   /** IsUnitIllusion — a Mirror Image / Wand of Illusion copy (docs/illusions.md). */
   isUnitIllusion?(unitId: number): boolean;
+  /** IsUnitLoaded / IsUnitInTransport — the hold a unit is riding in, 0 when it is in none
+   *  (SimUnit.garrisonHost: a transport, a Burrow, an Entangled Gold Mine — one roster). */
+  unitTransport?(unitId: number): number;
+  /** IsSuspendedXP — the reader of SuspendHeroXP's flag. */
+  isHeroXpSuspended?(unitId: number): boolean;
   /** IsUnitRace — the unit's race, as `UnitData.slk` spells it ("human", "orc", …). */
   unitRace?(unitId: number): string;
   /** IsTerrainPathable — `t` is common.j's `pathingtype` index. TRUE means BLOCKED: the
@@ -912,6 +949,10 @@ export interface EngineHooks {
    *  rather than a flag the script reads back: see SimWorld.setItemDroppable for the game's
    *  own wording of it and for what "leave" covers. */
   setItemDroppable?(itemId: number, flag: boolean): void;
+  /** SetItemPawnable — whether a shop will buy this one item back (SimWorld.setItemPawnable). */
+  setItemPawnable?(itemId: number, flag: boolean): void;
+  /** SetItemDropOnDeath — whether this one item falls out of a dying hero (SimWorld.setItemDropOnDeath). */
+  setItemDropOnDeath?(itemId: number, flag: boolean): void;
   /** SetItemInvulnerable — an item no attack may break (SimWorld.issueAttackItem). */
   setItemInvulnerable?(itemId: number, flag: boolean): void;
   /** SetWidgetLife on an item — its hit points on the ground; 0 breaks it. */
@@ -971,6 +1012,8 @@ export interface EngineHooks {
   setUnitUseFood?(unitId: number, useFood: boolean): void;
   /** SetUnitAnimation / ResetUnitAnimation — play the named clip ("" resets to stand). */
   setUnitAnimation?(unitId: number, animation: string): void;
+  /** QueueUnitAnimation — play the named clip after the one the unit is showing. */
+  queueUnitAnimation?(unitId: number, animation: string): void;
   /** AddUnitAnimationProperties — add (true) or remove (false) an animation TAG ("alternate",
    *  "work", "upgrade first") that picks which of the model's clips the unit wears. */
   addUnitAnimationProperties?(unitId: number, props: string, add: boolean): void;
@@ -1001,6 +1044,11 @@ export interface EngineHooks {
    *  is seconds for the timed native, or < 0 for the untimed one (host default). Only
    *  the local player's messages should reach the HUD (the BJ force helpers gate that). */
   displayText?(player: number, msg: string, duration: number): void;
+  /** `SaveGame` / `LoadGame` — REQUESTS, carried out once the script's pump is done (a save is
+   *  the match between steps); `SaveGameExists` asks the saves folder (natives/saves.ts). */
+  saveGame?(name: string): void;
+  loadGame?(name: string, doScoreScreen: boolean): void;
+  saveGameExists?(name: string): boolean;
   /** Clear the on-screen messages (ClearTextMessages / the BJ force variant). */
   clearText?(player: number): void;
   /** Resolve a unit's display name (GetUnitName / GetHeroProperName) from our data
@@ -1177,6 +1225,9 @@ export interface EngineHooks {
    * `mapName` is an archive path, exactly as the campaign index spells it.
    */
   changeLevel?(mapName: string, doScoreScreen: boolean): void;
+  /** ForceCampaignSelectScreen — when this chapter is left, the menu opens on the list of
+   *  CAMPAIGNS rather than on this campaign's chapters (natives/dialogs.ts has the why). */
+  forceCampaignSelect?(): void;
   /** PauseGame — CustomVictoryDialogBJ freezes a single-player game under its dialog. */
   pauseGame?(flag: boolean): void;
   /** EnableUserUI(false) — hide the HUD (the victory dialog does this in campaigns). */
@@ -1504,7 +1555,7 @@ export type JassFogArea =
 /** Opaque handle store: integer ids → backing JS objects, with interning so
  *  stable references (players, enum constants like PLAYER_COLOR_RED) return the
  *  same id every time — which makes JASS `==` on them work by id equality. */
-class HandleTable {
+export class HandleTable {
   private nextId = 1;
   private table = new Map<number, unknown>();
   private interned = new Map<string, number>();
@@ -1541,27 +1592,42 @@ export class ThreadAbort {}
  *  Sparse map + a per-type default so unset slots read as 0/0.0/false/null. */
 export class JassArray {
   private data = new Map<number, JassValue>();
-  constructor(public readonly elemType: string, private makeDefault: () => JassValue) {}
+  /** The default an unset slot reads as is the element TYPE's (`defaultForType`), worked out
+   *  from the type rather than kept as a closure — a saved game writes an array down as its
+   *  type and its slots (docs/save-games.md), and a closure is not something it can write. */
+  constructor(public readonly elemType: string) {}
   get(i: number): JassValue {
-    return this.data.get(i) ?? this.makeDefault();
+    return this.data.get(i) ?? defaultForType(this.elemType);
   }
   set(i: number, v: JassValue): void {
     this.data.set(i, v);
+  }
+  /** Every index that has ever been written, for the save game (game/saveState.ts). An array
+   *  is created once at 8k slots and written sparsely, so the written entries are the whole of
+   *  its state — every other index answers `makeDefault` anyway. */
+  entries(): Array<[number, JassValue]> {
+    return [...this.data];
   }
 }
 
 /** mulberry32 — a tiny deterministic PRNG. JASS GetRandomInt/Real must be
  *  reproducible for replays / server-authoritative sync, so we never use
- *  Math.random(). Seed is fixed unless the host overrides it. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+ *  Math.random(). Seed is fixed unless the host overrides it.
+ *
+ *  Its position is a FIELD rather than a closure's hidden variable: a saved game writes the
+ *  runtime down field by field (docs/save-games.md), and a stream it could not see would come
+ *  back rewound to its seed. */
+export class Mulberry32 {
+  constructor(private a: number) {
+    this.a = a >>> 0;
+  }
+  next(): number {
+    this.a |= 0;
+    this.a = (this.a + 0x6d2b79f5) | 0;
+    let t = Math.imul(this.a ^ (this.a >>> 15), 1 | this.a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  }
 }
 
 export class Runtime {
@@ -1884,6 +1950,20 @@ export class Runtime {
     return this.spawnDepth > 0;
   }
 
+  /**
+   * The MAP FLAGS — `SetMapFlag` / `IsMapFlagSet` (issue #296). common.j numbers every `mapflag`
+   * as a power of two (`MAP_FOG_HIDE_TERRAIN = ConvertMapFlag(1)` … `MAP_RANDOM_HERO =
+   * ConvertMapFlag(8192*16)`), so the set is one bitfield and a flag's enum index IS its bit.
+   *
+   * Seeded with the LOBBY's options before config() runs (`loadMapScript`'s `mapFlags`,
+   * net/advancedOptions.ts `mapFlagsOf`), written by the script's own `SetMapFlag`, and read by
+   * Blizzard.j: the four `MeleeStartingUnits<Race>` open on `IsMapFlagSet(MAP_RANDOM_HERO)` and
+   * `MeleeDefeatDialogBJ` offers "Continue Observing" on `MAP_OBSERVERS_ON_DEATH`. The native
+   * used to answer false to everything, so ticking Random Hero gave nobody a hero. A plain
+   * number field: it is match state and a saved game keeps it (docs/save-games.md).
+   */
+  mapFlags = 0;
+
   /** SetPlayerTechMaxAllowed / GetPlayerTechMaxAllowed — "player:tech" → cap. The SCRIPT's own
    *  copy, so that `ReducePlayerTechMaxAllowed` (which reads the cap back before lowering it)
    *  sees what it wrote; the cap that decides anything is the one the same native hands the sim
@@ -1892,14 +1972,29 @@ export class Runtime {
    *  -1 means "no limit", as in WC3. */
   readonly techMaxAllowed = new Map<string, number>();
 
+  /**
+   * Tables a native MODULE keeps for this runtime — the one handle each map destructable was
+   * given, the one handle each ability instance was given — so that a second ask returns the
+   * SAME handle and JASS `==` holds between them. They used to be module-level WeakMaps keyed on
+   * the runtime, which a saved game cannot see (docs/save-games.md): loaded, every destructable
+   * a map had already looked at would be handed a NEW handle, and `gg_dest_*` would stop being
+   * equal to what `EnumDestructablesInRect` hands a filter.
+   */
+  private readonly nativeTables = new Map<string, Map<string | number, unknown>>();
+  nativeTable<K extends string | number, V>(name: string): Map<K, V> {
+    let t = this.nativeTables.get(name);
+    if (!t) this.nativeTables.set(name, (t = new Map()));
+    return t as Map<K, V>;
+  }
+
   /** The seeded RNG behind GetRandomInt/Real. Indirected through `rng` so SetRandomSeed can
    *  really re-seed it: blizzard.j's CinematicModeExBJ fixes the seed to 0 for the duration
    *  of a cinematic ("so that cinematics play consistently") and restores the old stream
    *  afterwards — a no-op SetRandomSeed silently breaks that contract, and Monolith's own
    *  comment calls it out ("the random seed is fixed while cinematic mode is on, so it's
    *  important to [place the random shards] after we turn it off"). */
-  private rng: () => number;
-  readonly random = (): number => this.rng();
+  private rng: Mulberry32;
+  readonly random = (): number => this.rng.next();
   /**
    * How many times `GetLocalPlayer` has been answered. Not a statistic — a PROBE. The
    * interpreter snapshots it around an `if`'s conditions and compares; a change means that
@@ -2004,12 +2099,12 @@ export class Runtime {
   }
 
   constructor(seed = 0x9e3779b9) {
-    this.rng = mulberry32(seed);
+    this.rng = new Mulberry32(seed);
   }
 
   /** SetRandomSeed. */
   setRandomSeed(seed: number): void {
-    this.rng = mulberry32(seed);
+    this.rng = new Mulberry32(seed);
   }
 
   /** Hand the lobby's resolved slots to the script (7.3), between config() and main().

@@ -101,6 +101,12 @@ export interface LoadingScreenOptions {
   /** The canvas the background art and the load bar are drawn into. */
   canvas: HTMLCanvasElement;
   vfs: DataSource;
+  /**
+   * The install alone, when it is not the same source as `vfs`. The HD screen's 3.0 chrome —
+   * the sheet, the parchment, the bar — is the install's art and never the map's, so it reads
+   * from here instead of walking the map archive's (sometimes enormous) list on every match.
+   */
+  install?: DataSource;
   /** The map about to be played — its minimap, its name, and what it says its screen is. */
   info: MapInfo;
   /** The seating, for the roster and for whose race the melee screen wears. */

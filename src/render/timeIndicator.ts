@@ -1,11 +1,13 @@
 import ModelViewerCtor from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import mdxHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/handler";
 import blpHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/blp/handler";
+import ddsHandler from "mdx-m3-viewer/dist/cjs/viewer/handlers/dds/handler";
 import MdlxModel from "mdx-m3-viewer/dist/cjs/parsers/mdlx/model";
 import type { DataSource } from "../vfs/types";
 import { CanvasSize } from "./canvasSize";
-import type { PlayableRace } from "../data/races";
 import { dataNum } from "../data/gameplayConstants";
+import { isHd } from "../data/flavor";
+import { hdTexturePaths } from "../vfs/tileset";
 
 // The top-bar day/night clock (issue #47). WC3 doesn't draw this widget out of a
 // texture — it is a little MDX scene, one per race, named by UI\war3skins.txt's
@@ -62,16 +64,23 @@ const ViewerClass = ModelViewerCtor as unknown as {
   new (canvas: HTMLCanvasElement, options?: WebGLContextAttributes): Viewer;
 };
 
-const RACE_DIR: Record<PlayableRace, string> = {
-  human: "Human",
-  orc: "Orc",
-  undead: "Undead",
-  nightelf: "NightElf",
+/** The war3skins section → the folder its indicator model lives in. The interface's THEME is a
+ *  section (src/data/uiTheme.ts), which is why this follows the skin rather than the player's
+ *  race: an Orc-themed Human player gets the Orc medallion sitting in the Orc console strip.
+ *  `[Default]` and anything unknown fall back to Human, which is the art the classic table's
+ *  four race sections all decorate their strip from anyway. */
+const SECTION_DIR: Record<string, string> = {
+  Human: "Human",
+  Orc: "Orc",
+  NightElf: "NightElf",
+  Undead: "Undead",
+  Forsaken: "Forsaken",
 };
 
-/** `UI\war3skins.txt` [<Race>] TimeOfDayIndicator — the widget model for a race. */
-export function timeIndicatorPath(race: PlayableRace): string {
-  return `UI\\Console\\${RACE_DIR[race]}\\${RACE_DIR[race]}UI-TimeIndicator.mdx`;
+/** `UI\war3skins.txt` [<section>] TimeOfDayIndicator — the widget model for a skin section. */
+export function timeIndicatorPath(skinSection: string): string {
+  const dir = SECTION_DIR[skinSection] ?? "Human";
+  return `UI\\Console\\${dir}\\${dir}UI-TimeIndicator.mdx`;
 }
 
 /** Model-space box of the frame ring geoset — what the ortho camera is framed on.
@@ -109,18 +118,27 @@ export class TimeIndicatorClock {
     // whose translucency this would otherwise flatten.)
     const gl = viewer.gl;
     gl.blendFunc = (src: number, dst: number) => gl.blendFuncSeparate(src, dst, gl.ZERO, gl.ONE);
-    this.solver = (src) => (typeof src === "string" ? this.vfs.read(src) : src);
-    viewer.addHandler(mdxHandler, this.solver, false);
+    this.solver = (src) => {
+      if (typeof src !== "string") return src;
+      if (!isHd()) return this.vfs.read(src);
+      for (const path of hdTexturePaths(src, true)) {
+        if (this.vfs.exists(path)) return this.vfs.read(path);
+      }
+      return undefined;
+    };
+    const hd = isHd();
+    viewer.addHandler(mdxHandler, this.solver, hd);
     viewer.addHandler(blpHandler);
+    if (hd) viewer.addHandler(ddsHandler); // Reforged art (P3-4)
     const scene = viewer.addScene();
     scene.alpha = true; // we clear it ourselves, to transparent
     this.viewer = viewer;
     this.scene = scene;
   }
 
-  /** Load the race's indicator model. Resolves false if the install can't supply it. */
-  async load(race: PlayableRace): Promise<boolean> {
-    const path = timeIndicatorPath(race);
+  /** Load the skin section's indicator model. Resolves false if the install can't supply it. */
+  async load(skinSection: string): Promise<boolean> {
+    const path = timeIndicatorPath(skinSection);
     if (!this.vfs.exists(path)) return false;
     const bytes = await this.vfs.read(path);
     // The viewer's Geoset keeps only GL buffer offsets, so parse the MDX a second

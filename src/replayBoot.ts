@@ -24,7 +24,9 @@
 // an option reads the player's, in whatever shape THIS version keeps them.
 
 import { loadNativeInstall } from "./assets/nativeInstall";
-import { decodeReplay, type Replay } from "./game/replay";
+import { decodeReplay, replayRefusalText, type Replay } from "./game/replay";
+import { flavor } from "./data/flavor";
+import { gameVersion } from "./data/gameVersion";
 import { loadProfile, type LoadResult } from "./vfs/loader";
 import { DEFAULT_PROFILE } from "./vfs/profiles";
 
@@ -67,6 +69,11 @@ export async function replayBoot(root: HTMLElement, bridge: ReplayBridge, hooks:
     const bytes = await bridge.replay();
     if (!bytes) throw new Error("The replay was not handed over.");
     const replay = await decodeReplay(new Uint8Array(bytes));
+    const refused = replayRefusalText(replay.header, flavor(), gameVersion());
+    if (refused) {
+      console.error(`[replay] refused: ${refused}`);
+      throw new Error(refused);
+    }
     note.remove();
     await hooks.watchReplay(replay);
   } catch (err) {

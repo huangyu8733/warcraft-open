@@ -46,6 +46,14 @@ export interface RoomInfo {
    *  different object tables, so the two can never share a match and each lists only its own.
    *  Absent from a relay older than this field, and read as the expansion then. */
   edition?: "roc" | "tft";
+  /** Which data / asset line the host is on (src/data/flavor.ts). SD and HD never share a match
+   *  or a map pool, and each lists only its own. Absent from a relay older than this field, and
+   *  read as classic SD then — the only line that existed when it was written. */
+  flavor?: "sd" | "hd";
+  /** The host's exact build, compared only in an HD room: Reforged patches carry balance changes,
+   *  so every machine in an HD match has to be on the same one. Absent for SD, where the version
+   *  gate already pins the data. */
+  gameVersion?: string;
   /** The host's Game Speed rung (src/data/gameSpeed.ts), printed on the join screen. Absent from
    *  an older relay or host, and read as Fast then. The MATCH takes its speed from `start`'s
    *  `advanced`, never from this. */
@@ -56,13 +64,13 @@ export interface RoomInfo {
 
 export type ClientMessage =
   /** Announce a game. The sender becomes the room's host, hence its authority. */
-  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number; observers?: boolean; edition?: "roc" | "tft"; speed?: number }
+  | { t: "create"; name: string; playerName: string; mapName: string; mapPath: string; maxPlayers: number; observers?: boolean; edition?: "roc" | "tft"; speed?: number; flavor?: "sd" | "hd"; gameVersion?: string }
   /** Ask for the game list. The relay also pushes `rooms` unprompted when it changes. */
   | { t: "list" }
   /** Join a room. `token` is a REJOIN token from an earlier `created`/`joined` in this room —
    *  present it to reclaim the same slot after a dropped connection (Phase E item 11). Absent
    *  for a first-time join. */
-  | { t: "join"; roomId: string; playerName: string; token?: string }
+  | { t: "join"; roomId: string; playerName: string; token?: string; flavor?: "sd" | "hd"; gameVersion?: string }
   | { t: "leave" }
   /** HOST only: let a dropped player's held seat go now, rather than when the relay's hold runs
    *  out — WC3's "Waiting for players..." countdown reached zero. Ignored for a live peer. */
@@ -179,7 +187,12 @@ export type GameMessage =
   | import("./mapTransfer").MapGot;
 
 /** Bumped whenever the shapes above change incompatibly; the client refuses a mismatch
- *  rather than failing in a confusing way three messages later. */
+ *  rather than failing in a confusing way three messages later.
+ *
+ *  `RoomInfo.flavor` / `gameVersion` and the matching `create` / `join` fields are OPTIONAL and
+ *  do not bump this: an older relay ignores them, and an older client reads a missing flavor as
+ *  SD — the only line that existed then. Bumping would cut every older relay off for a feature
+ *  that is off by default. */
 export const PROTOCOL_VERSION = 14; // 14: `drop`/`seat`/`abandon`, a refused stale rejoin — 13: observers, colours, advanced options
 
 /** What the relay answers a rejoin whose seat has been let go (server/rooms.mjs `DROPPED`).

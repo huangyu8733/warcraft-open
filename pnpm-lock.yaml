@@ -8,9 +8,6 @@ patchedDependencies:
   fengari@0.1.5:
     hash: 8949c3f6bad2f86f49a7d5fb2ec7f2ae67217e3183f01ad50bcdd7e6d18b59f3
     path: patches/fengari@0.1.5.patch
-  mdx-m3-viewer@5.12.0:
-    hash: 4e971affaf220a2718132299cdff5d1548aa0852b0127e5d3553970ad97a27e2
-    path: patches/mdx-m3-viewer@5.12.0.patch
 
 importers:
 
@@ -28,6 +25,9 @@ importers:
       pinyin-pro:
         specifier: ^3.29.5
         version: 3.29.5
+      whiteout-js-viewer:
+        specifier: ^0.12.0
+        version: 0.12.0
       ws:
         specifier: ^8.21.1
         version: 8.21.1
@@ -57,8 +57,8 @@ importers:
         specifier: ^9.1.7
         version: 9.1.7
       mdx-m3-viewer:
-        specifier: ^5.12.0
-        version: 5.12.0(patch_hash=4e971affaf220a2718132299cdff5d1548aa0852b0127e5d3553970ad97a27e2)
+        specifier: file:vendor/mdx-m3-viewer
+        version: file:vendor/mdx-m3-viewer
       pako:
         specifier: ^3.0.1
         version: 3.0.1
@@ -1414,8 +1414,8 @@ packages:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
 
-  mdx-m3-viewer@5.12.0:
-    resolution: {integrity: sha512-broxsMO7jULq/P6HNFW/v7muLDo5L2DY0/2QWzCdDxkhms79n62kJfNQn2u7e5L+hWNlg/1W8V4J2lOm+Irb7A==}
+  mdx-m3-viewer@file:vendor/mdx-m3-viewer:
+    resolution: {directory: vendor/mdx-m3-viewer, type: directory}
 
   mime-db@1.52.0:
     resolution: {integrity: sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==}
@@ -1895,6 +1895,9 @@ packages:
     resolution: {integrity: sha512-oGLe46MIrCRqX7ytPUf66EAYvdeMIZYn3WaocqqKZAxrBpkqHfL/qvTyJ/bTk5+AqHCjXmrv3CEWgy368zhRUg==}
     engines: {node: ^20.17.0 || >=22.9.0}
     hasBin: true
+
+  whiteout-js-viewer@0.12.0:
+    resolution: {integrity: sha512-ZvCrggneJ6dzFzu0XHiF6yYelJ+qdGa1yAUsFbV/6ywRqqjzMHUEn0UDM0C3uxHsBC3E4/FGK4TVnC+J2xpH2A==}
 
   wrap-ansi@7.0.0:
     resolution: {integrity: sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q==}
@@ -3210,7 +3213,7 @@ snapshots:
 
   math-intrinsics@1.1.0: {}
 
-  mdx-m3-viewer@5.12.0(patch_hash=4e971affaf220a2718132299cdff5d1548aa0852b0127e5d3553970ad97a27e2):
+  mdx-m3-viewer@file:vendor/mdx-m3-viewer:
     dependencies:
       fengari: 0.1.5(patch_hash=8949c3f6bad2f86f49a7d5fb2ec7f2ae67217e3183f01ad50bcdd7e6d18b59f3)
       gl-matrix: 3.3.0
@@ -3711,6 +3714,8 @@ snapshots:
   which@6.0.1:
     dependencies:
       isexe: 4.0.0
+
+  whiteout-js-viewer@0.12.0: {}
 
   wrap-ansi@7.0.0:
     dependencies:

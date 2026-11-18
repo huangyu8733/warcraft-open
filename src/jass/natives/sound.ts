@@ -34,7 +34,7 @@
 //    searches them all.
 
 import { ThreadAbort, type JassUnit, type NativeCtx, type Runtime, type SoundObj } from "../runtime";
-import { asInt, asNum, asStr, jBool, jHandle, jInt, JNULL, truthy, type JassValue } from "../values";
+import { asInt, asNum, asStr, jBool, jHandle, jInt, jStr, JNULL, truthy, type JassValue } from "../values";
 
 type NativeFn = (ctx: NativeCtx, args: JassValue[]) => JassValue;
 const def = (rt: Runtime, name: string, fn: NativeFn): void => void rt.natives.set(name, fn);
@@ -63,6 +63,8 @@ function newSound(rt: Runtime, file: string): SoundObj {
     coneOutsideVolume: 0,
     coneOrient: null,
     duration: 0,
+    dialogueSpeaker: "",
+    dialogueText: "",
     x: 0,
     y: 0,
     z: 0,
@@ -194,6 +196,26 @@ export function registerSoundNatives(rt: Runtime): void {
     if (s) s.duration = asInt(a[1]);
     return JNULL;
   });
+  // SetDialogueSpeakerNameKey / SetDialogueTextKey — a campaign line's speaker and subtitle,
+  // stored ON the sound handle because the transmission is started elsewhere: blizzard.j's
+  // PlayDialogueFromSpeakerEx/TypeEx read them back with GetDialogueSpeakerNameKey /
+  // GetDialogueTextKey and hand the pair to SetCinematicScene. 1.32+ campaign maps (including
+  // 3.0's reworked classic ones) build every line this way in InitSounds, so leaving these
+  // unimplemented emptied the whole cinematic panel: portrait and duration arrived, the words
+  // did not. The key is a TRIGSTR placeholder, already resolved by the interpreter when the
+  // string literal was evaluated, so it is stored and returned verbatim.
+  def(rt, "SetDialogueSpeakerNameKey", (c, a) => {
+    const s = sound(c, a[0]);
+    if (s) s.dialogueSpeaker = asStr(a[1]);
+    return JNULL;
+  });
+  def(rt, "SetDialogueTextKey", (c, a) => {
+    const s = sound(c, a[0]);
+    if (s) s.dialogueText = asStr(a[1]);
+    return JNULL;
+  });
+  def(rt, "GetDialogueSpeakerNameKey", (c, a) => jStr(sound(c, a[0])?.dialogueSpeaker ?? ""));
+  def(rt, "GetDialogueTextKey", (c, a) => jStr(sound(c, a[0])?.dialogueText ?? ""));
   def(rt, "SetSoundDistanceCutoff", (c, a) => {
     const s = sound(c, a[0]);
     if (s) s.cutoff = asNum(a[1]);

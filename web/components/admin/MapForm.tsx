@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { saveMapAction } from "@/lib/actions/maps";
 import type { LocaleRow, MapRow, MapTranslation } from "@/lib/db/schema";
 import { ADMIN_CATEGORY_LABELS, MAP_CATEGORIES } from "@/lib/mapCategories";
+import { ADMIN_FLAVOR_LABELS, MAP_FLAVORS, parseFlavors } from "@/lib/mapFlavors";
 import type { MapLanguageFile } from "@/lib/mapLanguages";
 import { LanguageUploader } from "./LanguageUploader";
 import { UploadField } from "./UploadField";
@@ -146,6 +147,22 @@ export function MapForm({
             ))}
           </select>
         </label>
+        <div className="field">
+          <span className="field__label">支持版本（至少选一个）</span>
+          <div className="check-row">
+            {MAP_FLAVORS.map((flavor) => (
+              <label className="check-inline" key={flavor}>
+                <input
+                  type="checkbox"
+                  name={`flavor_${flavor}`}
+                  value="1"
+                  defaultChecked={parseFlavors(map?.flavors).includes(flavor)}
+                />
+                {ADMIN_FLAVOR_LABELS[flavor]}
+              </label>
+            ))}
+          </div>
+        </div>
         <label className="field field--check">
           <input type="checkbox" name="published" value="1" defaultChecked={map?.status === "published"} />
           <span>已发布（取消勾选则为草稿，前台不可见）</span>

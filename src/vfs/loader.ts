@@ -12,6 +12,7 @@ import { PatchDataSource } from "./patch";
 import { DerivedArtDataSource } from "./derivedArt";
 import { LooseFilesDataSource } from "./looseFiles";
 import { DowngradeDataSource, downgradeEdits } from "./downgrade";
+import { flavor, hdArt } from "../data/flavor";
 
 // Turn a picked install into a mounted VFS (plan §1 exit: "enumerate/extract any file by path
 // from a real install").
@@ -35,6 +36,9 @@ export interface LoadResult {
   maps: Map<string, File>;
   /** Which game files this is, as a replay's header names it (game/replay.ts `install`). */
   flavour: string;
+  /** The install's exact build from `.build.info`, for an HD room's `gameVersion`. Null for an
+   *  MPQ-era folder, which has no such file. */
+  gameVersion: string | null;
 }
 
 export async function loadProfile(
@@ -68,13 +72,27 @@ export async function loadProfile(
   // Both storages are handed out through the EDITION overlay (src/vfs/edition.ts): while the
   // client is on Reign of Chaos, an object table with a `Melee_V0\` twin reads the twin. Wrapped
   // here, at the one door, so nothing downstream can read the expansion's tables by accident.
+  //
+  // HD (Reforged) is the exception and must stay "raw": its data is exactly what the install
+  // ships. The three SD-only overlays under it — the 1.31 downgrade, the 1.30.4 patches and the
+  // edition/map-kind twins — all state SD table contents against SD layout, so HD mounts none
+  // of them (P2-4). A Reforged store is always The Frozen Throne melee; `vfs/edition.ts` would
+  // have nothing to fall back to anyway (there is no `Melee_V0\` / `Custom_V1\` in it).
+  const hd = flavor() === "hd";
   if (isCascInstall(install.casc)) {
-    const casc = await CascDataSource.open(install.casc, onProgress);
+    // A Reforged store mounts ONE of its two art modules over the base (`_DE` by default),
+    // and keeps that art on disk: 17 GB of DDS/MDX is not preloadable, and every model the
+    // match draws is fetched through the viewer's async solver anyway (P3).
+    const casc = await CascDataSource.open(
+      install.casc,
+      onProgress,
+      hd ? { graphics: hdArt(), lazyArt: true } : undefined,
+    );
     // A 1.31.1 store (the Internet Archive's copy "Download game files" falls back on) has its
     // game data put back to 1.30.4's before anything reads it (src/vfs/downgrade.ts) — UNDER the
     // patches, so they land on the same tables a 1.30.4 install has.
     const version = buildInfoVersion(install.casc.buildInfo);
-    const downgrade = downgradeEdits(version);
+    const downgrade = hd ? null : downgradeEdits(version);
     const store: DataSource = downgrade ? new DowngradeDataSource(casc, downgrade, version ?? "") : casc;
     // …and the game's later patches UNDER the edition overlay, so they reach the live melee
     // tables alone (src/vfs/patch.ts, docs/patches.md). A CASC store only: the patches are
@@ -82,7 +100,9 @@ export async function loadProfile(
     // turned back into, above).
     // …and, over everything, the icons the tables name and the install lacks, derived from the
     // ones it has (src/vfs/derivedArt.ts, docs/icons.md) — computed here, once, after the mount.
-    const art = new DerivedArtDataSource(new EditionDataSource(new PatchDataSource(store)));
+    const patched = hd ? store : new PatchDataSource(store);
+    const editioned = hd ? patched : new EditionDataSource(patched);
+    const art = new DerivedArtDataSource(editioned);
     onProgress?.("Preparing icons…");
     art.prepare();
     // …and, last of all, the folder's own loose files over the store's (vfs/looseFiles.ts). A
@@ -97,7 +117,7 @@ export async function loadProfile(
       if (![...maps.keys()].some((k) => k.toLowerCase() === key.toLowerCase())) maps.set(key, file);
     }
     const flavour = `casc-${version ?? "unknown"}${downgrade ? "-downgraded" : ""}`;
-    return { vfs, mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps, flavour };
+    return { vfs, mounted: casc.mounted, missing: [], fileCount: casc.list().length, maps, flavour, gameVersion: version };
   }
 
   const sources: DataSource[] = [];
@@ -132,5 +152,5 @@ export async function loadProfile(
   // over the archives changes which copy of a campaign map wins, and that is not this change's
   // business.
   const vfs: DataSource = hasSidecar ? new LooseFilesDataSource(base, loose) : base;
-  return { vfs, mounted, missing, fileCount: vfs.list().length, maps, flavour: "mpq" };
+  return { vfs, mounted, missing, fileCount: vfs.list().length, maps, flavour: "mpq", gameVersion: null };
 }

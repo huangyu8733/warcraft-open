@@ -1,5 +1,8 @@
+import { saveSink } from "../game/save/saveSink";
+import { readSaveHeader } from "../game/save/saveFile";
 import { loadProfile } from "../vfs/loader";
-import { decodeReplay, type Replay } from "../game/replay";
+import { decodeReplay, replayRefusalText, type Replay } from "../game/replay";
+import { gameVersion } from "../data/gameVersion";
 import { replaySink } from "../game/replaySink";
 import { toGameSpeed } from "../data/gameSpeed";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
@@ -7,7 +10,7 @@ import type { InstallFiles } from "../assets/opfs";
 import {
   fetchCasc, fetchInstallAnsi, fetchInstallFile, type FileUrl, type InstallManifest,
 } from "../assets/remoteInstall";
-import type { GateLoad } from "../ui/gate";
+import type { GateLoad } from "../ui/home";
 import { OBSERVER_PLAYER, type FogMode, type MeleeConfig, type SlotConfig } from "../ui/lobby";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
 import { startsExplored } from "../world/mapKind";
@@ -17,11 +20,14 @@ import { WebSocketTransport } from "../net/transport";
 import type { StartMatch as StartMatchMsg } from "../net/protocol";
 import { observerSeats, toConfig } from "../ui/fdfLan";
 import { buildStart, newSetup, seatPeers } from "../net/lobbySetup";
+import { mapFlagsOf } from "../net/advancedOptions";
 import { matchLinkFrom, type MatchLinkSetup } from "../game/matchLink";
 import { MELEE_INSANE, MELEE_NEWBIE, MELEE_NORMAL } from "../ai/ids";
 import { edition, setEdition, type Edition } from "../data/edition";
+import { flavor, setFlavor, type GameFlavor } from "../data/flavor";
 import { patchLevel, setPatchLevel } from "../patches";
 import { DirectLinks } from "../net/directLink";
+import { t } from "../i18n";
 
 /**
  * Scripted boot for automated testing — the load gate without the human
@@ -84,6 +90,10 @@ export interface DevBootHooks {
   startChapter(name: string, difficulty: string): Promise<void>;
   /** Play the main menu's Credits (`?credits`) — a map out of the archives, like a chapter. */
   startCredits(): Promise<void>;
+  /** Load a saved game out of the saves folder by its file name (`?loadsave=`, issue #159). */
+  loadSavedGame(name: string): Promise<void>;
+  /** The launch's progress screen (`ui/bootSplash.ts`): 0..1, plus the phase's word. */
+  progress?(fraction: number, message?: string): void;
 }
 
 const log = (msg: string): void => console.info(`[dev-boot] ${msg}`);
@@ -160,6 +170,20 @@ const MAX_DEV_MAPS = 20;
 
 export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const params = new URLSearchParams(location.search);
+  // The splash's bar only moves forward: phases overlap (a fetch, then the mount, then the
+  // menu), and a bar that stepped back would read as a restart.
+  let reported = 0;
+  const report = (fraction: number, message?: string): void => {
+    reported = Math.max(reported, Math.min(1, fraction));
+    hooks.progress?.(reported, message);
+  };
+  report(0.02, t("boot.checking"));
+
+  // `?flavor=sd|hd` — which ASSET / DATA line this client is (data/flavor.ts), before the install
+  // door. One process = one flavor; a real switch reloads the page rather than rebuilding scenes.
+  const wantFlavor = params.get("flavor");
+  if (wantFlavor === "sd" || wantFlavor === "hd") setFlavor(wantFlavor as GameFlavor);
+  log(`flavor: ${flavor()}`);
 
   // `?edition=roc|tft` — which GAME this client is (docs/editions.md), before anything reads a
   // versioned key. The edition is otherwise the player's own choice, remembered in localStorage
@@ -206,17 +230,23 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   // without the lobby (a 2v2 on Lost Temple: whether the match is decided when one side is
   // gone). Seats past the list keep the map's own team.
   const teams = (params.get("teams") ?? "").split(",").filter((t) => t.trim() !== "").map(Number);
+  // `?randomhero` — Advanced Options → Random Hero, as the lobby states it to the map script
+  // (`MeleeConfig.mapFlags`, issue #296): every seat starts with a rolled hero beside its hall.
+  const randomHero = params.has("randomhero");
   const devConfig = (info: MapInfo): MeleeConfig => {
-    const base = meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus);
+    const seated = meleeConfigFor(info, player, seed, fog, race, aiRace, ai, aiPlus);
+    const base: MeleeConfig = { ...seated, mapFlags: mapFlagsOf({ randomHero }, fog) };
     const cfg = observe ? observeConfig(base, ai, aiPlus) : base;
     if (!teams.length) return cfg;
     return { ...cfg, slots: cfg.slots.map((s, i) => (i < teams.length && Number.isFinite(teams[i]) ? { ...s, team: teams[i] } : s)) };
   };
 
   log("fetching manifest…");
+  report(0.03, t("boot.checking"));
   const res = await fetch("/wc3/manifest.json");
   if (!res.ok) throw new Error("no dev install served — is WARCRAFT_OPEN_INSTALL set?");
   const manifest = (await res.json()) as InstallManifest;
+  report(0.05, t("boot.files"));
 
   // Only the archives the profile actually mounts, plus the one map we intend to play. The
   // install's Maps\ folder holds hundreds and fetching them all would add minutes to a boot
@@ -280,8 +310,25 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const bytes = await replaySink()?.read(replayName);
     if (!bytes) throw new Error(`no replay named ${replayName} in .replays/`);
     replay = await decodeReplay(bytes);
+    const refused = replayRefusalText(replay.header, flavor(), gameVersion());
+    if (refused) {
+      console.error(`[replay] refused: ${refused}`);
+      throw new Error(refused);
+    }
     const leaf = (p: string): string => p.split(/[\\/]/).pop()!.toLowerCase();
     const want = replay.header.map.path;
+    const hit = manifest.maps.find((m) => m === want) ?? manifest.maps.find((m) => leaf(m) === leaf(want));
+    if (hit && hit !== mapPath && !listed.includes(hit)) listed.push(hit);
+  }
+
+  // `?loadsave=<name>` — LOAD a saved game out of the saves folder (issue #159). Its map is
+  // mounted with the rest when it is an install map; a campaign chapter's comes out of the archives.
+  const loadSave = params.get("loadsave");
+  if (loadSave) {
+    const bytes = await saveSink().read(loadSave);
+    if (!bytes) throw new Error(`no saved game named ${loadSave} in .saves/`);
+    const want = (await readSaveHeader(bytes)).map.path;
+    const leaf = (p: string): string => p.split(/[\\/]/).pop()!.toLowerCase();
     const hit = manifest.maps.find((m) => m === want) ?? manifest.maps.find((m) => leaf(m) === leaf(want));
     if (hit && hit !== mapPath && !listed.includes(hit)) listed.push(hit);
   }
@@ -290,9 +337,16 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const store = manifest.casc ? "the CASC content store" : `${archives.length} archives`;
   log(`fetching ${store}${mapPath ? ` + ${mapPath}` : ""}${extra}…`);
   const files: InstallFiles = new Map();
-  for (const name of archives) files.set(name.toLowerCase(), await fetchFile(name));
-  if (mapPath) files.set(mapPath, await fetchFile(mapPath));
-  for (const name of listed) files.set(name, await fetchFile(name));
+  // Every loose file this boot fetches, collected FIRST so the splash's bar can move once per
+  // file rather than freeze across the whole mount. `key` is what `loadProfile` looks it up by:
+  // archives are keyed lower-case, everything else by the path the manifest gave.
+  const queue: Array<{ name: string; key: string }> = archives.map((name) => ({ name, key: name.toLowerCase() }));
+  if (mapPath) queue.push({ name: mapPath, key: mapPath });
+  for (const name of listed) queue.push({ name, key: name });
+  // …and the install's downloadable campaigns (data/campaigns.ts). They are a handful of
+  // `.w3n` files in Maps\Download\, not a folder of maps, and whether the Campaign screen can
+  // play a DLC depends on reading them — so all of them are mounted.
+  for (const name of manifest.campaigns ?? []) queue.push({ name, key: name });
   // The maps' own Chinese dictionaries beside them, when the served install has any
   // (i18n/mapLanguage.ts): the same two names `candidates` asks the VFS for, so what is fetched
   // here is exactly what the loader will look for. Only for the maps this boot mounts — the
@@ -303,10 +357,17 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const dir = cut >= 0 ? name.slice(0, cut + 1) : "";
     const base = name.slice(cut + 1).replace(/\.w3[mx]$/i, "");
     for (const candidate of [`${name}.zhCN.json`, `${dir}${base}.zhCN.json`, `${name}.voice.json`, `${dir}${base}.voice.json`]) {
-      if (sidecars.has(candidate) && !files.has(candidate)) files.set(candidate, await fetchFile(candidate));
+      if (sidecars.has(candidate) && !queue.some((entry) => entry.key === candidate)) {
+        queue.push({ name: candidate, key: candidate });
+      }
     }
   }
+  for (const [i, entry] of queue.entries()) {
+    files.set(entry.key, await fetchFile(entry.name));
+    report(0.06 + (0.34 * (i + 1)) / Math.max(1, queue.length), t("boot.files"));
+  }
   const casc = manifest.casc ? await fetchCasc(fileUrl, manifest.casc) : null;
+  report(0.43, t("boot.mounting"));
   // The developer's own CustomKeys.txt, when the served install has one (issue #142) — so the
   // Custom rung of Options → Gameplay → "Hotkeys:" can be exercised from a scripted boot.
   const customKeys = manifest.customKeys ? await fetchInstallAnsi(fileUrl, manifest.customKeys) : null;
@@ -321,7 +382,16 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const res = await fetch(`/wc3/map?name=${encodeURIComponent(name)}`, { method: "POST", body: bytes.slice() });
     if (!res.ok) throw new Error(`The map could not be written (${res.status}).`);
   };
-  const load = await loadProfile({ files, casc, customKeys, saveCustomKeys, saveMap }, DEFAULT_PROFILE, (msg) => log(msg));
+  // The mount reports its own steps (CASC preload carries a fraction, the MPQ path carries the
+  // archive being read), mapped onto the bar's middle stretch.
+  const load = await loadProfile({ files, casc, customKeys, saveCustomKeys, saveMap }, DEFAULT_PROFILE, (msg, fraction) => {
+    log(msg);
+    if (fraction !== undefined) {
+      report(0.43 + 0.47 * Math.min(1, Math.max(0, fraction)), t("boot.mounting"));
+    } else {
+      report(Math.min(0.9, reported + 0.02), t("boot.mounting"));
+    }
+  });
   log(`mounted ${load.mounted.join(", ")} — ${load.fileCount.toLocaleString()} files`);
   if (wantMap && !mapPath) {
     mapPath = [...load.maps.keys()]
@@ -330,6 +400,7 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     if (!mapPath) throw new Error(`no map matching "${wantMap}" in the install`);
   }
   hooks.mountInstall(load);
+  report(0.97, t("boot.starting"));
 
   // Re-entry, for automation. `?dev` starts ONE match, and a match is otherwise only
   // reachable through a menu a human clicks — so a harness that wants to check what LEAVING
@@ -349,6 +420,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
     const info = parseMapInfo(new Uint8Array(await mapFile.arrayBuffer()), path!);
     await hooks.startGame(mapFile, info, devConfig(info), undefined, path);
   };
+
+  if (loadSave) {
+    log(`loading saved game ${loadSave}`);
+    await hooks.loadSavedGame(loadSave);
+    return;
+  }
 
   if (replay) {
     log(`watching replay ${replayName}`);

@@ -3,20 +3,30 @@
 // `ResourceBar.fdf` for the gold/lumber/supply/upkeep readout.
 //
 // `ConsoleUI.fdf` is ONE frame carrying two runs of `Texture`, told apart only by their own
-// anchors. The top edge is five slices:
+// anchors. In a 3.0 (Reforged / Definitive Edition) install the top edge is SEVEN slices —
+// a whole extra console section hangs off each end of the 0.8 box:
 //
-//     ConsoleTexture01  0.256 wide  Anchor TOPLEFT  0,      0     →  0.000 … 0.256
-//     ConsoleTexture02  0.087 wide  Anchor TOPLEFT  0.256,  0     →  0.256 … 0.343
-//     ConsoleTexture02  0.053 wide  Anchor TOPRIGHT -0.288, 0     →  0.459 … 0.512
-//     ConsoleTexture03  0.256 wide  Anchor TOPRIGHT -0.032, 0     →  0.512 … 0.768
-//     ConsoleTexture04  0.032 wide  Anchor TOPRIGHT  0,      0     →  0.768 … 0.800
+//     ConsoleTexture05  0.256 wide  Anchor TOPLEFT  -0.256, 0     →  -0.256 … 0.000
+//     ConsoleTexture01  0.256 wide  Anchor TOPLEFT   0,     0     →   0.000 … 0.256
+//     ConsoleTexture02  0.087 wide  Anchor TOPLEFT   0.256, 0     →   0.256 … 0.343
+//     ConsoleTexture02  0.053 wide  Anchor TOPRIGHT -0.288, 0     →   0.459 … 0.512
+//     ConsoleTexture03  0.256 wide  Anchor TOPRIGHT -0.032, 0     →   0.512 … 0.768
+//     ConsoleTexture04  0.032 wide  Anchor TOPRIGHT  0,     0     →   0.768 … 0.800
+//     ConsoleTexture06  0.256 wide  Anchor TOPRIGHT  0.256, 0     →   0.800 … 1.056
 //
-// — two runs of chrome with a deliberate GAP between them (0.343 … 0.459). And the bottom is
-// four more (`BOTTOMLEFT`/`BOTTOMRIGHT`, `TexCoord` v 0.3125 … 1), which tile the full 0.8
-// with no gap: that band is the console proper — the minimap frame, the portrait arch, the
-// inventory and the command card, all drawn as one piece of art with the sockets punched
-// through it as transparency. The HUD hangs its widgets in those holes (`CONSOLE_ZONES` in
-// ui/hud.ts); the art itself is entirely this file's business.
+// — two runs of chrome with a deliberate GAP between them (0.343 … 0.459), and the 05/06 wings
+// carrying the bar out to 1.312 world so it reads full-width on a 16:9 screen. The bottom is
+// SIX more (`BOTTOM`, `TexCoord` v 0.3125 … 1), plus a `ConsoleBottomBarOverlay` child with the
+// `ConsoleTexture05Overlay`/`06Overlay` pair — 01/02/03/04 tile the 0.8 box with no gap and
+// 05/06 are the same wings as above (05 is 0.192 tall, the others 0.176/0.16). That band is the
+// console proper — the minimap frame, the portrait arch, the inventory and the command card,
+// all drawn as one piece of art with the sockets punched through it as transparency. The HUD
+// hangs its widgets in those holes (`CONSOLE_ZONES` in ui/hud.ts); the art itself is entirely
+// this file's business.
+//
+// The file also declares a `ConsoleUIBackdrop` (a 0.13-tall tiled `Black32` rect pinned to the
+// bottom bar's corners). We mount `ConsoleUI` alone, so that frame is replaced by the black
+// `.console-backing` div `backing()` puts behind the same box.
 //
 // **Where the two bars go is not in any of those files** — each declares a size and no
 // SetPoint, because `CGameUI` places them, exactly as it places the leaderboard. The strip is
@@ -30,24 +40,29 @@
 // cells come out 78 × 52.5 px, a 1.49× horizontal smear — and the game stopped doing it: at
 // 1.30.4 the console is exactly `height × 4/3` centred (cells 78 × 78, square) with filler
 // panels either side. That is the version we follow, and it is also what the art wants, since
-// the top strip's five slices are a fixed run with a hole that only stays medallion-sized at
-// the proportions they were drawn at. `SIDE_FILLER` below is the leftover width.
+// the strip is a fixed run of slices with a hole that only stays medallion-sized at the
+// proportions they were drawn at. 3.0's 05/06 wings then overhang the box on both sides and are
+// clipped by the viewport edge, exactly as they are in the game. `SIDE_FILLER` below is the
+// leftover width of the box itself.
 
 import type { DataSource } from "../vfs/types";
+import { hdArt } from "../data/flavor";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fitLine } from "./fdf/widgets";
+import { wc3ToHtml } from "./wc3Text";
 import type { ResourceKind } from "./hud";
 
 const CONSOLE_FDF = "UI\\FrameDef\\UI\\ConsoleUI.fdf";
 const UPPER_BAR_FDF = "UI\\FrameDef\\UI\\UpperButtonBar.fdf";
 const RESOURCE_BAR_FDF = "UI\\FrameDef\\UI\\ResourceBar.fdf";
 
-/** The bottom band's height, from `ConsoleUI.fdf`'s own `Height 0.176` — the tallest of its
- *  four bottom slices, which is the one that sets the band. Exported because the HUD sizes the
- *  box it hangs the minimap/portrait/command card in off exactly this (ui/hud.ts). */
+/** The bottom band's height, from `ConsoleUI.fdf`'s own `Height 0.176` — the tallest of the
+ *  slices that tile the 0.8 box (3.0's 05 wings are 0.192, but they sit outside the box).
+ *  Exported because the HUD sizes the box it hangs the minimap/portrait/command card in off
+ *  exactly this (ui/hud.ts). */
 export const CONSOLE_BAND_H = 0.176;
 
 /**
@@ -69,60 +84,40 @@ const CONSOLE_OVERRIDES = {
 
 /**
  * How far up the band the console ART reaches — the LOWEST top edge it has anywhere across
- * its width, measured off the decoded tiles (the two ends reach 0.1633, the middle section
- * with the arch and the info panel only 0.1317).
+ * its width, measured off the decoded tiles. The SD art's two ends reach 0.1633 while the
+ * middle section with the arch and the info panel only reaches 0.1317; the 3.0 (DE) tiles are
+ * taller there, their top edge sitting 0.0377 below the band's top — 0.1383.
  *
  * It is the height of the flat black the game paints behind the whole console. The art is
  * full of holes — the minimap, the portrait arch, the info panel, the inventory and the
  * command card are all cut out of it as transparency — and no world ever shows through any of
  * them: they read as pure black behind the frame. Taking the lowest edge is what keeps that
- * backing from poking out ABOVE the art at the ends, where the world does show.
+ * backing from poking out ABOVE the art at the ends, where the world does show — and the two
+ * sets of tiles do not share that edge, so the height has to follow the art in use rather than
+ * be one number for both.
  */
-const CONSOLE_ART_TOP = 0.1317;
+/** The classic set (`"sd"`, art-only inside 3.0) draws the SD tiles the doc above measured at
+ *  0.1317, so it takes the same branch as `"hd"` — only DE's taller tiles reach 0.1383. */
+const CONSOLE_ART_TOP = hdArt() === "de" ? 0.1383 : 0.1317;
 
 /** The strip's frames are 0.032 tall, but the ART only fills the top 77% of that — measured
  *  off the decoded slice, whose last opaque row is 48 of 64. The remaining quarter is
- *  transparent, so centring the bars in the FRAME hangs them below the chrome you can see. */
+ *  transparent, so the black backing stops at the visible chrome (see `backing`). */
 const STRIP_ART = 0.032 * (49 / 64);
 
-/** How far down the visible chrome the BUTTON bar sits: centred in the ART, not in the frame.
- *  Its plates are 0.022 tall and are raised chrome of their own — they span the strip rather
- *  than sit in one of its slots, so the art is what they line up against. */
-const BAR_TOP = -(STRIP_ART - 0.022) / 2;
+/** How far down the visible chrome the BUTTON bar sits. `UpperButtonBarFrame` and
+ *  `ResourceBarFrame` are both ~0.022 tall and the file gives neither a y anchor — CGameUI
+ *  places both at the top of the strip, so their top edges share one baseline. */
+const BAR_TOP = 0;
 
-/**
- * The row of black slots the strip punches for the readout — the pills the icons and numbers
- * sit IN.
- *
- * Measured off the decoded strip tiles, which draw at the same 1 texel = 0.0005 world as the
- * rest of the console art (ui/hud.ts CONSOLE_ZONES): pure black from texel row 4 through 37,
- * with the stone rim on rows 3 and 38.
- */
-const STRIP_SLOT_TOP = 4 * 0.0005;
-const STRIP_SLOT_H = 34 * 0.0005;
+/** The resource bar hangs from the same baseline as the button bar. Its own FDF anchors pull
+ *  the readout row 0.003125 below the frame's top, which is inside the strip's slot without
+ *  any extra offset. */
+const RESOURCE_TOP = 0;
 
-/** `ResourceBar.fdf` gives every child of the bar the same box — `Anchor …, -0.003125` and
- *  the two templates' `Height 0.01640625` — so the whole readout is one row 0.0164 tall
- *  hanging 0.0031 below the frame's top, inside a frame (0.0218) taller than it. */
-const RESOURCE_ROW_TOP = 0.003125;
-const RESOURCE_ROW_H = 0.01640625;
-
-/** Where the resource bar hangs: high enough that its ROW lands centred in the strip's slots.
- *  Centring the FRAME the way the button bar is centred is not the same thing — the frame is
- *  0.0054 taller than the row it carries, and hanging it that way left every icon and number
- *  riding 3px low in its slot, with the lumber tree's trunk drawn over the stone below its. */
-const RESOURCE_TOP = -(STRIP_SLOT_TOP + (STRIP_SLOT_H - RESOURCE_ROW_H) / 2 - RESOURCE_ROW_TOP);
-
-/** One screen pixel, in world units, at the height the UI is laid out for (0.6 world = the
- *  viewport's height; ~1042 px/world at 625 px tall). Nudges below are expressed through it
- *  so they stay the same visual size at any resolution instead of drifting. */
-const PX = 0.6 / 625;
-
-/** The button bar reads a hair right and low against the console art it sits in — the plates
- *  are drawn with their own shadow, so geometric centring is not visual centring. Trimmed by
- *  eye against the chrome: one pixel left, one up. */
-const BUTTON_NUDGE_X = -1 * PX;
-const BUTTON_NUDGE_Y = 1 * PX;
+/** Official 3.0 gives neither bar a horizontal nudge — both sit on the console box's edges. */
+const BUTTON_NUDGE_X = 0;
+const BUTTON_NUDGE_Y = 0;
 
 const s = (v: string): Arg => ({ s: v, n: null, str: true });
 const word = (v: string): Arg => ({ s: v, n: null, str: false });
@@ -154,6 +149,13 @@ export interface ConsoleUiActions {
    * mid-match and a resize rebuilds every frame from the FDF.
    */
   disabledPanels?(): ReadonlySet<ConsolePanel>;
+  /** A caption for the fourth button other than the file's own "Chat (F12)" — `live` for its
+   *  normal and moused-over faces, `dead` for the greyed one (the FDF keeps the same pair:
+   *  `KEY_CHAT` / `CHAT`). Null: leave the file's. A campaign chapter answers with the Log's. */
+  chatCaption?(): { live: string; dead: string } | null;
+  /** The "quest log has news" sparks (ui/questButtonFx.ts), to hang on the Quests button.
+   *  Asked on every build, because a resize rebuilds the button it hangs on. */
+  questGlow?(): HTMLElement | null;
   /** The mouse is over one of the resource bar's four readouts (null: it has left the bar) —
    *  the HUD raises that readout's slab (GameHud.showResourceTip). */
   resourceHover?(kind: ResourceKind | null): void;
@@ -260,6 +262,32 @@ export class ConsoleUi {
     if (!screen) return;
     const dead = this.actions.disabledPanels?.() ?? EMPTY_PANELS;
     for (const b of BUTTONS) screen.setEnabled(b.frame, !dead.has(b.panel));
+    this.applyChatCaption(screen);
+  }
+
+  /** Re-word the fourth button where the host says it is something else (`chatCaption`). The
+   *  three stacked captions are the same words in three colours (renderSimpleButtonLayers),
+   *  so only their text is replaced and the template's font and colour stay. */
+  private applyChatCaption(screen: FdfScreen): void {
+    const caption = this.actions.chatCaption?.();
+    const button = screen.frame("UpperButtonBarChatButton");
+    if (!caption || !button) return;
+    // Asked again with every `refreshEnabled` (the host may not know it is a campaign until
+    // after the strip's first build), so written only when the answer is news to this button.
+    if (button.dataset.caption === caption.live) return;
+    button.dataset.caption = caption.live;
+    for (const label of button.querySelectorAll<HTMLElement>(".fdf-simple-text > span")) {
+      const dead = label.parentElement?.classList.contains("fdf-simple-text-dis");
+      label.innerHTML = wc3ToHtml(dead ? caption.dead : caption.live);
+    }
+  }
+
+  /** Hang the quest glow on the Quests button (again — see `questGlow`). Public because the
+   *  HUD that owns the glow is built AFTER the strip, and says so when it is. */
+  mountQuestGlow(screen: FdfScreen | null = this.screen): void {
+    const glow = this.actions.questGlow?.();
+    const button = screen?.frame("UpperButtonBarQuestsButton");
+    if (glow && button && glow.parentElement !== button) button.appendChild(glow);
   }
 
   /** Push the current resource figures. Cheap to call every frame: it only writes the four
@@ -433,6 +461,7 @@ export class ConsoleUi {
           this.hoverZones(built);
           this.mountClock(built);
           this.applyEnabled(built);
+          this.mountQuestGlow(built);
           this.applyObserver(built);
         },
       });

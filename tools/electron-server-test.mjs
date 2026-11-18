@@ -6,7 +6,7 @@
 // it; this is verified by a test.
 
 import { startServer } from "../electron/server.mjs";
-import { looksLikeInstall, serveInstall, installVersion, REQUIRED_VERSION, DOWNGRADE_VERSIONS, ACCEPTED_MAJOR_VERSIONS } from "../electron/install.mjs";
+import { looksLikeInstall, serveInstall, installVersion, REQUIRED_VERSION, DOWNGRADE_VERSIONS, ACCEPTED_VERSION_PREFIXES } from "../electron/install.mjs";
 import { detectInstall } from "../electron/locate.mjs";
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { PROTOCOL_VERSION } from "../server/rooms.mjs";
@@ -88,9 +88,9 @@ try {
     const downgrades = /DOWNGRADE_VERSIONS[^=]*=\s*\[([^\]]*)\]/.exec(ts)?.[1].match(/"[^"]+"/g)?.map((v) => v.slice(1, -1)).join(",");
     ok("…and turns back the same builds", downgrades === DOWNGRADE_VERSIONS.join(","),
        `install.mjs ${DOWNGRADE_VERSIONS}, version.ts ${downgrades}`);
-    const majors = /ACCEPTED_MAJOR_VERSIONS[^=]*=\s*\[([^\]]*)\]/.exec(ts)?.[1].match(/"[^"]+"/g)?.map((v) => v.slice(1, -1)).join(",");
-    ok("…and accepts the same major versions", majors === ACCEPTED_MAJOR_VERSIONS.join(","),
-       `install.mjs ${ACCEPTED_MAJOR_VERSIONS}, version.ts ${majors}`);
+    const prefixes = /ACCEPTED_VERSION_PREFIXES[^=]*=\s*\[([^\]]*)\]/.exec(ts)?.[1].match(/"[^"]+"/g)?.map((v) => v.slice(1, -1)).join(",");
+    ok("…and accepts the same version prefixes", prefixes === ACCEPTED_VERSION_PREFIXES.join(","),
+       `install.mjs ${ACCEPTED_VERSION_PREFIXES}, version.ts ${prefixes}`);
     // The Windows installer asks the same question before it will install anywhere
     // (packaging/windows-installer.nsh), in NSIS, where it cannot import either file.
     const nsh = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "packaging", "windows-installer.nsh"), "utf8");
@@ -118,7 +118,9 @@ try {
       build("2.0.3.22692");
       ok("the remastered 2.x line is accepted", looksLikeInstall(tmp));
       build("3.0.0.1");
-      ok("a major line outside 1.x/2.x is refused", !looksLikeInstall(tmp));
+      ok("the Reforged 3.x line is accepted — HD pins the exact patch", looksLikeInstall(tmp));
+      build("4.0.0.1");
+      ok("a major line outside 1.x/2.x/3.x is refused", !looksLikeInstall(tmp));
       // The build NUMBER is not part of the rule: it varies with the download and says nothing
       // about the data.
       build("1.30.4.99999");

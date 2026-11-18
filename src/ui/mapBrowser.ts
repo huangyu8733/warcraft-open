@@ -1,6 +1,7 @@
 import type { DataSource } from "../vfs/types";
 import { onEditionChange } from "../data/edition";
-import { blpToCanvas } from "../render/blputil";
+import { flavor } from "../data/flavor";
+import { blpToCanvas, vfsImage } from "../render/blputil";
 import { mapSizeLabel } from "../data/gameplayConstants";
 import { parseMapInfo, type MapInfo } from "../world/mapInfo";
 import { unsupportedReason } from "../compat/mapFormat";
@@ -478,7 +479,17 @@ export class MapBrowser {
         if (info.maxPlayers) e.players = info.maxPlayers;
         // A map this engine cannot PLAY is still a map, and still the player's: it keeps its
         // name, its badge and its row, and says why when hovered (src/compat/mapFormat.ts).
-        e.unsupported = unsupportedReason(info.format) ?? undefined;
+        // …and a map from the OTHER game line is refused the same way (P4): the row stays,
+        // greyed, and the hover names both lines. This is the whole player-facing half of P4;
+        // the load door behind it is mapViewer's `mapLoadRefusal`, for the paths that never
+        // come through this list (a dev link, a host's map, a replay).
+        const mismatch = info.flavor === flavor()
+          ? undefined
+          : t("map.refuse.flavor", {
+              map: t(info.flavor === "hd" ? "flavor.hd" : "flavor.sd"),
+              client: t(flavor() === "hd" ? "flavor.hd" : "flavor.sd"),
+            });
+        e.unsupported = unsupportedReason(info.format) ?? mismatch ?? undefined;
       } catch (err) {
         e.invalid = true;
         console.warn(`[Warcraft Open] couldn't read ${e.path}:`, err);
@@ -884,8 +895,7 @@ export interface MinimapIcons {
 
 export function loadMinimapIcons(vfs: DataSource): MinimapIcons {
   const icon = (path: string): HTMLCanvasElement | null => {
-    const bytes = vfs.rawBytes(path);
-    return bytes ? blpToCanvas(bytes) : null;
+    return vfsImage(vfs, path);
   };
   return {
     gold: icon("UI\\MiniMap\\MiniMapIcon\\MinimapIconGold.blp"),
@@ -912,8 +922,9 @@ interface MapEntry {
   /** The map could not be read as a map — see `readFolder`. Such a row is never listed. */
   invalid?: boolean;
   /**
-   * The map READS, and this engine cannot play it — a Lua script, say. The row is LISTED,
-   * greyed, and hovers its own reason (src/compat/mapFormat.ts `unsupportedReason`).
+   * The map READS, and this engine cannot play it — a Lua script, say, or a map built for the
+   * other game line (P4). The row is LISTED, greyed, and hovers its own reason
+   * (src/compat/mapFormat.ts `unsupportedReason`, `mapFlavor`).
    *
    * This is the difference between "your download is not here" and "your download is here and
    * here is what is missing". The 2003 client has no such row because it has nothing to say;
@@ -1023,8 +1034,7 @@ interface Icons {
 
 function loadIcons(vfs: DataSource): Icons {
   const icon = (path: string): HTMLCanvasElement | null => {
-    const bytes = vfs.rawBytes(path);
-    return bytes ? blpToCanvas(bytes) : null;
+    return vfsImage(vfs, path);
   };
   const art = { melee: icon(ICON_MELEE), ums: icon(ICON_UMS) };
   const badges = new Map<string, HTMLCanvasElement | null>();

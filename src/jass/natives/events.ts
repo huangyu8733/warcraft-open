@@ -224,6 +224,9 @@ export function registerEventNatives(rt: Runtime): void {
   // A destructible's own death response. `TriggerRegisterDeathEvent` takes a WIDGET, so a
   // gate raises this pair where a unit raises GetDyingUnit (see pumpDestructableDeaths).
   def(rt, "GetDyingDestructable", (c) => resp(c, "DyingDestructable"));
+  // …and the native under it: a destructible's only event here is its death, so "the
+  // triggering destructable" is the one that died.
+  def(rt, "GetTriggerDestructable", (c) => resp(c, "DyingDestructable"));
   // EVENT_(PLAYER_)UNIT_LOADED — the passenger and the carrier it climbed into.
   def(rt, "GetLoadedUnit", (c) => resp(c, "LoadedUnit"));
   def(rt, "GetTransportUnit", (c) => resp(c, "TransportUnit"));
@@ -378,6 +381,13 @@ export function registerEventNatives(rt: Runtime): void {
     const v = resp(c, "TrainedUnitType");
     return v.k === "int" ? v : jInt(0);
   });
+  // Research responses (EVENT_(PLAYER_)UNIT_RESEARCH_START/CANCEL/FINISH): the building
+  // doing the research, and the upgrade's rawcode.
+  def(rt, "GetResearchingUnit", (c) => resp(c, "ResearchingUnit"));
+  def(rt, "GetResearched", (c) => {
+    const v = resp(c, "Researched");
+    return v.k === "int" ? v : jInt(0);
+  });
 
   // Item responses (EVENT_(PLAYER_)UNIT_PICKUP/DROP/USE/SELL_ITEM — 7.18). One pair
   // covers all four: the item that moved (GetManipulatedItem) and the unit that moved it
@@ -465,9 +475,15 @@ export function registerEventNatives(rt: Runtime): void {
       }
     }
   };
+  // Registered here (it is a BJ, not a native) only so the interpreter can run it thread-
+  // transparently; it must therefore answer exactly as Scripts\Blizzard.j's body does —
+  //     if TriggerEvaluate(trig) then / call TriggerExecute(trig)
+  // — which asks the CONDITIONS and nothing else. There is no enabled test: "Trigger - Run
+  // (checking conditions)" on an Initially Off trigger runs it, and the editor's own run-once
+  // idiom states the enabled test itself, inside the condition (issue #295).
   def(rt, "ConditionalTriggerExecute", (c, a) => {
     const t = trig(c, a[0]);
-    if (t && t.enabled) asTrigger(c, t, () => conditionsPass(c, t) && (runActions(c, t), true));
+    if (t) asTrigger(c, t, () => conditionsPass(c, t) && (runActions(c, t), true));
     return JNULL;
   });
   def(rt, "TriggerExecute", (c, a) => {
