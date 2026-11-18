@@ -311,18 +311,21 @@ export async function mountHdOptions(
     for (const column of LAYOUT[name]) {
       const col = el("div", "hd-opt-col");
       for (const section of column) {
-        if (section.title) {
-          col.appendChild(el("h3", "hd-opt-section-title", strOpt(section.title)));
-        }
+        // A row the engine cannot honour is not shown at all: a control that does nothing is
+        // worse than a missing one. `applied:false` in OPTION_DEFS marks them, with the reason.
+        const built: HTMLElement[] = [];
         for (const key of section.keys ?? []) {
           const d = OPTION_DEFS.find((x) => x.key === key);
-          if (d) col.appendChild(row(d));
+          if (d && d.applied !== false) built.push(row(d));
         }
-        if (section.custom === "theme") col.appendChild(themeRow());
-        if (section.custom === "art") col.appendChild(artCards());
-        if (section.custom === "language") col.appendChild(languageRow());
-        if (section.custom === "graphicsRest") col.appendChild(graphicsRest());
-        if (section.custom === "gamepad") col.appendChild(gamepadRow());
+        if (section.custom === "theme") built.push(themeRow());
+        if (section.custom === "art") built.push(artCards());
+        if (section.custom === "language") built.push(languageRow());
+        if (section.custom === "graphicsRest") built.push(graphicsRest());
+        if (section.custom === "gamepad") built.push(gamepadRow());
+        if (!built.length) continue;
+        if (section.title) col.appendChild(el("h3", "hd-opt-section-title", strOpt(section.title)));
+        col.append(...built);
       }
       columns.appendChild(col);
     }
@@ -455,10 +458,8 @@ export async function mountHdOptions(
   }
 
   function row(d: OptionDef): HTMLElement {
-    const locked = d.applied === false;
-    const line = el("div", `hd-opt-row hd-opt-${d.kind}${locked ? " hd-opt-disabled" : ""}`);
+    const line = el("div", `hd-opt-row hd-opt-${d.kind}`);
     const label = el("span", "hd-opt-label", strOpt(d.cap!));
-    if (locked) label.title = t("hd.notApplied");
     line.appendChild(label);
     const control = el("div", "hd-opt-control");
     line.appendChild(control);
@@ -475,10 +476,9 @@ export async function mountHdOptions(
       paint(vsyncLocked ? true : working[d.key] === true);
       switches.set(d.key, { toggle, paint });
       refreshers.set(d.key, () => paint(vsyncLocked ? true : working[d.key] === true));
-      if (vsyncLocked || locked) {
+      if (vsyncLocked) {
         toggle.disabled = true;
-        if (vsyncLocked) toggle.title = t("hd.vsyncBrowser");
-        else toggle.title = t("hd.notApplied");
+        toggle.title = t("hd.vsyncBrowser");
       } else {
         toggle.onclick = (): void => {
           const on = !(working[d.key] === true);
@@ -497,10 +497,6 @@ export async function mountHdOptions(
       input.step = String(d.step ?? 1);
       input.value = String(typeof working[d.key] === "number" ? working[d.key] : d.def);
       const value = el("span", "hd-slider-value", input.value);
-      if (locked) {
-        input.disabled = true;
-        input.title = t("hd.notApplied");
-      }
       input.oninput = (): void => {
         value.textContent = input.value;
         working[d.key] = Number(input.value);
@@ -533,10 +529,6 @@ export async function mountHdOptions(
           input.setAttribute("aria-valuetext", strOpt(ladder[i].label));
         };
         paint();
-        if (locked) {
-          input.disabled = true;
-          input.title = t("hd.notApplied");
-        }
         input.oninput = (): void => {
           const choice = ladder[Number(input.value)];
           input.setAttribute("aria-valuetext", strOpt(choice.label));
@@ -558,10 +550,6 @@ export async function mountHdOptions(
           commit(d);
         },
       );
-      if (locked) {
-        control2.setDisabled(true);
-        control2.element.title = t("hd.notApplied");
-      }
       refreshers.set(d.key, () => control2.setValue(String(working[d.key])));
       dropdowns.set(d.key, control2);
       control.appendChild(control2.element);

@@ -6,13 +6,14 @@
 
 - 只改 HD 线（`src/ui/hd/options.ts`、`src/data/options.ts` 及 HD 专用消费者），不动经典 SD FDF 选项页。
 - 能真实影响渲染、HUD、音频、输入、聊天的，必须接上真实消费者。
-- 浏览器确实无法实现的，保留可见行、置灰并给出说明（`applied:false` + 提示），**不伪造行为**。
+- 浏览器确实无法实现的，不进入 HD 选项页：`applied:false` 仍留在模型层（SD FDF 页沿用旧规则），
+  HD 页直接跳过该行，不伪造行为。
 - 所有新增文案支持中/英；优先使用安装包 `GlobalStrings.fdf` 的官方键，缺失时回退到 `src/i18n/index.ts`。
 - 明确跳过：显示器/适配器选择、音频输出设备、Mac 三项键盘设置。
 
 ## 2. 官方键与处置总表
 
-键名沿用 `OPTION_DEFS.key`。`cap` 为官方本地化键。`applied:false` 的行在 HD 页灰显并显示 `hd.notApplied` 提示。
+键名沿用 `OPTION_DEFS.key`。`cap` 为官方本地化键。`applied:false` 的行**不在 HD 页出现**。
 
 ### 2.1 视频（tab: video）
 
@@ -21,14 +22,14 @@
 | `windowMode` | `WINDOW_MODE` | choice: `windowed`/`borderless`/`fullscreen`，默认 `windowed` | 新增 `src/ui/displayMode.ts`，`applyVideoOptions` 调用；`fullscreen`/`borderless` 走 Fullscreen API，`windowed` 退出 | 生效 |
 | `maxForegroundFps` | `MAX_FOREGROUND_FPS` | range 30–300，step 10，默认 300 | 新增 `src/render/frameLimit.ts`，运行时 rAF 节流；浏览器标签页本身有 vsync 时只降不升 | 生效 |
 | `maxBackgroundFps` | `MAX_BACKGROUND_FPS` | range 15–60，step 5，默认 30 | 同上，`document.hidden` 时切换上限 | 生效 |
-| `spellDetail` | `PREF_VIDEO_SPELLS` | choice `low`/`medium`/`high`，默认 `high` | 需要 vendored viewer 增加法术粒子倍率桥接；本次先接 `VideoBridge.spellParticleScale`，补丁未落地前 `applied:false` | 灰显 |
-| `foliage` | `PREF_VIDEO_FOLIAGE` | choice `off`/`low`/`medium`/`high`，默认 `high` | 无独立植被层；树木/灌木与地形装饰同属 doodad，无法诚实分档 | 灰显 |
+| `spellDetail` | `PREF_VIDEO_SPELLS` | choice `low`/`medium`/`high`，默认 `high` | 需要 vendored viewer 增加法术粒子倍率桥接；本次先接 `VideoBridge.spellParticleScale`，补丁未落地前 `applied:false` | HD 页移除 |
+| `foliage` | `PREF_VIDEO_FOLIAGE` | choice `off`/`low`/`medium`/`high`，默认 `high` | 无独立植被层；树木/灌木与地形装饰同属 doodad，无法诚实分档 | HD 页移除 |
 | `antialiasing` | `PREF_VIDEO_ANTIALIASING` | bool，默认 true | WebGL context 创建时读取；改动后需重载地图/页面，保存时提示重载（复用 `askArtReload` 形态） | 生效（重载） |
-| `ssao` | `PREF_VIDEO_ASSAO` | bool，默认 false | 无 AO pass | 灰显 |
-| `bloom` | `PREF_VIDEO_BLOOM` | bool，默认 false | 无 bloom pass | 灰显 |
-| `portraitBloom` | `PREF_VIDEO_PORTRAIT_BLOOM` | bool，默认 false | 无 portrait bloom pass | 灰显 |
+| `ssao` | `PREF_VIDEO_ASSAO` | bool，默认 false | 无 AO pass | HD 页移除 |
+| `bloom` | `PREF_VIDEO_BLOOM` | bool，默认 false | 无 bloom pass | HD 页移除 |
+| `portraitBloom` | `PREF_VIDEO_PORTRAIT_BLOOM` | bool，默认 false | 无 portrait bloom pass | HD 页移除 |
 
-已有行保留：`gamma`、`resolution`、`vsync`、`menus43`、`lowPerf`、`modelDetail`、`animQuality`、`textureQuality`、`particles`、`lights`、`shadows`、`occlusion`。
+已有行保留：`gamma`、`resolution`、`vsync`、`menus43`、`lowPerf`、`animQuality`、`textureQuality`、`particles`、`lights`、`shadows`。`modelDetail` / `occlusion` 虽在 `videoSettings` 里有字段，但没有消费者，按未实现处理、HD 页移除。
 显示器选择（官方 `MONITOR` / `PREF_VIDEO_ADAPTER`）不加入：浏览器没有显示器枚举权。
 
 ### 2.2 声音（tab: sound）
@@ -38,10 +39,11 @@
 | `musicEnabled` | `MUSIC` | 已有模型，补 UI 行 | `applyAudioOptions` | 生效 |
 | `soundEnabled` | `SOUND_EFFECTS` | 已有模型，补 UI 行 | `applyAudioOptions` | 生效 |
 | `muteFocusLoss` | `PREF_SOUND_WINDOW_FOCUS` | bool，默认 false | 新增 `src/audio/focusMute.ts`，监听 `visibilitychange`/`blur`/`focus`，对 SoundBoard 总线置零/恢复 | 生效 |
-| `musicOverride` | `MUSIC` | choice，默认 `default` | 无音乐包覆盖机制 | 灰显 |
-| `classicSound` | `OPTION_CLASSIC_SOUND` | bool，默认 false | 无第二套音效库 | 灰显 |
+| `musicOverride` | `MUSIC` | choice，默认 `default` | 无音乐包覆盖机制 | HD 页移除 |
+| `classicSound` | `OPTION_CLASSIC_SOUND` | bool，默认 false | 无第二套音效库 | HD 页移除 |
 
 输出设备（官方 `OPTIONS_SOUND_DEVICE` / `PREF_SOUND_OUTPUTDEVICE`）不加入。
+| `movementSounds` | `MOVEMENT_SOUNDS` | bool，默认 true | `applyAudioOptions` 缩放 `SOUND_GROUP.UNITMOVEMENT`；脚步由 `rts.tickFootsteps` 按 walk 剪辑自身时钟触发，进入 `SoundBoard` 的 footstep 池（并发 8、每帧全局预算 4） | 生效 |
 
 ### 2.3 游戏（tab: gameplay）
 
@@ -65,17 +67,17 @@
 | `observerChat` | `OBSERVER_CHAT_ENABLED` | bool，默认 true | 同上 | 生效 |
 | `globalChat` | `GLOBAL_CHAT_ENABLED` | bool，默认 true | 同上 | 生效 |
 | `gameInfoMessages` | `OPTION_GAME_INFO_MESSAGES` | bool，默认 true | HUD 系统消息区过滤 | 生效 |
-| `enhancedTooltips` | `ENHANCED_TOOLTIPS` | bool，默认 true | 悬停提示扩展行；现有提示无独立扩展开关，需在生成处加 gate | 待实现，暂灰显 |
-| `subgroupOrder` | `SUBGROUP_MODIFIER` | bool，默认 true | 子组顺序修饰键；现有热键路径未暴露 | 灰显 |
-| `denyIcon` | `SHOW_DENY_ICON` | bool，默认 true | 禁止目标图标绘制未实现 | 灰显 |
-| `hudSidePanels` | `HUD_SIDEPANELS` | bool，默认 false | 无侧面板布局 | 灰显 |
-| `cinePortraits` | `OPTIONS_SHOW_CINE_PORTRAITS` | bool，默认 true | 过场强制头像；未接 | 灰显 |
-| `sdCampaignScreens` | `OPTIONS_SD_CAMPAIGN_SCREENS` | bool，默认 false | HD 线无 SD 战役界面 | 灰显 |
-| `teenFilter` | `OPTION_TEEN` | bool，默认 false | 青少年内容过滤未实现 | 灰显 |
-| `advancedObserverUI` | `OBSERVER_OPTION_BTN` | bool，默认 false | 高级观察者 UI 未实现 | 灰显 |
-| `useSkins` | `OPTION_USE_SKINS` | bool，默认 true | 皮肤选择已有 `uiTheme`/`hdArt`；此开关无独立消费者 | 灰显 |
-| `classicCursor` | `OPTION_CLASSIC_CURSOR` | bool，默认 false | 经典指针美术未实现 | 灰显 |
-| `oldTerrain` | `OPTIONS_OLD_TERRAIN` | bool，默认 false | 旧地形渲染未实现 | 灰显 |
+| `enhancedTooltips` | `ENHANCED_TOOLTIPS` | bool，默认 true | 悬停提示扩展行；现有提示无独立扩展开关，需在生成处加 gate | 待实现，HD 页移除 |
+| `subgroupOrder` | `SUBGROUP_MODIFIER` | bool，默认 true | 子组顺序修饰键；现有热键路径未暴露 | HD 页移除 |
+| `denyIcon` | `SHOW_DENY_ICON` | bool，默认 true | 禁止目标图标绘制未实现 | HD 页移除 |
+| `hudSidePanels` | `HUD_SIDEPANELS` | bool，默认 false | 无侧面板布局 | HD 页移除 |
+| `cinePortraits` | `OPTIONS_SHOW_CINE_PORTRAITS` | bool，默认 true | 过场强制头像；未接 | HD 页移除 |
+| `sdCampaignScreens` | `OPTIONS_SD_CAMPAIGN_SCREENS` | bool，默认 false | HD 线无 SD 战役界面 | HD 页移除 |
+| `teenFilter` | `OPTION_TEEN` | bool，默认 false | 青少年内容过滤未实现 | HD 页移除 |
+| `advancedObserverUI` | `OBSERVER_OPTION_BTN` | bool，默认 false | 高级观察者 UI 未实现 | HD 页移除 |
+| `useSkins` | `OPTION_USE_SKINS` | bool，默认 true | 皮肤选择已有 `uiTheme`/`hdArt`；此开关无独立消费者 | HD 页移除 |
+| `classicCursor` | `OPTION_CLASSIC_CURSOR` | bool，默认 false | 经典指针美术未实现 | HD 页移除 |
+| `oldTerrain` | `OPTIONS_OLD_TERRAIN` | bool，默认 false | 旧地形渲染未实现 | HD 页移除 |
 
 ### 2.4 输入（tab: input）
 
@@ -137,7 +139,7 @@ Mac 三项（`PREF_INPUT_MAC_*`）不加入。自定义键位已有 `hotkeys` �
   - gameplay: 左列 UI（heroFrames/heroLevel/healthBars/healthBarStyle/tooltips/subgroup/formation/cooldown/deny/goldMine/hudScale/sidePanels/showHotkeys/time/fps/ping/apm/cine/sdCampaign）；中列镜头（enhancedZoom/defaultZoom/maxZoom）与行为（teen/profanity/observer/skins/cursor/peon/oldTerrain）；右列录像与通信（autosave/share/四类聊天/gameInfo）。
   - input: 左列滚动，右列控制。
   - graphics: 三张美术卡 + 7 个分类开关 + 语言。
-- `row(d)` 支持 `min/max/step`；对 `applied:false` 的行加 `hd-opt-disabled` 并将控件 `disabled`，标题/说明使用 `t("hd.notApplied")`。
+- `row(d)` 支持 `min/max/step`；`applied:false` 的行不渲染（整行跳过），所在 section 没有剩余行时连标题一起省略。
 - 文案解析新增 `strOpt(key)`：先 `str(key)`；当库返回原键（安装包无此字符串）时回退 `t("opt." + key)`。
 - `applyAll`/`commit` 分发新增 `applyInputOptions`、`applyCameraOptions`、`applyFrameLimits`、`applyArtCategories`。
 - 保存时若 `windowMode`、`antialiasing` 或 `language` 变化，弹出重载提示（复用 `askArtReload` 的弹窗结构），确认后 `location.reload()`。
@@ -155,7 +157,7 @@ Mac 三项（`PREF_INPUT_MAC_*`）不加入。自定义键位已有 `hotkeys` �
 - 相机常量：`ZOOM_MIN`/`ZOOM_MAX`/`MELEE_START` 改为通过 `cameraOptions` 读取；`zoomStopDistance`/`zoomStopOf` 使用当前上下限。
 - 双击选同类（约 L1470、L19957）：`peonDoubleTapFocus()` 为 false 时不扩展。
 - `allow antialias`：WebGL context 创建参数读取 `videoSettings().antialias`。
-- 过场头像强制路径（`consoleTransmission` 附近）按 `cinePortraits` gate（本次先灰显，若实现则改为生效）。
+- 过场头像强制路径（`consoleTransmission` 附近）按 `cinePortraits` gate（若实现则加入 HD 页；当前不渲染）。
 
 ### 3.7 `src/game/rts.ts`
 - 两处 `groupTargets`（L11103、L11129）按 `formationMovement()` 选择：开=现有环形阵型；关=全员使用点击点。
@@ -192,7 +194,7 @@ Mac 三项（`PREF_INPUT_MAC_*`）不加入。自定义键位已有 `hotkeys` �
 1. `./node_modules/.bin/tsc --noEmit` 零错误。
 2. `http://localhost:5173/?dev&flavor=hd`：
    - 五个标签页均可打开，布局不溢出；窄窗口（≤1280×720）与 1080p 均正常。
-   - 每个新增行可见：生效行可操作；灰显行置灰并有提示。
+   - 每个生效行可见可操作；未实现的行不出现，空 section 的标题也不出现。
    - 中/英切换下标题与选项文案均正确，无裸键名（如 `PREF_VIDEO_SPELLS`）。
 3. 游戏内 `?dev&flavor=hd&map=(2)BootyBay`：
    - 冷却数字开关、金矿计数、英雄等级/状态条、阵型开关、HUD 缩放、已用时间、FPS/Ping/APM、双击选同类、四类聊天过滤逐项验证。

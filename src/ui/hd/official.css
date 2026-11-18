@@ -3666,16 +3666,8 @@
   border-bottom: 1px solid rgba(200, 163, 90, 0.12);
 }
 
-/* A row the WebUI carries but this build cannot honour: still visible, so the player can see
-   the option exists and why it is inert, but visibly out of reach. */
-.hd-official .hd-opt-disabled {
-  opacity: 0.45;
-}
-.hd-official .hd-opt-disabled .hd-opt-label::after {
-  content: " ⓘ";
-  font-size: 0.85em;
-  color: rgba(200, 163, 90, 0.75);
-}
+/* A row the WebUI carries but this build cannot honour is not rendered at all (applied:false
+   in OPTION_DEFS, with the reason there); the HD panel skips it instead of greying it. */
 
 .hd-official .hd-opt-bool {
   flex-direction: row;

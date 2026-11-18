@@ -513,8 +513,17 @@ export class LightningOverlay {
    *  overlay here: the strip is meant to tile along the bolt, and the scroll offset walks U
    *  past 1 within the first second. */
   private resolveTexture(path: string): WebGLTexture | null {
-    const cached = this.textures.get(path);
-    if (!cached || !cached.canvas) return null;
+    let cached = this.textures.get(path);
+    if (!cached) {
+      cached = { canvas: this.loader(path), tex: null };
+      this.textures.set(path, cached);
+    }
+    if (!cached.canvas) {
+      // A loader over a LAZY store (Reforged art is fetched on demand) can answer only after
+      // its first fetch lands, so keep asking instead of freezing the first null forever.
+      cached.canvas = this.loader(path);
+      if (!cached.canvas) return null;
+    }
     if (cached.tex) return cached.tex;
     const gl = this.gl;
     const tex = gl.createTexture()!;

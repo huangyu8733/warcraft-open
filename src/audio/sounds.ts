@@ -73,6 +73,32 @@ const DIALOG_TABLE = "UI\\SoundInfo\\DialogSounds.slk"; // campaign dialogue lin
 // (SoundLabel → WAVs + 3D metadata is AnimSounds.slk — already loaded under the "anim" tag.)
 
 /**
+ * 3.0 renamed the FILES of a few voice sets without touching UnitAckSounds: the row still
+ * asks for `HeroCryptLordWhat1` while the install ships `NerubianCryptLordWhat1.ogg`;
+ * `HeroGoblinAlchemist*` ships as `HeroAlchemist*`; and the Militia set was dropped
+ * altogether — a Militia IS a Peasant under arms, so its lines are the Peasant's.
+ * Applied only after the row's own name misses (see soundFileFor).
+ */
+const VOICE_STEM_ALIASES: Array<[RegExp, string]> = [
+  [/^herocryptlord/i, "NerubianCryptLord"],
+  [/^herogoblinalchemist/i, "HeroAlchemist"],
+  // The Fire Lord's row and folder say "FlameLord"; the lines shipped as "Firelord".
+  [/^heroflamelord/i, "HeroFirelord"],
+  // Reforged spells the Crypt Fiend's and Obsidian Statue's death cries with the form names
+  // the models were given (Pit Fiend / Obsidian Avenger), while AnimSounds kept the old label.
+  [/^cryptfienddeath/i, "PitFiendDeath"],
+  [/^obsidianstatuedeath/i, "ObsidianAvengerDeath"],
+  // The critter's death cry shipped under its internal stem, and the Ancient Protector's
+  // attack event names a "missile attack" the files call a launch.
+  [/^villagerwomandeath/i, "VillagerF"],
+  [/^ancientprotectormissileattack/i, "AncientProtectorMissileLaunch"],
+  // The Marine critter's cries kept their internal stems (tmadth00/01); the row may also
+  // carry a variant number, which the replacement swallows.
+  [/^marinedeath\d*/i, "tmadth00"],
+  [/^militia/i, "Peasant"],
+];
+
+/**
  * 3.0's AbilitySounds.slk has one row whose `Filenames` lost the separator between folder and
  * file: `Abilities/Spells/Items/AIamTomes.flac` — the `PowerupSound` chime shared by every tome
  * and powerup row. The art is `Abilities\Spells\Items\AIam\Tomes.ogg`.
@@ -139,9 +165,8 @@ export interface ScriptSoundSpec {
  *  UNITSOUNDS and UI to **0.00** while leaving MUSIC at 0.55 and AMBIENTSOUNDS at 1.00
  *  during a cinematic — i.e. exactly so the cinematic's own *dialogue* stays audible.
  *  That tells us a script-created `sound` belongs to NONE of these groups, so ours
- *  doesn't route through one either. UNITMOVEMENT (footsteps) and FIRE (doodad fire
- *  loops) have no pool here yet — their gains are recorded and simply have nothing to
- *  scale. */
+ *  doesn't route through one either. FIRE (doodad fire loops) has no pool here yet —
+ *  its gain is recorded and has nothing to scale. */
 // common.j's SOUND_VOLUMEGROUP_* indices (VolumeGroupSetVolume). Exported so the Options
 // screen can scale the SFX groups off the sound sliders without re-typing the magic numbers.
 export const SOUND_GROUP = {
@@ -154,6 +179,7 @@ export const SOUND_GROUP = {
   AMBIENT: 6,
   FIRE: 7,
 } as const;
+const VG_UNITMOVEMENT = SOUND_GROUP.UNITMOVEMENT;
 const VG_UNITSOUNDS = SOUND_GROUP.UNITSOUNDS;
 const VG_COMBAT = SOUND_GROUP.COMBAT;
 const VG_SPELLS = SOUND_GROUP.SPELLS;
@@ -165,11 +191,12 @@ const VOLUME_GROUPS = 8;
 /** Which volume group each one-shot pool answers to by default. A death cry is a unit
  *  sound; a weapon clang is combat. (`playAmbience` shares the uncapped "ui" pool but
  *  is an AMBIENTSOUNDS sound, so it overrides the group at the call site.) */
-const POOL_GROUP: Record<"death" | "impact" | "ui" | "spell", number> = {
+const POOL_GROUP: Record<"death" | "impact" | "ui" | "spell" | "footstep", number> = {
   death: VG_UNITSOUNDS,
   impact: VG_COMBAT,
   spell: VG_SPELLS,
   ui: VG_UI,
+  footstep: VG_UNITMOVEMENT,
 };
 
 const VOICE_CATEGORIES: ReadonlySet<SoundCategory> = new Set<SoundCategory>(["What", "Yes", "YesAttack", "Pissed", "Warcry", "Ready"]);
@@ -190,6 +217,12 @@ const MAX_VOICES = 8; // concurrent voice lines across all sources (safety cap o
  *  The engine's own per-channel voice count isn't in any data file, so this size is ours:
  *  generous enough that a normal fight never drops, small enough to bound a mass battle. */
 const CHANNEL_VOICES = 16;
+
+/** Concurrent footstep voices across the whole match. A marching army can request dozens a
+ *  second, so this is deliberately smaller than a sound channel: a refused step is inaudible
+ *  in the crowd, while an unbounded pool would keep old steps in the mixer long after they
+ *  ended. */
+const FOOTSTEP_VOICES = 8;
 
 /** The decoded-PCM cache (`SoundBoard.buffers`) may never hold more than this many bytes.
  *  This budget is OURS — no file in the install describes one — and is sized so the cache
@@ -288,6 +321,10 @@ interface ModelSounds {
    *  burst `SNDXSHSI` on Death (→ "HealingSprayImpact" → HealingSprayDeath1.wav), and a bottle
    *  thrown at the GROUND never makes the weapon HIT that voices a missile's `impact` list. */
   spellByCode: Map<string, Clip>;
+  /** The H events — FOOTSTEPS parked in the model's walk clips (Footman HD's `HFWF`). The
+   *  renderer plays them on the clip's own clock (see rts.tickFootsteps); the clip's
+   *  cancellation metadata is the only thing this table needs to supply. */
+  footsteps: FootstepSound[];
   /** WHEN each event fires, in model-global milliseconds, keyed by the same 4-char code.
    *  The MDX writes an event object's tracks on the one timeline its sequences are intervals
    *  on, so an event and the clip it belongs to can be paired by containment — which is how a
@@ -312,6 +349,15 @@ interface ScriptVoice {
   src: AudioBufferSourceNode | null;
   gain: GainNode | null;
   panner: PannerNode | null;
+}
+
+/** One footstep event object: its 4-char code, the clip the AnimLookups/AnimSounds chain
+ *  resolves it to, and the model-global times it is parked at (one per walk clip it belongs
+ *  to — the sequence intervals are what pick the right one). */
+interface FootstepSound {
+  code: string;
+  clip: Clip;
+  times: number[];
 }
 
 /** One music track on the music bus (its own gain, so SetMusicVolume is live). */
@@ -410,13 +456,20 @@ export class SoundBoard {
   /** Live voices per sound channel, oldest first — the budget CHANNEL_VOICES bounds and
    *  the queue a CHANNELFULLPREEMPT clip steals its slot from (see playPool). */
   private channelVoices = new Map<number, PoolVoice[]>();
+  /** Live footsteps, oldest first — the FOOTSTEP_VOICES budget (see playPool). Kept apart
+   *  from `channelVoices` so a marching army cannot spend the channel an attack sound needs. */
+  private footstepVoices: PoolVoice[] = [];
   private loops = new Map<string, AudioBufferSourceNode>(); // active looping sounds by name
   /** setPathLoop's side of the never-stack rule: which loop key OWNS each looping WAV,
    *  the keys queued behind it, and what file each key is on (an owner or a waiter) —
    *  the stop call is given only the key. */
   private loopOwner = new Map<string, string>();
-  private loopQueue = new Map<string, Array<{ key: string; at?: SoundPos }>>();
+  private loopQueue = new Map<string, Array<{ key: string; at?: SoundPos; group?: number }>>();
   private loopFile = new Map<string, string>();
+  /** The gain node of every LIVE path loop that belongs to a volume group, so a slider move
+   *  (VolumeGroupSetVolume) can re-scale a bed that is already playing — ambient beds run for
+   *  the whole match, unlike the one-shot pools that bake the group in at cue time. */
+  private loopGroups = new Map<string, { node: GainNode; base: number; group: number }>();
   /** Every WAV currently in the air, at most one copy each — the never-stack rule
    *  (see pickVariant). Keyed by file path, since that is what "the same sound" means. */
   private playing = new Map<string, ActiveFile>();
@@ -830,6 +883,7 @@ export class SoundBoard {
           for (const clip of list) add(clip);
         }
         for (const clip of model.abilityByCode.values()) add(clip);
+        for (const ev of model.footsteps) add(ev.clip);
       }
     }
     const missing: string[] = [];
@@ -862,11 +916,16 @@ export class SoundBoard {
    *  the encoding: 1.30 installs keep `.wav`, 3.0's tables name `.flac` while its listfile may
    *  hold either (and unit lines live as Ogg Vorbis beside the art). So try every audio
    *  extension, not just the one the row wrote. */
-  private soundFileFor(path: string): string | null {
+  private soundFileFor(rawPath: string): string | null {
+    // SoundInfo rows are not consistent about separators: DialogSounds writes
+    // `Sound/Dialogue/OrcCampaign/…` while every other table and the archive use backslashes.
+    const path = rawPath.includes("/") ? rawPath.replace(/\//g, "\\") : rawPath;
     if (this.vfs.exists(path)) return path;
     const fixed = SOUND_FILE_FIXES.get(path.replace(/\\/g, "/").toLowerCase());
     if (fixed && this.vfs.exists(fixed)) return fixed;
-    const stem = path.replace(/\.(wav|flac|ogg|mp3)$/i, "");
+    // Strip ANY extension, not just audio ones: a row that points at a MODEL (AnimSounds'
+    // Warcry names WarCryCaster.mdl) still has its sound beside it as WarCryCaster.ogg.
+    const stem = path.replace(/\.[^.\\/]+$/, "");
     const current = path.slice(stem.length).toLowerCase();
     // Classic interludes still name their music with the encoding bitrate attached:
     // Human06Interlude asks for `TragicConfrontation112`, NightElf06Interlude for
@@ -886,7 +945,47 @@ export class SoundBoard {
       if (ext === current) continue;
       if (this.vfs.exists(stem + ext)) return stem + ext;
     }
+    // Last resort: a bare name that disagrees with the install's own FILE name — a case
+    // difference (`HeroFireLord` vs `HeroFirelord`) or a Reforged rename (see
+    // VOICE_STEM_ALIASES). UnitAckSounds rows carry no folder at all, so only the basename
+    // index can find where the line lives.
+    const sep = Math.max(stem.lastIndexOf("\\"), stem.lastIndexOf("/"));
+    const base = stem.slice(sep + 1).toLowerCase();
+    const index = this.stemIndex();
+    const direct = index.get(base) ?? index.get(this.aliasedStem(base));
+    if (direct) return direct;
+    // A row can also omit the VARIANT NUMBER: `RatDeath` vs RatDeath1.ogg, `BlizzardTarget`
+    // vs BlizzardTarget1.ogg, `CryptFiendDeath` vs PitFiendDeath1.ogg (aliased). Four is the
+    // deepest variant count any one SoundInfo row uses.
+    for (let n = 1; n <= 4; n++) {
+      const numbered = base + n;
+      const hit = index.get(numbered) ?? index.get(this.aliasedStem(numbered));
+      if (hit) return hit;
+    }
     return null;
+  }
+
+  /** Basename (lower-case, extension-less) → the install's actual path. Built once, on the
+   *  first name that fails to resolve directly; a couple of voice sets need it, and the
+   *  listfile is already in memory for the effect-folder scans (wavIndex). */
+  private stemFiles: Map<string, string> | null = null;
+  private stemIndex(): Map<string, string> {
+    if (this.stemFiles) return this.stemFiles;
+    const index = new Map<string, string>();
+    for (const path of this.vfs.list()) {
+      if (!/\.(wav|flac|ogg|mp3)$/i.test(path)) continue;
+      const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+      const base = path.slice(cut + 1).replace(/\.[^.]+$/, "").toLowerCase();
+      if (!index.has(base)) index.set(base, path);
+    }
+    return (this.stemFiles = index);
+  }
+
+  /** A renamed voice stem (`heroCryptLordWhat1` → `nerubiancryptlordwhat1`), or the same
+   *  stem when no alias names it. */
+  private aliasedStem(base: string): string {
+    for (const [re, to] of VOICE_STEM_ALIASES) if (re.test(base)) return base.replace(re, to).toLowerCase();
+    return base;
   }
 
   private async fetchSoundBytes(path: string): Promise<Uint8Array | null> {
@@ -1000,6 +1099,22 @@ export class SoundBoard {
       played = true;
     }
     return played;
+  }
+
+  /** The H event objects a model parks in its walk clips — what `rts.tickFootsteps` schedules
+   *  against the clip's own interval. Empty when the model authors no footsteps. */
+  footstepEvents(modelArt: string): ReadonlyArray<{ code: string; times: number[] }> {
+    return modelArt ? this.resolveModelSounds(modelArt).footsteps : [];
+  }
+
+  /** Play ONE footstep event, by its 4-char code — the caller knows which track it crossed,
+   *  and a model may carry a different sound on each. Routed through the UNITMOVEMENT group,
+   *  which `applyAudioOptions` zeroes when "Movement Sounds" is off. */
+  playFootstep(modelArt: string, code: string, at?: SoundPos): boolean {
+    const ev = this.resolveModelSounds(modelArt).footsteps.find((f) => f.code === code);
+    if (!ev) return false;
+    this.playPool(ev.clip, "footstep", at);
+    return true;
   }
 
   /** Play every S (spell) event a model parks in one of its own clips — what the engine does
@@ -1132,7 +1247,7 @@ export class SoundBoard {
     const key = modelArt.toLowerCase();
     const cached = this.modelSounds.get(key);
     if (cached) return cached;
-    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), spellByCode: new Map(), eventTimes: new Map(), birth: null, standWindow: null, deathWindow: null };
+    const out: ModelSounds = { attack: [], launch: [], impact: [], ability: [], death: [], abilityByCode: new Map(), spellByCode: new Map(), footsteps: [], eventTimes: new Map(), birth: null, standWindow: null, deathWindow: null };
     let model: ParsedModel;
     const registered = this.sceneModels.get(key);
     if (registered) {
@@ -1160,6 +1275,11 @@ export class SoundBoard {
     if (stand) out.standWindow = [stand.interval[0], stand.interval[1]];
     const death = model.sequences.find((q) => /^death/i.test(q.name));
     if (death) out.deathWindow = [death.interval[0], death.interval[1]];
+    // A footstep is a sound event parked in a WALK clip; the walk clock (rts.tickFootsteps)
+    // fires it. Reading that from the clip, not from the code's first letter, is what the data
+    // says: Footman's walk event is HFWF (FootmanWalk) while the generic steps are FDFL/FDSL/
+    // FHCL — an H-only filter missed every generic step, and an F-only filter missed Footman.
+    const walkRanges = model.sequences.filter((q) => /^walk/i.test(q.name)).map((q) => q.interval);
     for (const evt of model.eventObjects) {
       // Event-object names are "SND" + a 1-char separator + a 4-char code ("SNDXKRIF"). A
       // parser keeps that whole name; the viewer's runtime emitter keeps `type` + `id`.
@@ -1169,8 +1289,8 @@ export class SoundBoard {
       // "SNDXACYD ", and with the space kept the code missed its AnimLookups row and the
       // Cyclone's birth and death sounds were silent.
       const id = (evt.id ?? named.substring(4)).trim();
-      const cat = id[0]; // K = attack, M = missile, D = death, A = ability, S = spell
-      if (cat !== "K" && cat !== "M" && cat !== "A" && cat !== "D" && cat !== "S") continue;
+      const cat = id[0]; // K/H = attack, M = missile, D = death, A = ability, S = spell, F = footstep
+      if (cat !== "K" && cat !== "M" && cat !== "A" && cat !== "D" && cat !== "S" && cat !== "H" && cat !== "F") continue;
       const label = this.animLabel(id);
       if (!label) continue;
       const clip = this.resolve("anim", label); // AnimSounds row → clip (vol/pitch/3D/dist)
@@ -1178,6 +1298,14 @@ export class SoundBoard {
       const code = id.toUpperCase();
       const times = out.eventTimes.get(code) ?? out.eventTimes.set(code, []).get(code)!;
       for (const t of Array.from(evt.tracks)) times.push(t); // one track per clip it is parked in
+      // H events are FOOTSTEPS: the renderer plays them on the walk clip's own clock
+      // (rts.tickFootsteps), so they join neither the attack lists nor the spell map. A model
+      // that authors none walks in silence, which is the authentic answer (Grunt HD does).
+      const isStep = cat === "F" || walkRanges.some((iv) => times.some((t) => t >= iv[0] && t <= iv[1]));
+      if (isStep) {
+        out.footsteps.push({ code, clip, times });
+        continue;
+      }
       // An S event is played ONLY by the clip it is parked in (playModelSpellEventsIn), and
       // joins none of the lists below: those are answered by other paths (a weapon's hit, a
       // cast), each of which already has its own sound, and an S event added to them would be
@@ -1199,7 +1327,7 @@ export class SoundBoard {
       const atHit = !atLaunch && inClip(out.deathWindow);
       if (atLaunch) out.launch.push(clip);
       else if (atHit) out.impact.push(clip);
-      if (cat === "K") out.attack.push(clip);
+      if (cat === "K" || cat === "H") out.attack.push(clip);
       else if (cat === "D") out.death.push(clip);
       else if (cat === "A") {
         out.ability.push(clip);
@@ -1286,6 +1414,41 @@ export class SoundBoard {
     return (label && this.resolve("ability", label)?.paths[0]) || "";
   }
 
+  /** The looping cue a DOODAD row's `soundLoop` names (a brazier, a waterfall, a fountain, a
+   *  tavern fire…), for `setPathLoop`. Most rows live in AmbienceSounds; a few are AnimSounds
+   *  labels. Returns "" when the label is `_`/empty or this install has no file for it. */
+  ambienceLoopPath(label: string): string {
+    for (const tag of ["ambience", "anim"] as const) {
+      const clip = this.resolve(tag, label);
+      if (!clip) continue;
+      for (const p of clip.paths) {
+        const file = this.soundFileFor(p);
+        if (file) return file;
+      }
+    }
+    return "";
+  }
+
+  /** The looping bed a structure under construction hums with, for `setPathLoop` — the
+   *  AmbienceSounds rows `BuildingConstructionLoop` (shared hammering), `OrcBuildingConstructionLoop`,
+   *  `UndeadBuildingConstructionLoop` and `NightElfGrowingLoop`. The BUILDING's own race picks
+   *  the row; anything else (naga, creeps) falls back to the shared bed. Returns "" when this
+   *  install has no file for it. */
+  constructionLoopPath(race: string): string {
+    const row =
+      race === "orc" ? "OrcBuildingConstructionLoop"
+      : race === "undead" ? "UndeadBuildingConstructionLoop"
+      : race === "nightelf" ? "NightElfGrowingLoop"
+      : "BuildingConstructionLoop";
+    const clip = this.resolve("ambience", row);
+    if (!clip) return "";
+    for (const p of clip.paths) {
+      const file = this.soundFileFor(p);
+      if (file) return file;
+    }
+    return "";
+  }
+
   /** Play the sound an MDX SND event object names, by its 4-char code — the same
    *  AnimLookups → AnimSounds chain resolveModelSounds walks, but fired by a caller that
    *  is driving the animation ITSELF rather than letting the model's category decide. The
@@ -1298,12 +1461,40 @@ export class SoundBoard {
     if (label) this.playPool(this.resolve("anim", label), "ui");
   }
 
-  /** AnimLookups.slk: a 4-char SND event code ("KRIF", "ARPD") → its SoundLabel. */
+  /** A 4-char SND event code ("KRIF", "ARPD", "HFWF") → its SoundLabel. 3.0 dropped
+   *  AnimLookups.slk entirely (the file is not in the CASC listfile anymore), so the mapping
+   *  lives in AnimSounds.slk's own "AnimationEventCode" column: FootmanWalk's row carries
+   *  HFWF and the walk FLAC beside it. Look there first; older installs still use the lookup
+   *  table, so that stays as the first choice. Without this, every model event (attack, death
+   *  and footstep alike) resolved to nothing and played in silence on a 3.0 install. */
   private animLabel(code: string): string | null {
     const lookups = this.tables.get("animlookups") ?? null;
-    const actual = lookups?.index.get(code.toLowerCase()) ?? code;
-    const row = lookups?.data.getRow(actual) as { string(k: string): string | undefined } | undefined;
-    return row?.string("SoundLabel") ?? null;
+    if (lookups) {
+      const actual = lookups.index.get(code.toLowerCase()) ?? code;
+      const row = lookups.data.getRow(actual) as { string(k: string): string | undefined } | undefined;
+      const label = row?.string("SoundLabel");
+      if (label) return label;
+    }
+    return this.animCodeLabels().get(code.toLowerCase()) ?? null;
+  }
+
+  private animCodeIndex: Map<string, string> | null = null;
+  /** Lazy code→SoundName index over AnimSounds.slk's AnimationEventCode column. ~1.2k rows,
+   *  built once; the labels are what `resolve("anim", label)` needs. */
+  private animCodeLabels(): Map<string, string> {
+    if (this.animCodeIndex) return this.animCodeIndex;
+    const idx = new Map<string, string>();
+    const table = this.tables.get("anim");
+    if (table) {
+      for (const rowKey of table.index.values()) {
+        const row = table.data.getRow(rowKey) as { string(k: string): string | undefined } | undefined;
+        const code = row?.string("AnimationEventCode")?.trim().toLowerCase();
+        const label = row?.string("SoundName")?.trim();
+        if (code && label && !idx.has(code)) idx.set(code, label);
+      }
+    }
+    this.animCodeIndex = idx;
+    return idx;
   }
 
   /** Play a named ambience sound from AmbienceSounds.slk. Blizzard.j's InitDNCSounds
@@ -1405,14 +1596,14 @@ export class SoundBoard {
   /** The panner each positioned path loop plays through, by its key (movePathLoop). */
   private readonly loopPanners = new Map<string, PannerNode>();
 
-  setPathLoop(key: string, path: string, on: boolean, at?: SoundPos): void {
+  setPathLoop(key: string, path: string, on: boolean, at?: SoundPos, group?: number): void {
     if (on) {
       if (this.loops.has(key) || this.loopFile.get(key) === path) return;
       if (!path || !this.vfs.exists(path)) return;
       const owner = this.loopOwner.get(path);
       if (owner !== undefined && owner !== key) {
         const queue = this.loopQueue.get(path) ?? this.loopQueue.set(path, []).get(path)!;
-        queue.push({ key, at });
+        queue.push({ key, at, group });
         this.loopFile.set(key, path);
         return;
       }
@@ -1428,7 +1619,10 @@ export class SoundBoard {
         if (!buf || !this.ctx || !this.master || this.loops.get(key) !== placeholder) return;
         const src = this.source(buf, clip);
         src.loop = true;
-        const g = src.connect(this.gain(clip.gain));
+        const gainNode = this.ctx.createGain();
+        gainNode.gain.value = clip.gain * (group === undefined ? 1 : this.groups[group] ?? 1);
+        if (group !== undefined) this.loopGroups.set(key, { node: gainNode, base: clip.gain, group });
+        const g = src.connect(gainNode);
         if (at && this.listener) {
           const p = this.panner(clip, at);
           this.loopPanners.set(key, p);
@@ -1443,6 +1637,7 @@ export class SoundBoard {
       const file = this.loopFile.get(key);
       this.loopFile.delete(key);
       this.loopPanners.delete(key);
+      this.loopGroups.delete(key);
       const src = this.loops.get(key);
       if (src) {
         this.loops.delete(key);
@@ -1460,7 +1655,7 @@ export class SoundBoard {
       const next = queue?.shift();
       if (next) {
         this.loopFile.delete(next.key); // it's no longer waiting — let the start path run
-        this.setPathLoop(next.key, file, true, next.at); // the bed carries on at their spot
+        this.setPathLoop(next.key, file, true, next.at, next.group); // the bed carries on at their spot
       }
     }
   }
@@ -1946,7 +2141,7 @@ export class SoundBoard {
    *  aren't budgeted at all — a player-initiated cast sound must never lose its slot to
    *  the weapon-clang cap mid-fight (issue #23). A WANT3D clip with a world position
    *  pans + attenuates around the listener regardless of kind. */
-  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui" | "spell", at?: SoundPos, group = POOL_GROUP[kind]): void {
+  private playPool(clip: Clip | null, kind: "death" | "impact" | "ui" | "spell" | "footstep", at?: SoundPos, group = POOL_GROUP[kind]): void {
     if (!clip || !clip.paths.length) return;
     if (!this.audible()) return;
     const positional = clip.threeD && !!at && !!this.listener;
@@ -1971,6 +2166,11 @@ export class SoundBoard {
       // BEFORE anything is cut, so a refusal here never costs a copy we were going to
       // take over: the channel is full either way and we'd have silenced one for nothing.
       if (voices.length >= CHANNEL_VOICES && !clip.preempt) return;
+    } else if (kind === "footstep") {
+      // Footsteps get their own small budget and REFUSE rather than steal: a step that loses
+      // its slot is inaudible in a crowd, while an attack sound losing one is a silent blow.
+      voices = this.footstepVoices;
+      if (voices.length >= FOOTSTEP_VOICES) return;
     }
     choice.taken?.kill(); // the copy this one wins the file off (null if the variant was free)
     const voice: PoolVoice = { src: null, dead: false };
@@ -2149,6 +2349,11 @@ export class SoundBoard {
     if (group < 0 || group >= VOLUME_GROUPS) return;
     this.groups[group] = Math.max(0, Math.min(1, scale));
     if (group === VG_MUSIC) this.applyMusicGain();
+    // Beds already playing answer immediately too — an ambient loop outlives the slider move
+    // that muted it otherwise.
+    for (const [, loop] of this.loopGroups) {
+      if (loop.group === group) loop.node.gain.value = loop.base * this.groups[group];
+    }
   }
 
   /** VolumeGroupReset — back to full on every group. */
@@ -2276,7 +2481,11 @@ export class SoundBoard {
       const files = (row.string("filenames") ?? "")
         .split(",")
         .map((s) => s.trim())
-        .filter(Boolean);
+        .filter((s) => s && s !== "_");
+      // A row whose FileNames is `_` still names its file in its SoundName: AnimSounds'
+      // RatDeath ships as RatDeath1.ogg, ObsidianStatueDeath as ObsidianAvengerDeath1.ogg.
+      // Ask the archive for that name rather than for "_" (which is not a file).
+      if (!files.length && (tag === "anim" || tag === "ack" || tag === "ambience" || tag === "dialog")) files.push(actual);
       if (files.length) {
         const vol = parseFloat(row.string("volume") ?? "127");
         const pitch = parseFloat(row.string("pitch") ?? "1");

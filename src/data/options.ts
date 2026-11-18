@@ -532,7 +532,7 @@ const bool = (v: OptionValue): boolean => v === true;
  *     UNITSOUNDS = soundOn · soundVol · unitSounds     (a unit's voice / death cry)
  *     COMBAT / SPELLS / UI = soundOn · soundVol         (clangs, spells, the menu click itself)
  *     AMBIENT = soundOn · soundVol · ambientSounds      (dawn cries, the menu wind bed)
- *     UNITMOVEMENT = soundOn · soundVol · movementSounds (footsteps — no pool yet, set for when there is)
+ *     UNITMOVEMENT = soundOn · soundVol · movementSounds (footsteps; see ModelSounds.footsteps)
  *     MUSIC (via setMusicVolume) = musicOn · musicVol
  *
  * Turning "Sound" off zeroes every effect group (including the UI click — WC3 does the same).

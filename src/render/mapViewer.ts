@@ -63,7 +63,7 @@ import type { Instance as RtsInstance } from "../game/rts";
 import type { MatchLinkSetup } from "../game/matchLink";
 import type { ScoreRow, ScoreTable } from "../game/scoreTable";
 import { unitSnapshot, unitSnapshots } from "../game/jassHooks";
-import { SoundBoard, type UnitSoundDef, type ParsedModel } from "../audio/sounds";
+import { SoundBoard, SOUND_GROUP, type UnitSoundDef, type ParsedModel } from "../audio/sounds";
 import { VoiceChat } from "../audio/voiceChat";
 import { onVoiceControlChange, setVoiceHost, voiceControlOn } from "../voice/control";
 import { VoiceLabels } from "../game/voiceLabels";
@@ -666,7 +666,17 @@ const ERROR_VOICE: Record<string, string> = {
   // AcolytePlacedOffBlight1.wav, distinct from the CantPlace* the four races share. No
   // other race has an OffBlight row, and none needs one.
   Offblight: "OffBlight",
+  // "Not enough mana." — each race names the refusal in its own voice (NoManaOrc, …).
+  Nomana: "NoMana",
+  // "Inventory is full." — likewise per race (InventoryFullHuman, …).
+  Inventoryfull: "InventoryFull",
+  // The night elf's own refusal when a rooted Ancient cannot uproot here. UISounds gives it
+  // a COMPLETE row name with no race suffix, so it is handled as a whole cue (WHOLE_VOICE).
+  Cantroot: "CantRootNightElf",
 };
+
+/** UISounds cues that are already complete row names — no `<cue><Race>` suffix is appended. */
+const WHOLE_VOICE: ReadonlySet<string> = new Set(["CantRootNightElf"]);
 
 // Building-cancel explosion effect per race (verified in the MPQs). Orc ships no
 // dedicated cancel model, so it reuses the Human one.
@@ -675,6 +685,15 @@ const CANCEL_FX: Record<PlayableRace, string> = {
   orc: "Objects\\Spawnmodels\\Human\\HCancelDeath\\HCancelDeath.mdx",
   undead: "Objects\\Spawnmodels\\Undead\\UCancelDeath\\UCancelDeath.mdx",
   nightelf: "Objects\\Spawnmodels\\NightElf\\NECancelDeath\\NECancelDeath.mdx",
+};
+
+/** The crash that goes with CANCEL_FX, from AnimSounds. 3.0 ships no orc row, so the orc
+ *  site reuses the human one, exactly as the explosion model above does. */
+const CANCEL_SOUND: Record<PlayableRace, string> = {
+  human: "DeathHumanBuildingCancel",
+  orc: "DeathHumanBuildingCancel",
+  undead: "DeathUndeadBuildingCancel",
+  nightelf: "DeathNightElfBuildingCancel",
 };
 
 // WC3's real ground indicator for a point-target area spell (Blizzard, Flame Strike,
@@ -905,6 +924,8 @@ interface HideableWidget {
     textureOverrides?: Map<number, unknown>;
     model?: { sequences: Array<{ name: string; interval?: ArrayLike<number> }>; addInstance?(): SpawnInstance };
   };
+  /** The Doodads.slk row the viewer loaded this instance from — where `soundLoop` lives. */
+  row?: { string(col: string): string | undefined };
 }
 interface W3xMap {
   worldScene: Scene;
@@ -2666,6 +2687,13 @@ export class MapViewerScene {
       // this loader is shared with (weather, lightning, shadows) is tileset art, and those
       // paths pass through untouched.
       const tilesetArt = tilesetOverlay(this.vfs);
+      // Reforged keeps its art LAZY: `rawBytes` cannot see a module file until something has
+      // fetched it, so an HD-only texture — the drains' `DrainManaLightning.dds`, named
+      // `…DrainManaLightning.blp` by Splats\LightningData.slk — came back null forever and a
+      // Siphon Mana/Life Drain tether never drew. Fetch such a path ONCE through the async
+      // reader and answer from this cache on the frames after.
+      const lazyArt = new Map<string, HTMLCanvasElement | null>();
+      const lazyArtLoading = new Set<string>();
       const splatLoader = (p: string) => {
         const art = tilesetArt(p, terrain.tileset);
         const b = art.source.rawBytes(art.path);
@@ -2675,7 +2703,22 @@ export class MapViewerScene {
         }
         // Not tileset art (the selection circles are plain UI images) — fall back to the
         // HD-aware candidate list, or an HD install's .dds copies stay invisible.
-        return vfsImage(this.vfs, p);
+        const loaded = lazyArt.get(p);
+        if (loaded !== undefined) return loaded;
+        const sync = vfsImage(this.vfs, p);
+        if (sync) return sync;
+        if (!lazyArtLoading.has(p)) {
+          lazyArtLoading.add(p);
+          const candidate = imageCandidates(p).find((c) => this.vfs.exists(c));
+          if (!candidate) lazyArt.set(p, null);
+          else {
+            this.vfs.read(candidate).then(
+              (bytes) => lazyArt.set(p, imageToCanvas(bytes)),
+              () => lazyArt.set(p, null),
+            );
+          }
+        }
+        return null;
       };
       // Terrain camera culling (render/terrainCull.ts) — built off the same terrain the
       // overlays are, and consulted once a frame just before the ground and water passes.
@@ -2751,6 +2794,23 @@ export class MapViewerScene {
       this.rts.setFootprintReader((tex) => this.footprintFor(tex)); // pathTex decode is a VFS read
       this.rts.setIconResolver((path) => this.blpIcon(path)); // BLP decode is a VFS read, too — for the ally spell row
       this.rts.setSoundBoard(this.sounds);
+      // Item cues: the sim taps every inventory action (walked-over, ordered, dropped, bought)
+      // without needing the trigger events that only a scripted map records. UI sounds, so no
+      // position — but they are still withheld for a spot the player cannot see, like every
+      // other one-shot (an unscouted pickup is news).
+      this.rts.simWorld.itemObserver = (u, _typeId, phase) => {
+        if (!this.sounds || !this.pointVisible(u.x, u.y)) return;
+        if (phase === "pickup") this.sounds.playUi("ItemGet");
+        else if (phase === "drop") this.sounds.playUi("ItemDrop");
+        else if (phase === "sell") this.sounds.playUi("ItemReward"); // a shop hands one over
+      };
+      // A creep's own loot hitting the ground: Reforged's two chimes, legendary for the
+      // Artifact class (the game's top tier) and normal for everything else.
+      this.rts.simWorld.lootObserver = (typeId, x, y) => {
+        if (!this.sounds || !this.pointVisible(x, y)) return;
+        const legendary = this.items.get(typeId)?.classType === "Artifact";
+        this.sounds.playUi(legendary ? "ItemDropLegendary" : "ItemDropNormal");
+      };
       this.rts.simWorld.tileset = terrain.tileset; // which critters belong here (itemMechanicalCritter)
       this.rts.onRefuse = (key) => this.refuse(key); // refused orders → the gold line + error sound
       this.rts.uiString = (key, fallback) => this.globalStrings?.strings.get(key) ?? fallback; // the hover slab's "Level N" / "Gold: N"
@@ -7088,6 +7148,11 @@ export class MapViewerScene {
     if (this.rts.renderedModelPath(simId) !== drawn.model) {
       const model = await this.viewer.load(drawn.model, this.solver);
       if (!model) return;
+      if (model.sequences && model.eventObjects) {
+        // The scene just paid to parse this model; the sound chain reads the SND events inside
+        // the same file (footsteps, attack/death clips) and on an HD mount cannot fetch it again.
+        this.sounds?.registerModel(drawn.model, { sequences: model.sequences, eventObjects: model.eventObjects });
+      }
       // …and a unit that changed shape AGAIN while this streamed in belongs to the swap that
       // changed it (a Hex dispelled before the sheep finished loading).
       const now = this.rts.simView.units.get(simId);
@@ -7280,6 +7345,11 @@ export class MapViewerScene {
       return reservedId !== undefined || !this.rts
         ? null
         : this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
+    }
+    if (model.sequences && model.eventObjects) {
+      // Hand the SND events to the sound chain: on an HD mount the model's bytes are not
+      // fetchable a second time, and this is where a live unit's body is parsed.
+      this.sounds?.registerModel(drawnDef.model, { sequences: model.sequences, eventObjects: model.eventObjects });
     }
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
@@ -7803,6 +7873,106 @@ export class MapViewerScene {
       if (live.has(key)) continue;
       this.fieldLoops.delete(key);
       this.sounds?.setPathLoop(key, "", false);
+    }
+  }
+
+  /** Loop keys of the construction beds running last frame, so a site that finishes, is
+   *  cancelled or is razed can have its bed stopped. */
+  private constructionLoops = new Set<string>();
+
+  /** Sustain one construction bed per unfinished structure — the shared hammering for a
+   *  human site, the race's own bed for orc/undead/night elf (AmbienceSounds
+   *  `*BuildingConstructionLoop`), keyed on the building so two sites never stack. The bed
+   *  is positional and fades with distance, so an enemy's site in the fog is still HEARD if
+   *  it is close enough — construction noise is a sound in the world, not a report. */
+  private updateConstructionLoops(world: SimWorld): void {
+    const live = new Set<string>();
+    for (const u of world.units.values()) {
+      const building = u.building;
+      if (!building || building.constructionLeft <= 0) continue;
+      const wav = this.sounds?.constructionLoopPath(u.race) ?? "";
+      if (!wav) continue;
+      const key = `build|${u.id}`;
+      live.add(key);
+      if (!this.constructionLoops.has(key)) {
+        this.constructionLoops.add(key);
+        this.sounds?.setPathLoop(key, wav, true, { x: u.x, y: u.y, z: this.rts!.groundHeightAt(u.x, u.y) });
+      }
+    }
+    for (const key of this.constructionLoops) {
+      if (live.has(key)) continue;
+      this.constructionLoops.delete(key);
+      this.sounds?.setPathLoop(key, "", false);
+    }
+  }
+
+  /** Doodads whose own `soundLoop` is playing, keyed by their index in `map.doodads`. The
+   *  row's label (a brazier, a waterfall, a fountain, a tavern fire…) is resolved once, when
+   *  the bed starts. */
+  private doodadLoops = new Map<number, { key: string }>();
+  private doodadLoopScan = 0;
+  /** Whether the rain bed is up (`AmbientSoundRain` rides a rain weather effect). */
+  private rainBed = false;
+
+  /** The weather's own bed: rain is a sound you sit inside, so it is non-positional — a
+   *  single loop for as long as any enabled effect is a rain one, off again when the last
+   *  is disabled or removed. Snow, fog and rays are silent, as in the game. */
+  private updateWeatherSound(): void {
+    const raining = this.weather?.raining === true;
+    if (raining === this.rainBed) return;
+    this.rainBed = raining;
+    const wav = raining ? this.sounds?.ambienceLoopPath("AmbientSoundRain") ?? "" : "";
+    if (raining && !wav) return;
+    this.sounds?.setPathLoop("weather|rain", wav, raining, undefined, SOUND_GROUP.AMBIENT);
+  }
+
+  /** Sustain the ambient beds of the doodads around the camera — WC3's braziers crackle and
+   *  fountains run as you walk past, and each of those noises is the row's `soundLoop`. The
+   *  scan runs four times a second (a map may hold thousands of doodads), keeps at most
+   *  DOODAD_VOICES beds alive, and lets a bed go once its doodad is well out of earshot or was
+   *  removed by a trigger. Beds are positional and belong to AMBIENTSOUNDS, so the ambient
+   *  slider and its toggle govern them; distance (not fog) decides what is heard — a close
+   *  waterfall behind the fog is still a waterfall. */
+  private updateDoodadLoops(): void {
+    const map = this.viewer.map;
+    const sounds = this.sounds;
+    if (!map || !sounds) return;
+    const now = performance.now();
+    if (now - this.doodadLoopScan < 400) return;
+    this.doodadLoopScan = now;
+    const cx = this.target[0];
+    const cy = this.target[1];
+    const NEAR = 2200; // where a bed starts
+    const FAR = 3000; // …and where it stops (hysteresis so a wobbling camera doesn't flicker)
+    const MAX = 8;
+    const doodads = map.doodads as unknown as HideableWidget[];
+    for (const [i, loop] of this.doodadLoops) {
+      const w = doodads[i];
+      const loc = w?.instance?.localLocation;
+      const gone = !loc || this.removedWidgets.has(w) || Math.hypot(loc[0] - cx, loc[1] - cy) > FAR;
+      if (!gone) continue;
+      this.doodadLoops.delete(i);
+      sounds.setPathLoop(loop.key, "", false);
+    }
+    for (let i = 0; i < doodads.length && this.doodadLoops.size < MAX; i++) {
+      if (this.doodadLoops.has(i)) continue;
+      const w = doodads[i];
+      const loc = w?.instance?.localLocation;
+      if (!loc || this.removedWidgets.has(w)) continue;
+      if (Math.hypot(loc[0] - cx, loc[1] - cy) > NEAR) continue;
+      const label = w.row?.string("soundLoop");
+      if (!label || label === "_") continue;
+      // A row can name several cues ("AshenvaleBrazierLoop,WindMillLoop"): play the first
+      // this install can resolve.
+      let wav = "";
+      for (const part of label.split(",")) {
+        wav = sounds.ambienceLoopPath(part.trim());
+        if (wav) break;
+      }
+      if (!wav) continue;
+      const key = `doodad|${i}`;
+      this.doodadLoops.set(i, { key });
+      sounds.setPathLoop(key, wav, true, { x: loc[0], y: loc[1], z: loc[2] }, SOUND_GROUP.AMBIENT);
     }
   }
 
@@ -16208,7 +16378,8 @@ export class MapViewerScene {
   private refuse(errorKey: string): void {
     const voice = ERROR_VOICE[errorKey];
     this.hud?.showError(this.strings.forRace(errorKey, this.localRace));
-    this.sounds?.playUi(voice ? `${voice}${UI_SOUND_RACE[this.localRace]}` : "InterfaceError");
+    const cue = voice ? (WHOLE_VOICE.has(voice) ? voice : `${voice}${UI_SOUND_RACE[this.localRace]}`) : "InterfaceError";
+    this.sounds?.playUi(cue);
   }
 
   /** Is this world point on the ground the camera is looking at? The rect is the very one
@@ -16573,7 +16744,12 @@ export class MapViewerScene {
     const b = this.rts.simView.units.get(buildingId);
     const fx = b ? { x: b.x, y: b.y, z: this.rts.groundHeightAt(b.x, b.y) } : null;
     if (!this.rts.execute(this.localPlayer, { c: "cancelbuild", buildingId })) return;
-    if (fx) void this.spawnEffect(CANCEL_FX[this.localRace], fx.x, fx.y, fx.z);
+    if (fx) {
+      void this.spawnEffect(CANCEL_FX[this.localRace], fx.x, fx.y, fx.z);
+      // …and its crash: the cancel models carry no SND events, so the sound is the race's
+      // AnimSounds row, played at the site the explosion just came from.
+      this.sounds?.playAnimSound(CANCEL_SOUND[this.localRace], fx);
+    }
   }
 
   /** Cancel a queue slot (0 = the job in progress, -1 = the last one queued) and refund it.
@@ -18243,6 +18419,9 @@ export class MapViewerScene {
         // frame the field ends — waves exhausted OR caster interrupted (world tears the
         // field down either way, so this needs no interrupt handling of its own).
         this.updateFieldLoops(world.activeSpellFields());
+        this.updateConstructionLoops(world);
+        this.updateDoodadLoops();
+        this.updateWeatherSound();
         this.playCargoSounds();
         // Cast animations (throw/slam/spell) begin at the wind-up.
         for (const c of this.rts!.drainFxCastStarts()) {
@@ -18255,7 +18434,15 @@ export class MapViewerScene {
           // sound rides that model: FlameStrikeTarget.mdx fires its SND…AHFT event at frame
           // 0 of its birth clip, so Flame Strike's rising howl begins with the cast point's
           // timer — not 1.33s later at ignition (which sounds the pillar's own AHFS event).
-          if (c.warnArt && this.pointVisible(c.tx, c.ty)) this.sounds?.playModelSound(c.warnArt, { x: c.tx, y: c.ty, z: this.rts!.groundHeightAt(c.tx, c.ty) });
+          // The MODEL goes down with it, for exactly the remaining wind-up: the swirling ring
+          // is most of what tells a player to step out of a Flame Strike, and until it was
+          // spawned here the spell had only its sound until the pillar erupted. Interrupting
+          // the caster does not take it down — WC3 leaves it standing over the wasted cast.
+          if (c.warnArt && this.pointVisible(c.tx, c.ty)) {
+            const gz = this.rts!.groundHeightAt(c.tx, c.ty);
+            this.sounds?.playModelSound(c.warnArt, { x: c.tx, y: c.ty, z: gz });
+            void this.spawnEffect(c.warnArt, c.tx, c.ty, gz, Math.max(0.2, c.warnLeft), "hold");
+          }
           // Blood Mage: hurl one orbiting sphere at Flame Strike / Banish targets (issue #37).
           if (casterSeen && MapViewerScene.SPHERE_THROW_CODES.has(c.code) && caster && this.hasSpheres(caster.typeId))
             this.throwSphere(c.casterId, c.tx, c.ty, c.targetId);

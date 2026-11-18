@@ -416,6 +416,13 @@ interface Entry {
    *  hammer event and never will. See tickWorkBlow. */
   workBlowT: number;
   workBlowPeriod: number; // the work clip's own length — how often the hammer comes round
+  /** Seconds into the CURRENT walk clip's cycle for its footsteps (see tickFootsteps).
+   *  -1 = not walking; `footstepSteps` are that clip's H events as (phase, code), rebuilt
+   *  when the walk clip changes. */
+  footstepClock: number;
+  footstepPeriod: number;
+  footstepSeq: number;
+  footstepSteps: Array<{ phase: number; code: string }>;
   castAnimT: number; // >0 while a cast animation is held (skips the normal picker)
   /** The held clip outlives the CAST: it neither ends with the order nor breaks on movement
    *  (Bladestorm — see ANIM_FOR_DURATION). Cleared when castAnimT runs out. */
@@ -956,6 +963,9 @@ export class RtsController {
   // whose last second fades the body away → gone. It never has a `corpseId`, because a hero
   // leaves no remains for anything to raise, eat or carry — see SimWorld.spawnCorpse.
   private corpses: Array<{ instance: Instance; corpseId: number; anims: AnimSet; phaseT: number; phase: CorpsePhase; hero?: boolean; heroId?: number; held?: boolean; fadeFrom?: Float32Array }> = [];
+  /** Footsteps allowed in the current frame — reset in syncEntries, spent in tickFootsteps.
+   *  A marching army would otherwise open dozens of voices a second. */
+  private footstepBudget = 0;
   private flashRequests: Array<{ x: number; y: number; z: number; radius: number; color: [number, number, number]; sizeToRadius: boolean }> = [];
   private treePulses: Array<{ x: number; y: number }> = []; // trees to flash yellow on harvest
   // scratch buffers to avoid per-frame allocation
@@ -4440,6 +4450,10 @@ export class RtsController {
         lastChopSeq: -1,
         workBlowT: -1,
         workBlowPeriod: 0,
+        footstepClock: -1,
+        footstepPeriod: 0,
+        footstepSeq: -1,
+        footstepSteps: [],
         castAnimT: 0,
         castAnimSticky: false,
         castAnimHeld: false,
@@ -4595,6 +4609,10 @@ export class RtsController {
       lastChopSeq: -1,
       workBlowT: -1,
       workBlowPeriod: 0,
+      footstepClock: -1,
+      footstepPeriod: 0,
+      footstepSeq: -1,
+      footstepSteps: [],
       castAnimT: 0,
         castAnimSticky: false,
         castAnimHeld: false,
@@ -4955,6 +4973,10 @@ export class RtsController {
       lastChopSeq: -1,
       workBlowT: -1,
       workBlowPeriod: 0,
+      footstepClock: -1,
+      footstepPeriod: 0,
+      footstepSeq: -1,
+      footstepSteps: [],
       castAnimT: 0,
         castAnimSticky: false,
         castAnimHeld: false,
@@ -5678,6 +5700,7 @@ export class RtsController {
    */
   private syncEntries(dt: number, steps: number): void {
     perfLog.begin("sim.entries");
+    this.footstepBudget = 4; // footsteps per frame, across every unit (see tickFootsteps)
     // MOVE_EMA_ALPHA is a per-STEP blend; `steps` of them folded into one keeps the walk clip's
     // smoothing the same length of game time however many steps a frame carries.
     const emaAlpha = steps === 1 ? MOVE_EMA_ALPHA : 1 - (1 - MOVE_EMA_ALPHA) ** steps;
@@ -6071,6 +6094,7 @@ export class RtsController {
         }
       }
       this.tickWorkBlow(e, u, dt); // the hammer, on the clock the clip just picked keeps
+      this.tickFootsteps(e, u, dt); // …and the feet on the walk clip's clock
     }
     if (this.forgotten.length) {
       for (const e of this.forgotten) this.dropEntry(e);
@@ -6129,6 +6153,67 @@ export class RtsController {
     if (e.workBlowT > 0) return;
     e.workBlowT += e.workBlowPeriod;
     this.sounds.playRepairBlow(model, { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) });
+  }
+
+  /**
+   * FOOTSTEPS — the H event objects a unit model parks inside its walk clips (Footman HD
+   * authors `HFWF`; a model that authors none, like Grunt HD, walks silently, which is the
+   * authentic answer). The event carries the frame it lands on, so the step is fired from the
+   * CLIP's clock, not from a wall-clock cadence: a hasted unit steps faster because
+   * `walkAnim` re-rates the clip, and a slowed one slower, with no second timer to keep in
+   * sync. `curRate` already folds in both the gait and SetUnitTimeScale.
+   *
+   * Fired only while the unit is actually in a walk clip, and capped per frame (`footstepBudget`)
+   * so several armies on screen cannot open a voice per unit per step. The pool then applies
+   * the volume group ("Movement Sounds") and the row's own 3D cutoff.
+   */
+  private tickFootsteps(e: Entry, u: RenderUnit, dt: number): void {
+    if (!this.sounds) return;
+    const seq = e.curSeq;
+    const walking =
+      seq >= 0 &&
+      (seq === e.anims.walk || seq === e.anims.walkFast || seq === e.anims.walkGold || seq === e.anims.walkLumber);
+    if (!walking || e.hidden) {
+      e.footstepClock = -1; // re-arm at phase 0 the next time this unit walks
+      return;
+    }
+    // Arm / re-arm when the walk clip changed (walk ↔ walk fast ↔ a laden walk).
+    const model = this.defOf(e.simId)?.model ?? "";
+    if (e.footstepClock < 0 || e.footstepSeq !== seq) {
+      e.footstepSeq = seq;
+      e.footstepClock = 0;
+      e.footstepPeriod = 0;
+      e.footstepSteps = [];
+      const iv = e.unit.instance.model.sequences[seq]?.interval;
+      if (!iv || iv.length < 2 || !model) return;
+      const [start, end] = [iv[0], iv[1]];
+      const period = (end - start) / 1000;
+      if (period <= 0) return;
+      e.footstepPeriod = period;
+      for (const ev of this.sounds.footstepEvents(model)) {
+        for (const t of ev.times) {
+          if (t >= start && t <= end) e.footstepSteps.push({ phase: (t - start) / 1000, code: ev.code });
+        }
+      }
+      if (!e.footstepSteps.length) {
+        e.footstepPeriod = 0; // nothing authored in THIS clip — stay silent, skip the clock
+        return;
+      }
+      e.footstepSteps.sort((a, b) => a.phase - b.phase);
+    }
+    if (e.footstepPeriod <= 0) return;
+    const prev = e.footstepClock;
+    let cur = prev + dt * (e.curRate || 1);
+    const wrapped = cur >= e.footstepPeriod;
+    if (wrapped) cur %= e.footstepPeriod;
+    for (const step of e.footstepSteps) {
+      const crossed = wrapped ? step.phase > prev || step.phase <= cur : step.phase > prev && step.phase <= cur;
+      if (!crossed) continue;
+      if (this.footstepBudget <= 0) break;
+      this.footstepBudget--;
+      this.sounds.playFootstep(model, step.code, { x: u.x, y: u.y, z: this.heightAt(u.x, u.y) });
+    }
+    e.footstepClock = cur;
   }
 
   /** The sim removed this unit: play its death animation, then decay the corpse
@@ -6192,6 +6277,10 @@ export class RtsController {
     // and the gunshot are withheld for (playImpacts). Your OWN dying units are never
     // silenced by this: a viewpoint always has live sight of what it owns.
     if (def?.soundSet && !this.local.fogBlocksAt({ x: loc[0], y: loc[1] })) this.sounds?.play(def.soundSet, "Death", { x: loc[0], y: loc[1], z: loc[2] });
+    // A BUILDING's crash is not in its sound set (which carries only `What` rows) — the model's
+    // own Death clip parks it as an SND event (`SNDxDHLB` → "DeathHumanLargeBuilding" →
+    // BuildingDeathLargeHuman.flac), which is how the size/race pairing is expressed at all.
+    if (def?.isBuilding && !this.local.fogBlocksAt({ x: loc[0], y: loc[1] })) this.sounds?.playModelDeath(def.model, { x: loc[0], y: loc[1], z: loc[2] });
     this.byId.delete(simId);
     this.animTags.delete(simId);
     this.stancePoses.delete(simId);
@@ -9947,7 +10036,7 @@ export class RtsController {
   private fxSplats: Array<{ splatId: string; x: number; y: number }> = [];
   private fxLightnings: SimLightning[] = [];
   private fxLightningStops: string[] = [];
-  private fxCastStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> = [];
+  private fxCastStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string; warnLeft: number }> = [];
   private fxCastFires: Array<{ casterId: number; code: string; abilityId: string }> = [];
   private fxCombatTexts: CombatText[] = [];
   private wireFx: FxSnapshot = { effects: [], splats: [], lightnings: [], lightningStops: [], castStarts: [], castFires: [], texts: [] };

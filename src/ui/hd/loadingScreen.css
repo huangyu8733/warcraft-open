@@ -115,7 +115,7 @@
  * bar's right edge — half in, half onto the parchment — so anchor it there. */
 .hd-official .PlayerLoadingWidget-Race {
   position: absolute;
-  top: 50%;
+  top: 40%;
   right: -10%;
   bottom: auto;
   transform: translateY(-50%);

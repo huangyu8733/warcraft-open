@@ -910,9 +910,9 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // creep-threat/bounty level), which wrongly showed newly-trained heroes as
       // Level 5. With no XP/leveling system yet, pin trained heroes to level 1.
       level: isHero ? 1 : b ? num(b, "level", 0) : 0,
-      abilities: a ? (str(a, "abilList") || "").split(",").filter(Boolean) : [],
-      heroAbilities: a ? (str(a, "heroAbilList") || "").split(",").filter(Boolean) : [],
-      autoAbility: a ? str(a, "auto") : "",
+      abilities: a ? abilityIds(str(a, "abilList") || "") : [],
+      heroAbilities: a ? abilityIds(str(a, "heroAbilList") || "") : [],
+      autoAbility: a ? abilityIds(str(a, "auto") || "")[0] ?? "" : "",
       classification: b ? (str(b, "type") || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean) : [],
     });
     syncPrimaryWeapon(defs.get(id)!); // fill the attack* view from the slots just built
@@ -1067,6 +1067,21 @@ function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number
 /** A comma-separated token list, minus the SLK's "-"/"_" empties, lowercased. */
 function list(v: string): string[] {
   return v.split(",").map((s) => s.trim().toLowerCase()).filter((s) => s && s !== "_" && s !== "-");
+}
+
+/**
+ * The same list for ABILITY IDS, which are case-sensitive (`AHhb` is not `ahhb`), so nothing is
+ * lowercased.
+ *
+ * Trimming is not cosmetic here. A few stock UnitAbilities rows pad their list — `Hssa`'s
+ * `heroAbilList` is `"ANrf "` and `Hddt`'s `"ANsb "`, and `nhyd`/`ngow`/`nwzw`/`ngos` carry
+ * `" Aspt"`, `"ACro "`, `"ACbl "`, `"ACac "` — and an id with the space kept matches no
+ * AbilityData row, so that ability was silently absent from the unit (a hero never offered
+ * Rain of Fire / Storm Bolt on its learn-skill page, a creep never cast Bloodlust or Roar).
+ * `_` and `-` are the table's spellings of "none" and mean the same as an empty cell.
+ */
+function abilityIds(v: string): string[] {
+  return v.split(",").map((s) => s.trim()).filter((s) => s && s !== "_" && s !== "-");
 }
 
 // A unit's model file (UnitUI `file`, no extension) → the .mdx to load. Some models ship an SD

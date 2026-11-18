@@ -4079,6 +4079,14 @@ export class SimWorld {
   /** The same news for the REPLAY's state track (src/game/replayState.ts) — a slot of its own,
    *  because the match log opens and closes the one above on its own clock. */
   deathTap: ((victim: SimUnit, killer: SimUnit | undefined) => void) | null = null;
+  /** Every inventory action the sim performs — walked-over, ordered, dropped, used, bought —
+   *  reported for the renderer's own sound cues (ItemGet/ItemDrop/ItemReward). A tap of its
+   *  own, NOT the trigger event list above, so it fires in melee too, where nothing records
+   *  item events. Phases are the same as ItemEvent's. */
+  itemObserver: ((u: SimUnit, itemTypeId: string, phase: ItemEvent["phase"]) => void) | null = null;
+  /** Loot scattered by a dying unit's own drop table, for the drop chime (ItemDropNormal vs
+   *  ItemDropLegendary). Called once per item, at the corpse. */
+  lootObserver: ((itemTypeId: string, x: number, y: number) => void) | null = null;
   captureDamage = false;
   /**
    * The map's damage events, SYNCHRONOUSLY — set by the host only for a script that can change a
@@ -4319,7 +4327,7 @@ export class SimWorld {
   // one-shot gesture (Storm Bolt throw) that plays once. `warnArt` is the "beware"
   // model dropped at tx,ty this same instant (PRECAST_WARNING) — the renderer sounds
   // that model here, at the wind-up, since that is when WC3's model plays its clip.
-  private castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> = [];
+  private castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string; warnLeft: number }> = [];
   // Casts whose effect just FIRED this frame (wind-up elapsed → the clap/bolt/etc.
   // happens now). The renderer plays the ability's cast SOUND off THIS, not off the
   // cast START — WC3 syncs the sound to the effect at the cast point (issue #23), and
@@ -11069,6 +11077,7 @@ export class SimWorld {
    *  hero walking over the item raise the same event, as in WC3. The item is snapshotted:
    *  a consumed powerup no longer exists by the time the event is drained. */
   private noteItem(u: SimUnit, item: { id: number; itemId: string; charges: number }, phase: ItemEvent["phase"], seller?: SimUnit): void {
+    this.itemObserver?.(u, item.itemId, phase);
     if (!this.captureItems) return;
     this.itemEvents.push({
       unit: eventInfo(u),
@@ -16790,7 +16799,7 @@ export class SimWorld {
       // A FORM TOGGLE raises none: its animation is the morph transition the renderer plays
       // when the body swaps, not a gesture in front of it (see isFormToggle).
       if (!formToggle) {
-        this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 || animLen > 0, tx, ty, targetId: pc.targetId, warnArt });
+        this.castStarts.push({ casterId: u.id, code: pc.code, abilityId: pc.abilityId, hold, loop: channelLen > 0 || animLen > 0, tx, ty, targetId: pc.targetId, warnArt, warnLeft: pc.castLeft });
       }
       // The caster has begun: SPELL_CHANNEL then SPELL_CAST (7.17). WC3 raises both at
       // the start of the cast — CHANNEL as the caster commits to it, CAST as the spell
@@ -21130,7 +21139,7 @@ export class SimWorld {
     return out;
   }
   /** Casts that began this frame (renderer plays the cast animation). */
-  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string }> {
+  drainCastStarts(): Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string; warnLeft: number }> {
     if (!this.castStarts.length) return this.castStarts;
     const out = this.castStarts;
     this.castStarts = [];
@@ -26913,6 +26922,7 @@ export class SimWorld {
       const ang = (n * 2.399963) % (Math.PI * 2); // golden-angle spread
       const r = n === 0 ? 0 : 48;
       this.spawnGroundItem(def.id, u.x + Math.cos(ang) * r, u.y + Math.sin(ang) * r, def.charges);
+      this.lootObserver?.(def.id, u.x, u.y);
       n++;
     }
   }

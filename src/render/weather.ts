@@ -189,6 +189,13 @@ export class WeatherOverlay {
     this.effects.delete(id);
   }
 
+  /** Is rain falling? The game plays `AmbientSoundRain` while a rain effect is enabled; snow,
+   *  fog and light rays have no bed of their own, so they are silent. */
+  get raining(): boolean {
+    for (const [, e] of this.effects) if (e.enabled && /^RA/i.test(e.def.id)) return true;
+    return false;
+  }
+
   has(id: number): boolean {
     return this.effects.has(id);
   }

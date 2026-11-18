@@ -485,7 +485,7 @@ export interface FxSnapshot {
   lightningStops: string[];
   /** Cast wind-ups (`drainCastStarts`): the caster's gesture, and a delayed spell's "beware"
    *  art/sound at the target point. `x`/`y` is the caster's position (the AoI test). */
-  castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string; x: number; y: number }>;
+  castStarts: Array<{ casterId: number; code: string; abilityId: string; hold: number; loop: boolean; tx: number; ty: number; targetId: number; warnArt: string; warnLeft: number; x: number; y: number }>;
   /** Casts whose effect fired (`drainCastFires`): the ability's cast sound. */
   castFires: Array<{ casterId: number; code: string; abilityId: string; x: number; y: number }>;
   /** Engine floating combat text (`drainCombatTexts`) — a Critical Strike's red number, a
