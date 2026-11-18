@@ -63,3 +63,11 @@ web/.env.local
 
 # 根目录临时调试脚本
 .tmp-*
+
+# 本地工具目录（代理记忆、临时分享包），不入库
+.workbuddy/
+.trae-html-share-packages/
+
+# Android 本机构建缓存与 SDK 路径
+android/.gradle/
+android/local.properties
