@@ -1,8 +1,49 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0a0c" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <title>魔兽争霸开源版（Warcraft Open）</title>
+    <meta
+      name="description"
+      content="用 TypeScript 重写的《魔兽争霸 III：冰封王座》引擎，浏览器与桌面端打开即玩。引擎在运行时读取本机的游戏安装，不包含任何暴雪资源；支持经典版（SD）与重制版（HD）、战役、自定义地图与联机对战。在线试玩：https://warcraft.hhkj.me/"
+    />
+    <meta
+      name="keywords"
+      content="魔兽争霸,魔兽争霸3,冰封王座,混乱之治,War3,Warcraft III,开源,TypeScript,WebGL,经典版,重制版,战役,联机"
+    />
+    <meta name="author" content="OpenWar3" />
+    <link rel="canonical" href="https://warcraft.hhkj.me/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="魔兽争霸开源版" />
+    <meta property="og:title" content="魔兽争霸开源版（Warcraft Open）" />
+    <meta
+      property="og:description"
+      content="用 TypeScript 重写的《魔兽争霸 III：冰封王座》引擎：经典版 / 重制版、战役、自定义地图与联机对战，运行时读取本机游戏安装，不含任何暴雪资源。"
+    />
+    <meta property="og:url" content="https://warcraft.hhkj.me/" />
+    <meta property="og:image" content="https://warcraft.hhkj.me/icon-512.png" />
+    <meta property="og:image:alt" content="魔兽争霸开源版" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="魔兽争霸开源版（Warcraft Open）" />
+    <meta
+      name="twitter:description"
+      content="用 TypeScript 重写的《魔兽争霸 III：冰封王座》引擎，浏览器与桌面端打开即玩，不含任何暴雪资源。"
+    />
+    <meta name="twitter:image" content="https://warcraft.hhkj.me/icon-512.png" />
+
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="魔兽争霸开源版" />
+    <meta name="application-name" content="魔兽争霸开源版" />
+
     <!-- Every one of these is the same wordmark, generated from `art/warcraft-open-logo.png` by
          tools/make-icon.mjs. The .ico carries 16/24/32/48 for the tab and the pinned shortcut;
          the PNGs are what a phone's home screen and a desktop web app install pick up. -->
@@ -10,7 +51,6 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <title>Warcraft Open</title>
   </head>
   <body>
     <canvas id="bg" hidden></canvas>
@@ -31,6 +71,12 @@
     <div id="loading-layer">
       <canvas id="loading" hidden></canvas>
     </div>
+    <noscript>
+      <p style="margin: 16px; color: #e8dcc0; font-family: sans-serif; line-height: 1.6">
+        魔兽争霸开源版需要启用 JavaScript 才能运行。请在浏览器设置中开启后刷新页面，
+        或前往 https://warcraft.hhkj.me/ 查看说明。
+      </p>
+    </noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
