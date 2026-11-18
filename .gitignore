@@ -71,3 +71,6 @@ web/.env.local
 # Android 本机构建缓存与 SDK 路径
 android/.gradle/
 android/local.properties
+
+# Trae 本地文档与会话产物
+.trae/
