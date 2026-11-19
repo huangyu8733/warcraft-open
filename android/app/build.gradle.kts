@@ -13,8 +13,8 @@ android {
         applicationId = "me.hhkj.warcraft"
         minSdk = 24
         targetSdk = 34
-        versionCode = 10000
-        versionName = "1.0.0"
+        versionCode = 20000
+        versionName = "2.0.0"
     }
 
     buildTypes {

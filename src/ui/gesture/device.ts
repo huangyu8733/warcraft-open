@@ -171,14 +171,14 @@ export function setGestureRuntimeEnabled(on: boolean | null): void {
 
 /**
  * 手势总开关。关闭时识别器一个监听都不注册，鼠标 / 浏览器行为与今天逐字节一致（P5）。
- * 手动开关最优先；其次是 `?gesture`（调试用）；否则要求「用户开着」且「设备真的有触摸」——
- * 桌面 / 纯鼠标机器不会因为选项默认值而挂上任何监听。
+ * 手动开关最优先；其次是 `?gesture`（调试用）；否则听存档里的选择——它的默认值本身就是
+ * 按设备定的（手机 / 平板 = 手势，桌面 = 鼠标），所以任何平台都能切过去，也能切回来。
  */
 export function gestureEnabled(): boolean {
   if (runtimeSwitch !== null) return runtimeSwitch;
   const gate = queryGate();
   if (gate !== null) return gate;
-  return gestureProfile().enabled && touchDevice().enabled;
+  return gestureProfile().enabled;
 }
 
 /** 调试可视化：只有显式 `?gesture=1` 才画出识别回执。 */
@@ -187,9 +187,11 @@ export function gestureDebugEnabled(): boolean {
 }
 
 /**
- * 触屏首启的画质建议（方案 §4.3 / §13）：手机 576p、平板 720p，都开 Low Performance Mode；
- * HD 手机再降一档（450p / 30fps）——Reforged 的 `.dds` 与 `*Skin.txt` 在 WebView 上没有离线包，
+ * 触屏首启的画质建议（方案 §4.3 / §13）：手机 576p、平板 720p；HD 手机再降一档
+ * （450p / 30fps）——Reforged 的 `.dds` 与 `*Skin.txt` 在 WebView 上没有离线包，
  * 这就是 P4 的「HD 手机性能 gate」：取最低档而不是硬编码改玩家存档。
+ *
+ * 不默认打开 Low Performance Mode：那是玩家自己的画质取舍，首启只降分辨率与帧率上限。
  *
  * 只给「第一组值」：玩家在 Options 里改过一次后，这里永远不再写入。
  */
@@ -199,7 +201,7 @@ export function touchVideoDefaults(device: TouchDevice = touchDevice()): Partial
   const hdPhone = phone && device.flavor === "hd";
   return {
     resolution: hdPhone ? "800x450" : phone ? "1024x576" : "1280x720",
-    lowPerf: true,
+    lowPerf: false,
     maxForegroundFps: hdPhone ? 30 : phone ? 40 : 60,
   };
 }

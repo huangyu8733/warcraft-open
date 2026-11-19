@@ -18,13 +18,19 @@ export default class AnimatedObject {
     const end = stream.index + size;
 
     while (stream.index < end) {
+      const at = stream.index;
       const name = stream.readBinary(4);
       const entry = taggedAnimations[name];
 
-      // OpenWar3: a tag this build does not know (a newer client's chunk) used to die with
-      // "Cannot read properties of undefined", with nothing saying which tag or where.
+      // OpenWar3: a tag this build does not know ends the block rather than killing the model.
+      // Classic (v800) lights put their own animation tracks after the static block while the
+      // node's tracks sit before it, so a caller that hands us a generous bound runs into that
+      // static block; its first word is the light type (0/1/2), never an ASCII tag. Rewinding
+      // lets the caller read what actually follows. Newer clients' chunks get the same grace:
+      // an object with one unreadable track is worth keeping, a model that won't load is not.
       if (!entry) {
-        throw new Error(`Unknown animation tag "${name}" at offset ${stream.index - 4}`);
+        stream.index = at;
+        return;
       }
 
       const animation = new entry[1]();

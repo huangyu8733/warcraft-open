@@ -5,7 +5,7 @@ import { dataSetFolder, isRoc, mapDataSet } from "../data/edition";
 import { flavor, isHd } from "../data/flavor";
 import { gameVersion } from "../data/gameVersion";
 import { dbg } from "../dev/dbg";
-import { decodeGameText } from "../data/text";
+import { decodeGameText, decodeMapText } from "../data/text";
 import ModelViewer from "mdx-m3-viewer/dist/cjs/viewer/viewer";
 import { unpackPlanes } from "mdx-m3-viewer/dist/cjs/common/gl-matrix-addon";
 import { mat4 } from "gl-matrix";
@@ -81,6 +81,7 @@ import { localizeGlobalStrings } from "../i18n/fdfStrings";
 import { t as tr, displayHeroName } from "../i18n";
 import { mapFlavor, readMapFormat, UNKNOWN_FORMAT, type MapFormatProfile } from "../compat/mapFormat";
 import { readW3i } from "../compat/w3i";
+import { dzKeyCode } from "../compat/dzui";
 import { preloadLuaHost } from "../compat/lua/index";
 import { MAP_MISC_FILE, NO_MAP_MISC, parseMapMisc, type MapMisc } from "../data/mapMisc";
 import { loadUberSplatRegistry, type UberSplatDef, type UberSplatRegistry } from "../data/ubersplats";
@@ -150,6 +151,7 @@ function autosaveName(mapName: string): string {
 function suggestedName(mapName: string): string {
   return `${wc3StripMarkup(mapName).trim()} ${replayStamp()}`;
 }
+
 export function lastRecordedReplay(): typeof lastReplay {
   return lastReplay;
 }
@@ -175,6 +177,7 @@ import { gameInfoMessagesEnabled, peonDoubleTapFocus } from "./gameplayOptions";
 import { defaultCameraDistance, maxCameraDistance, minCameraDistance } from "./cameraOptions";
 import { centreGamepadCursor, gamepadPan, setGamepadHost } from "../ui/gamepad";
 import { gestureEnabled, setGestureHost } from "../ui/gesture";
+import type { HelpCatalog, HelpEntry } from "../ui/gesture/host";
 import { virtualCursor } from "../ui/virtualCursor";
 import { TerrainCull } from "./terrainCull";
 import type { PickVolume } from "./modelCollision";
@@ -1383,16 +1386,22 @@ export function mapLoadRefusal(bytes: Uint8Array, vfs: DataSource, registry: Uni
 
   const own = mapFlavor(format);
   const client = isHd() ? "hd" : "sd";
-  if (own !== client) {
+  // SD (classic) maps play on BOTH clients. Reforged itself does this: the base art module
+  // still carries the classic models, and a classic map is exactly what it was written
+  // against. Keep the classic line's lenient path for them as well — a missing custom row
+  // or model has always been skipped there, and the HD-only checks below would refuse them.
+  if (own === "sd") return null;
+  // An HD map on the 1.30.4 client is still refused: that client has neither the Reforged
+  // data nor the art the map was written against.
+  if (client === "sd") {
     return {
       message: tr("map.refuse.flavor", {
-        map: tr(own === "hd" ? "flavor.hd" : "flavor.sd"),
-        client: tr(client === "hd" ? "flavor.hd" : "flavor.sd"),
+        map: tr("flavor.hd"),
+        client: tr("flavor.sd"),
       }),
       detail: `w3i v${format.w3iVersion}, editor build ${format.editorBuild} is ${own}; this client is ${client}`,
     };
   }
-  if (client === "sd") return null;
 
   // --- 2. base ids ---------------------------------------------------------------------
   // The map's own object data first: every row copies an existing type, and on Reforged that
@@ -1565,6 +1574,11 @@ export class MapViewerScene {
    *  angle of attack (see pitchForZoomStep), so the player's zoom is a distance AND a pitch, and
    *  both have to survive a cinematic for ResetToGameCamera to hand back the view you had. */
   private playerPitch = MapViewerScene.GAME_PITCH;
+  /** The gesture console's 视角 toggle, as a PITCH OFFSET on `playerPitch`: 0 is WC3's own
+   *  56° overhead view, the other state lifts it to `TOGGLE_AOA_DEG`. Kept as an offset rather
+   *  than a second pitch so the wheel's dolly, a map's script camera and ResetToGameCamera all
+   *  keep their own maths — the toggle only changes how steeply the same framing is looked at. */
+  private viewTilt = 0;
   // The wheel's in-flight ease (see updatePlayerCamera). A notch does not jump the camera: it
   // starts a short tween from wherever the view currently is to the new step's distance+pitch,
   // so notching four times in a second reads as one smooth dolly rather than four snaps.
@@ -2628,6 +2642,7 @@ export class MapViewerScene {
     // whole-map overview, so the draw cost stays bounded by the same ladder the wheel uses.
     this.distance = this.playerDistance = MapViewerScene.MELEE_START;
     this.pitch = this.playerPitch = MapViewerScene.GAME_PITCH; // …and its overhead angle
+    this.viewTilt = 0; // every map opens in the stock view, whatever the last one chose
     this.zoomT = 1; // no wheel ease in flight across a map load
 
     // Stand up the simulation: terrain height + pathing from the map's own files.
@@ -3487,6 +3502,7 @@ export class MapViewerScene {
     if (home || this.observer) {
       this.distance = this.playerDistance = MapViewerScene.MELEE_START;
       this.pitch = this.playerPitch = MapViewerScene.GAME_PITCH;
+      this.viewTilt = 0;
       this.zoomT = 1;
     }
     // Resolve "random" once per slot: roster and console skin must agree.
@@ -4604,11 +4620,25 @@ export class MapViewerScene {
           handleId: -1, // not the script's; nothing looks it up
           message: msg.message,
           buttons: msg.buttons.map((b, i) => ({
-            handleId: -(i + 2), dialogId: -1, text: b.text, hotkey: b.hotkey ?? 0, quit: b.quit, doScoreScreen: b.score === true,
+            handleId: b.id ?? -(i + 2),
+            dialogId: msg.dialogId ?? -1,
+            text: b.text, hotkey: b.hotkey ?? 0, quit: b.quit, doScoreScreen: b.score === true,
           })),
           visibleFor: new Set([this.localPlayer]),
           revision: 0,
         };
+      };
+      // 权威端：某个客户端回答了本机脚本弹出的对话框。先核实这个框确实显示给该玩家
+      // （客户端只能回答自己的），再以该玩家的身份跑地图自己的按钮触发器——这才会
+      // 在权威世界里创建"他的"人物，并通过快照发给所有人。
+      this.rts.onDialogClick = (player, dialogId, buttonId) => {
+        const interp = this.mapScript?.interp;
+        const d = interp?.rt.dialogs.find((x) => x.handleId === dialogId);
+        if (!interp || !d || !d.visibleFor.has(player)) return;
+        if (!d.buttons.some((b) => b.handleId === buttonId)) return;
+        d.visibleFor.delete(player); // WC3 里任何按钮点击都会关掉对话框
+        d.revision++;
+        interp.fireDialogClick(buttonId, dialogId, player);
       };
     }
   }
@@ -4741,11 +4771,62 @@ export class MapViewerScene {
    *  Capped, so a model that never resolves can't hang the match. */
   private waitForMapUnits(onProgress?: (p: number) => void, timeoutMs = 30000): Promise<void> {
     return this.waitForLoader(
-      () => !!this.viewer.map?.unitsReady && this.viewer.promiseMap.size === 0,
+      () => !!this.viewer.map?.unitsReady && this.pendingLoads().length === 0,
       timeoutMs,
       "map units",
       onProgress,
     );
+  }
+
+  /**
+   * Loads the renderer's promise cache will never clear on its own.
+   *
+   * `ResourceLoader.load` deletes a URL from `promiseMap` only on FULFILMENT — the
+   * `then((resource) => promiseMap.delete(url))` at the end has no rejection handler
+   * (mdx-m3-viewer dist/viewer/viewer.js). One model or texture that fails to decode
+   * (a corrupt MDX in the install, an image `blobToImage` rejects) therefore leaves its
+   * rejected promise in the map for the life of the PAGE: `promiseMap.size === 0` can never
+   * be true again, and every later match sat at 60% until `waitForLoader`'s 30 s cap — the
+   * intermittent "载入中 卡住" report. (The rejected promise is also handed back to every
+   * later `load()` of the same URL, so the same file fails in every match.)
+   *
+   * A key that makes no progress for STALL_MS is moved here: the loading bar stops waiting
+   * for it, while the resource itself is still requested and used whenever it does arrive.
+   */
+  private deadLoadKeys = new Set<string>();
+
+  /** Loads whose promise was actually REJECTED (the renderer leaves those in `promiseMap`). */
+  private failedLoadKeys = new Set<string>();
+  /** Keys a settlement probe has already been attached to. */
+  private probedLoadKeys = new Set<string>();
+
+  /**
+   * Attach a settlement probe to every load in flight.
+   *
+   * The rejection branch is the point: a rejected resource is KNOWN dead immediately, so the
+   * bar can stop waiting for it without guessing — no slow-but-healthy load is ever skipped
+   * early (that is what keeps the display correct: a model that is merely slow is still
+   * awaited, and every resource keeps loading and drawing as soon as it arrives).
+   */
+  private probeLoads(): void {
+    for (const [key, promise] of this.viewer.promiseMap) {
+      if (this.probedLoadKeys.has(key)) continue;
+      this.probedLoadKeys.add(key);
+      void Promise.resolve(promise).then(
+        () => { /* fulfilled: the renderer deletes its own entry */ },
+        () => { this.failedLoadKeys.add(key); },
+      );
+    }
+  }
+
+  /** `promiseMap` minus the loads already given up on (see `failedLoadKeys` / `deadLoadKeys`). */
+  private pendingLoads(): string[] {
+    const out: string[] = [];
+    for (const key of this.viewer.promiseMap.keys()) {
+      if (this.deadLoadKeys.has(key) || this.failedLoadKeys.has(key)) continue;
+      out.push(key);
+    }
+    return out;
   }
 
   /** Poll until the loader goes quiet — `ready()` true on two CONSECUTIVE frames, because a
@@ -4764,6 +4845,10 @@ export class MapViewerScene {
       let settledFrames = 0;
       let done = false;
       let raf = 0;
+      /** The pending set did not change for this long → those loads are dead (see `deadLoadKeys`). */
+      const STALL_MS = 8000;
+      let lastPending = "";
+      let lastProgressAt = performance.now();
       const finish = (): void => {
         if (done) return;
         done = true;
@@ -4772,10 +4857,29 @@ export class MapViewerScene {
       };
       const poll = (): void => {
         if (done) return;
+        this.probeLoads(); // a load that rejected since the last poll is known dead right here
         if (drain && onProgress) onProgress(drain.sample(this.viewer.promiseMap));
         settledFrames = ready() ? settledFrames + 1 : 0;
         if (settledFrames >= 2 || performance.now() - t0 > timeoutMs) {
           if (settledFrames < 2) console.warn(`[Warcraft Open] ${what} still streaming after ${Math.round(timeoutMs / 1000)}s — starting anyway.`);
+          finish();
+          return;
+        }
+        // A load whose promise never settles (see `deadLoadKeys`: the renderer only clears
+        // `promiseMap` on fulfilment) would otherwise hold this wait to the cap — 30 s of a bar
+        // that does not move, every match. If the WHOLE pending set has been unchanged for
+        // STALL_MS nothing is progressing, so stop waiting on it and say what it was.
+        const pending = this.pendingLoads();
+        const keys = pending.join("\n");
+        if (keys !== lastPending) {
+          lastPending = keys;
+          lastProgressAt = performance.now();
+        } else if (pending.length && performance.now() - lastProgressAt > STALL_MS) {
+          for (const key of pending) this.deadLoadKeys.add(key);
+          console.warn(
+            `[Warcraft Open] ${what}: ${pending.length} file(s) made no progress for ${STALL_MS / 1000}s — starting without them:`,
+            pending.slice(0, 5),
+          );
           finish();
           return;
         }
@@ -4830,7 +4934,7 @@ export class MapViewerScene {
     const TAIL_SHARE = 0.18;
     const SOUND_SHARE = 0.15;
     await this.waitForLoader(
-      () => this.viewer.promiseMap.size === 0, 20000, "the map's art",
+      () => this.pendingLoads().length === 0, 20000, "the map's art",
       (p) => onProgress(DRAIN_SHARE * p),
     );
     const tDrain = performance.now();
@@ -4868,7 +4972,7 @@ export class MapViewerScene {
     const tModels = performance.now();
     // A model's own load dispatches its textures; drain those before the bar says done.
     await this.waitForLoader(
-      () => this.viewer.promiseMap.size === 0, 20000, "the map's models",
+      () => this.pendingLoads().length === 0, 20000, "the map's models",
       (p) => onProgress(DRAIN_SHARE + MODEL_SHARE + TAIL_SHARE * p),
     );
     const tTail = performance.now();
@@ -4883,7 +4987,7 @@ export class MapViewerScene {
     const tSounds = performance.now();
     // Last gate: a model read that started while the sounds were fetched (a doodad variation,
     // a texture a skinned unit asked for) must be in too, or it pops in once the match starts.
-    await this.waitForLoader(() => this.viewer.promiseMap.size === 0, 20000, "the map's remaining art", () => {});
+    await this.waitForLoader(() => this.pendingLoads().length === 0, 20000, "the map's remaining art", () => {});
     const tSettle = performance.now();
     // P1-4: the one program set this map will still compile on first use is the PORTRAIT
     // viewer's — a second WebGL context with its own MDX handler, built lazily today inside
@@ -4929,7 +5033,13 @@ export class MapViewerScene {
   /** Load one model through the solver and give its SND events to the sound cache. Returns
    *  false when the install cannot resolve it (or the viewer refuses it). */
   private async loadModel(path: string): Promise<boolean> {
-    if (!this.assetInInstall(path)) return false;
+    // `_` is the data's "this unit has no model" (Castle Fight marks 42 dummy rows that way);
+    // asking the loader for `_.mdx` only produces a console error.
+    if (/(^|[\\/])_\.(md[xl]|mdl)$/i.test(path)) return false;
+    if (!this.assetInInstall(path)) {
+      this.warnOnce(path, `[Warcraft Open] no such model in this install: ${path}`);
+      return false;
+    }
     try {
       const loaded = await this.viewer.load(path, this.solver);
       // The scene paid to parse this model; the sound chain reads the SND events inside the
@@ -4938,8 +5048,33 @@ export class MapViewerScene {
         this.sounds?.registerModel(path, { sequences: loaded.sequences, eventObjects: loaded.eventObjects });
       }
       return true;
-    } catch {
+    } catch (e) {
+      this.warnOnce(path, `[Warcraft Open] could not read model ${path}: ${(e as Error).message}`);
       return false;
+    }
+  }
+
+  /** One line per broken model — the deferred warmer can retry the same path a hundred times,
+   *  and a map's worth of duplicates buries the warning that matters. */
+  private failedModels = new Set<string>();
+
+  private warnOnce(path: string, message: string): void {
+    if (this.failedModels.has(path)) return;
+    this.failedModels.add(path);
+    console.warn(message);
+  }
+
+  /** A unit's body, with the failure spoken. `viewer.load` can throw (a model the install has
+   *  but we cannot parse); letting that slip out of `spawnUnit` would silently drop the body
+   *  AND the map's fallbacks, so it is caught and reported here. */
+  private async loadBody(path: string): Promise<Awaited<ReturnType<W3xViewer["load"]>> | null> {
+    // `_` is the data's "this unit has no model"; asking the loader for `_.mdx` only errors.
+    if (/(^|[\\/])_\.(md[xl]|mdl)$/i.test(path)) return null;
+    try {
+      return await this.viewer.load(path, this.solver);
+    } catch (e) {
+      this.warnOnce(path, `[Warcraft Open] could not read model ${path}: ${(e as Error).message}`);
+      return null;
     }
   }
 
@@ -5910,6 +6045,9 @@ export class MapViewerScene {
       chooseRandomCreep: (level) => this.mapScript?.interp.rt.random
         ? this.registry.chooseRandomCreep(level, this.mapScript.interp.rt.random)?.id ?? ""
         : "",
+      // DzSetUnitModel — a model PATH from the map archive instead of the type's own. The scene
+      // owns models, so the DzUI native (compat/dzui.ts) hands it across this bridge.
+      setUnitModel: (id, path) => void this.applyUnitModel(id, path),
     };
   }
 
@@ -5954,7 +6092,7 @@ export class MapViewerScene {
     // so every consumer below — TRIGSTR in units, abilities, items, upgrades and the tech tree —
     // reads the localized table without each of them knowing this feature exists.
     if (wts) {
-      const text = new TextDecoder("utf-8").decode(wts);
+      const text = decodeMapText(wts);
       const zh = localizeMapWtsText(text);
       if (zh !== text) wts = new TextEncoder().encode(zh);
     }
@@ -6135,9 +6273,10 @@ export class MapViewerScene {
     const bytes = this.mapArchive?.rawBytes(MAP_SKIN_FILE);
     if (!bytes) return;
     try {
-      // The World Editor writes this file as UTF-8, like war3map.wts beside it.
+      // The World Editor writes this file as UTF-8, like war3map.wts beside it — but an older
+      // Chinese editor's map keeps it in GBK, so read it the way the rest of the map is read.
       const wts = this.mapArchive?.rawBytes("war3map.wts") ?? undefined;
-      this.mapSkin = parseMapSkin(new TextDecoder("utf-8").decode(bytes), makeTrigStr(wts));
+      this.mapSkin = parseMapSkin(decodeMapText(bytes), makeTrigStr(wts));
     } catch (err) {
       console.warn(`[jass] ${MAP_SKIN_FILE} failed (non-fatal):`, err);
       return;
@@ -6732,7 +6871,10 @@ export class MapViewerScene {
         const sent = this.rts?.relayDialog(p, {
           k: "dlg",
           message: d.message,
-          buttons: d.buttons.map((b) => ({ text: b.text, quit: b.quit, hotkey: b.hotkey, ...(b.doScoreScreen ? { score: true } : {}) })),
+          // 带上本机的句柄：客户端据此把点击送回权威端（DialogClickMessage），
+          // 否则地图脚本里的选择只会在这台机器上生效——联机时表现为"只有主机有人物"。
+          dialogId: d.handleId,
+          buttons: d.buttons.map((b) => ({ text: b.text, quit: b.quit, hotkey: b.hotkey, id: b.handleId, ...(b.doScoreScreen ? { score: true } : {}) })),
           ...(scores ? { scores } : {}),
           // Whether this screen is the end of the MATCH, decided by the AUTHORITY rather than
           // guessed by the recipient — a map raising a quest popup for a remote player must not
@@ -7198,6 +7340,29 @@ export class MapViewerScene {
     }
   }
 
+  /** DzSetUnitModel — wear a map-supplied model (the costume heroes of the DzAPI era).
+   *  Render-only, like a Reforged skin: the sim keeps the same unit, its stats and its body
+   *  swaps. A later morph deliberately replaces it again (remodelUnit re-reads the type). */
+  private async applyUnitModel(simId: number, path: string): Promise<void> {
+    const map = this.viewer.map;
+    if (!map || !this.rts) return;
+    const su = this.rts.simView.units.get(simId);
+    const def = su && this.registry.get(su.typeId);
+    if (!su || !def || su.hp <= 0) return;
+    const model = await this.viewer.load(path, this.solver);
+    if (!model) return;
+    if (model.sequences && model.eventObjects) {
+      this.sounds?.registerModel(path, { sequences: model.sequences, eventObjects: model.eventObjects });
+    }
+    // …and a unit that changed type or died while this streamed in stays what it is.
+    const now = this.rts.simView.units.get(simId);
+    if (!now || now.typeId !== su.typeId || now.hp <= 0) return;
+    const instance = model.addInstance();
+    instance.setScene(map.worldScene);
+    instance.setTeamColor(this.rts.unitColor(su.owner));
+    if (!this.rts.remodel(simId, instance, def, null)) instance.hide();
+  }
+
   /** The Reforged skin variant a unit is drawn as, or null for its own body. HD only: SD has no
    *  skins and must draw exactly what it drew before (P5). */
   private skinDefFor(su: { skinId: number }): UnitDef | null {
@@ -7358,7 +7523,8 @@ export class MapViewerScene {
         ? null
         : this.rts.addSimUnit(def, x, y, facing, owner, team, constructionTime);
     }
-    const model = await this.viewer.load(drawnDef.model, this.solver);
+    let worn = drawnDef;
+    let model = await this.loadBody(drawnDef.model);
     // A model that is not there is an INVISIBLE unit, not an absent one — the standard dummy
     // trick is a path to a file that does not exist (RtsController.seedModellessPlaced), and a
     // trained or summoned dummy must still be made. Same as the no-model branch above.
@@ -7370,12 +7536,12 @@ export class MapViewerScene {
     if (model.sequences && model.eventObjects) {
       // Hand the SND events to the sound chain: on an HD mount the model's bytes are not
       // fetchable a second time, and this is where a live unit's body is parsed.
-      this.sounds?.registerModel(drawnDef.model, { sequences: model.sequences, eventObjects: model.eventObjects });
+      this.sounds?.registerModel(worn.model, { sequences: model.sequences, eventObjects: model.eventObjects });
     }
     const instance = model.addInstance();
     instance.setScene(map.worldScene);
     instance.setTeamColor(this.rts.unitColor(owner)); // a slot's colour is not its index (and Ally Color Mode paints over both)
-    const simId = this.rts.addUnit(instance, def, x, y, facing, owner, team, constructionTime, reservedId); // default: face south
+    const simId = this.rts.addUnit(instance, worn, x, y, facing, owner, team, constructionTime, reservedId); // default: face south
     // -1: the sim unit this model was loading for is already gone (a trigger created and
     // then removed it while the model streamed). Drop the model rather than leave a ghost.
     if (simId < 0) {
@@ -8214,6 +8380,13 @@ export class MapViewerScene {
    *  visible, so it winks out with the fog rather than sitting in the black. */
   private updateItemFog(): void {
     if (!this.rts) return;
+    // 模型的生命以 sim 为准：物品已经不在 world 里，模型就不该还在。拾取本身会走
+    // `drainItemRemovals`，但那是一条事件——模型还在异步加载时到达的移除、联机快照里
+    // 少掉的物品都可能漏掉，结果就是「捡起来了，地上还立着一件」。这里按 sim 对账，
+    // 每帧只扫一遍现有模型（通常个位数），不会留鬼影。
+    for (const id of [...this.itemInstances.keys()]) {
+      if (!this.rts.simView.items.has(id)) this.removeItemModel(id);
+    }
     for (const [id, inst] of this.itemInstances) {
       const visible = this.rts.itemVisible(id);
       if (visible === this.itemShown.get(id)) continue; // only touch it when it changes
@@ -11202,6 +11375,9 @@ export class MapViewerScene {
   // which is also what keeps the moment: the last rung is where the view changes character.
   private static readonly TILT_FINAL_AOA_DEG = 30; // eye elevation above the focus, closest stop
   private static readonly TILT_STEPS = 1; // rungs the tilt is spread over, from the closest
+  /** The gesture console's 视角 toggle: near-top-down, the steepest view WC3's own camera range
+   *  allows without the horizon disappearing. The other state is the stock overhead angle. */
+  private static readonly TOGGLE_AOA_DEG = 78;
   /** Camera distance at a zoom stop. 0 = fully out (ZOOM_MAX) … ZOOM_STEPS = fully in. */
   private static zoomStopDistance(step: number): number {
     const t = clamp(step, 0, MapViewerScene.ZOOM_STEPS) / MapViewerScene.ZOOM_STEPS;
@@ -11228,7 +11404,7 @@ export class MapViewerScene {
     this.zoomFromDistance = this.distance;
     this.zoomFromPitch = this.pitch;
     this.playerDistance = MapViewerScene.zoomStopDistance(step);
-    this.playerPitch = MapViewerScene.pitchForZoomStep(step);
+    this.playerPitch = MapViewerScene.pitchForZoomStep(step) + this.viewTilt;
     this.zoomT = 0;
   }
   /**
@@ -11241,6 +11417,22 @@ export class MapViewerScene {
     if (!steps) return;
     const stop = clamp(Math.round(MapViewerScene.zoomStopOf(this.playerDistance)) + steps, 0, MapViewerScene.ZOOM_STEPS);
     this.setZoomStop(stop);
+  }
+  /**
+   * The gesture console's 视角 toggle (ui/gesture/hud.ts). Two states: the stock 56° overhead
+   * view and a near-top-down 78°. Only the pitch moves — distance, yaw, focus and the map's own
+   * bounds are untouched — and it eases on the wheel's own tween so it reads as a tilt of the
+   * view, not a cut. A map's script camera still owns the camera while it runs; when it hands
+   * back (ResetToGameCamera), the chosen tilt is what it returns to.
+   */
+  private toggleViewTilt(): void {
+    this.viewTilt = this.viewTilt === 0
+      ? (MapViewerScene.TOGGLE_AOA_DEG * Math.PI) / 180 - MapViewerScene.GAME_PITCH
+      : 0;
+    this.zoomFromDistance = this.distance;
+    this.zoomFromPitch = this.pitch;
+    this.playerPitch = MapViewerScene.pitchForZoomStep(MapViewerScene.zoomStopOf(this.playerDistance)) + this.viewTilt;
+    this.zoomT = 0;
   }
   private static readonly EDGE_MARGIN = 6; // px from a screen edge that triggers scrolling
   private static readonly SCROLL_ARROW_PX = cursorPx(32); // the edge-pan chevron's box, in step with .scroll-arrow
@@ -11808,7 +12000,29 @@ export class MapViewerScene {
       skipCinematic: () => this.skipCinematicNow(),
       press: (id) => this.runCommand(id),
       card: () => this.commandCard(),
-      armed: () => this.isTargeting(),
+      resourceIcon: (kind) => this.resourceIcon(kind),
+      // 建造页的建筑：页面还没进去（cardPage === "root"）也要给。手势 HUD 把它们直接排在
+      // 左侧半弧上，省掉「先点建造」那一下；瞄准 / 放置中不给（那时卡面只剩 Cancel）。
+      buildCard: () => {
+        const sel = this.rts?.selectedInfo();
+        if (!sel || !this.canBuild(sel) || sel.owner !== this.localPlayer) return [];
+        if (this.isTargeting() || sel.underConstruction) return [];
+        return this.buildPageCard(sel);
+      },
+      // 英雄学技能页的技能：同样在页面还没进去时给出，手势 HUD 把它们排进左半弧；已经学过
+      // 的技能不进半弧（它在命令环里，升级用图标角上的小「+」），这样英雄只有一个面板。
+      learnCard: () => {
+        const sel = this.rts?.selectedInfo();
+        if (!sel?.isHero || sel.owner !== this.localPlayer) return [];
+        if (this.isTargeting() || sel.underConstruction) return [];
+        const su = this.rts?.simView.units.get(sel.id);
+        if (!su || !this.rts!.simView.hasHeroSkills(su)) return [];
+        const learned = new Set(su.abilities.filter((a) => a.level >= 1).map((a) => a.id));
+        return this.learnPageCard(sel).filter((b) => b.id.startsWith("learn:") && !learned.has(b.id.slice(6)));
+      },
+      // 瞄准中（施法 / 建造 / 放置）与「手上拿着物品」都算：下一次轻点必须落地——对物品
+      // 来说，落在地面是丢下、落在友方单位是交给它、落在商店是卖掉（orderClickAt 的 item 分支）。
+      armed: () => this.isTargeting() || this.carryingItemSlot() !== null,
       selectAt: (x, y, mods) => this.rts?.selectAt(x, y, mods ?? {}),
       selectBox: (x0, y0, x1, y1, additive) => this.rts?.selectBox(x0, y0, x1, y1, additive),
       orderAt: (x, y, queued) => {
@@ -11844,7 +12058,14 @@ export class MapViewerScene {
         const key = String(n);
         if (op === "assign") this.rts?.assignGroup(key);
         else if (op === "append") this.rts?.appendGroup(key);
-        else if (this.rts?.recallGroup(key) && jump) this.jumpToSelection();
+        else if (this.rts?.recallGroup(key) && jump) {
+          // 与 focusSelection / 手柄的 jumpToSelection 同语义：先放开所有跟随 / 锁定，
+          // 否则下一帧的 followHeld / rideLocked 会把刚写入的 target 拽回去。
+          this.cameraLock = false;
+          this.groupFollow = false;
+          this.releaseCameraRide();
+          this.jumpToSelection();
+        }
       },
       // 手势 HUD 的编队图标：人数 + 首单位的命令卡图标（与命令卡同一个 registry / blpIcon）。
       groups: () => {
@@ -11864,7 +12085,59 @@ export class MapViewerScene {
       // Two fingers dragging the world move it with the finger, as the middle-button drag does
       // (midPan does the live-lens pixel→world conversion; no camera algorithm is changed).
       panBy: (dx, dy) => this.midPan(dx, dy),
+      // 手势 HUD 的八方向移动盘 / 旋转钮：直接把按键写进相机已有的 held 状态
+      // （`this.keys`），逐帧平移与 Insert·Delete 的旋转就都照旧生效。
+      viewKey: (key, on) => {
+        const name = key === "up" ? "arrowup"
+          : key === "down" ? "arrowdown"
+            : key === "left" ? "arrowleft"
+              : key === "right" ? "arrowright"
+                : key === "rotateLeft" ? "delete" : "insert";
+        if (on) this.keys.add(name);
+        else this.keys.delete(name);
+      },
+      // 手势 HUD 的八方向盘在选中可移动单位时变成命令：朝手指的方向落一次右键语义的
+      // 移动（`moveAt`，与长按智能命令同一条通道，不是新手势命令）。目标点取主选单位
+      // 在屏幕上的位置往前一个身位；单位贴着屏幕边缘时夹回画布内。
+      selectionMovable: () => {
+        const sel = this.rts?.selectedInfo();
+        return !!sel && sel.owner === this.localPlayer && !sel.isBuilding && sel.moveSpeed > 0;
+      },
+      moveSelectionDir: (dx, dy) => {
+        if (!this.rts) return;
+        const len = Math.hypot(dx, dy);
+        if (!len) return;
+        const w = this.frame.right - this.frame.left;
+        const h = this.frame.bottom - this.frame.top;
+        const step = Math.min(w, h) * 0.22;
+        const sel = this.rts.selectedInfo();
+        const u = sel ? this.rts.simWorld.units.get(sel.id) : undefined;
+        const at = u ? this.worldToCss(u.x, u.y) : null;
+        const x = Math.max(4, Math.min(w - 4, (at ? at.x : w / 2) + (dx / len) * step));
+        const y = Math.max(4, Math.min(h - 4, (at ? at.y : h / 2) + (dy / len) * step));
+        this.rts.moveAt(x, y, false);
+      },
+      // 触摸拖框没有鼠标的实时反馈：手指一动就把选框和预览圈画出来，和鼠标拖框
+      // （updateSelectBox）走同一段绘制与 rts.setPreviewBox 判定。
+      boxPreview: (x0, y0, x1, y1) => this.updateSelectBox(x1, y1, false, x0, y0),
+      boxPreviewEnd: () => this.hideSelectBox(),
       zoomBy: (steps) => this.zoomBy(steps),
+      toggleView: () => this.toggleViewTilt(),
+      // 手势 HUD 的「镜头跟随」：与 Ctrl+C 同一个锁，状态每帧回读给按钮的亮灭。
+      toggleCameraLock: () => this.toggleCameraRide(),
+      cameraLocked: () => this.cameraRide !== null,
+      clearSelection: () => this.rts?.clearSelection(),
+      // 手势 HUD 的货舱图标（金矿里的精灵 / 飞艇里的乘客）：与经典控制台的货舱格子
+      // 同一条 driver 通道，点一下就把那一个放到载具脚下。
+      unloadCargo: (hostId, passengerId) => this.hud?.unloadCargo(hostId, passengerId) ?? false,
+      // 手势 HUD 左下面板的头像：让那一个单位去捡地上的物品（右键点物品的同一命令）。
+      // 接下后把那一个选为当前单位——手指点的是「谁去」，接下来的操作自然跟着他。
+      pickUpItem: (unitId, itemId) => {
+        const rts = this.rts;
+        if (!rts || !rts.pickUpGroundItemWith(unitId, itemId)) return false;
+        rts.selectSingle(unitId);
+        return true;
+      },
       focusSelection: () => {
         this.cameraLock = false; // a jump releases a follow, as every other one does
         this.groupFollow = false;
@@ -11876,10 +12149,7 @@ export class MapViewerScene {
           this.cancelPlacement();
           return;
         }
-        if (!this.rts?.orderMode) return;
-        this.rts.orderMode = null;
-        this.rts.armedCast = null;
-        this.hud?.clearOrderMode();
+        this.cancelArmedOrder();
       },
       toggleMenu: () => this.togglePanelByKey("menu"),
       toggleChat: () => { this.hud?.padToggleChat(); },
@@ -11893,8 +12163,104 @@ export class MapViewerScene {
       },
       hoverAt: (x, y) => virtualCursor.hoverAt(x, y),
       // 手势 HUD 的读数（资源 / 人口 / 当前选择）：与经典控制台共用 GameHud 的 driver。
-      status: () => this.hud?.gestureStatus() ?? null,
+      // 选中地上物品时另补两样只有宿主知道的东西：物品的 sim id（下令用）与附近能来捡
+      // 的单位头像——说明面板就长在选择面板里，不再开一条读取通道。
+      status: () => {
+        const status = this.hud?.gestureStatus() ?? null;
+        const rts = this.rts;
+        if (!status?.selection?.isItem || !rts) return status;
+        const itemId = rts.selectedGroundItem();
+        if (itemId === null) return status;
+        const pickers = rts.itemPickers(itemId).map((p) => ({
+          simId: p.simId,
+          name: p.name,
+          icon: p.icon ? this.blpIcon(p.icon) ?? "" : "",
+        }));
+        return { ...status, selection: { ...status.selection, itemId, pickers } };
+      },
+      helpCatalog: () => this.helpCatalog(),
     });
+  }
+
+  /**
+   * 手势帮助面板的图鉴（ui/gesture/hud.ts）：只收本图真能出现的类型——种族对得上的
+   * 基础单位，加上本局已刷出的单位和地面物品；商店在售的物品也一并算进来。这样既不会
+   * 漏掉地图自定义单位，也不会把全站的中立 / 战役资料铺满一页。
+   */
+  private helpCatalog(): HelpCatalog {
+    // 只列「自己这局用得到的」：本族单位 / 建筑 + 自己已经拥有的单位（酒馆英雄、
+    // 雇来的中立单位），技能再由这些单位带出来；物品只取这局真的会出现的（地上掉落
+    // 与商店库存）。别的种族、敌军和野怪都不进图鉴——玩家点不到它们，列出来只是噪音。
+    const race = this.localRace;
+    const ownedTypes = new Set<string>();
+    const groundItems = new Set<string>();
+    const shopItems = new Set<string>();
+    for (const unit of this.rts?.simWorld.units.values() ?? []) {
+      if (unit.owner === this.localPlayer) ownedTypes.add(unit.typeId);
+      for (const id of unit.building?.stock?.keys() ?? []) shopItems.add(id);
+    }
+    for (const item of this.rts?.simWorld.items.values() ?? []) groundItems.add(item.itemId);
+    const icon = (path: string): string => (path ? this.blpIcon(path) ?? "" : "");
+
+    const unitDefs: UnitDef[] = [];
+    const seen = new Set<string>();
+    const abilityIds = new Set<string>();
+    for (const def of this.registry.all()) {
+      if (def.campaign || seen.has(def.id)) continue;
+      if (def.race !== race && !ownedTypes.has(def.id)) continue;
+      seen.add(def.id);
+      unitDefs.push(def);
+      for (const id of def.abilities) abilityIds.add(id);
+      for (const id of def.heroAbilities) abilityIds.add(id);
+    }
+    unitDefs.sort((a, b) => a.race.localeCompare(b.race) || a.name.localeCompare(b.name));
+
+    // 同一个名字的变体（水元素三级、毒蛇结界的几个等级）在说明书里是同一张脸：
+    // 只留第一条，免得图鉴整页都是重复图标。
+    const unitNames = new Set<string>();
+    const units: HelpEntry[] = [];
+    const buildings: HelpEntry[] = [];
+    for (const def of unitDefs) {
+      if (unitNames.has(def.name)) continue;
+      unitNames.add(def.name);
+      (def.isBuilding ? buildings : units).push({
+        id: def.id,
+        name: def.name,
+        icon: icon(def.icon),
+        text: def.description || def.tip || "",
+      });
+    }
+
+    const abilities: HelpEntry[] = [];
+    const abilityNames = new Set<string>();
+    for (const id of abilityIds) {
+      const def = this.abilities.get(id);
+      if (!def || def.buttonHidden || def.isItem || abilityNames.has(def.name)) continue;
+      abilityNames.add(def.name);
+      abilities.push({
+        id,
+        name: def.name,
+        icon: icon(def.icon),
+        text: def.uberTips[0] || def.tips[0] || "",
+      });
+    }
+    abilities.sort((a, b) => a.name.localeCompare(b.name));
+
+    const items: HelpEntry[] = [];
+    const itemNames = new Set<string>();
+    for (const id of new Set([...groundItems, ...shopItems])) {
+      const def = this.items.get(id);
+      if (!def || itemNames.has(def.name)) continue;
+      itemNames.add(def.name);
+      items.push({
+        id,
+        name: def.name,
+        icon: icon(def.icon),
+        text: def.description || def.summary || def.tip || "",
+      });
+    }
+    items.sort((a, b) => a.name.localeCompare(b.name));
+    return { units, buildings, abilities, items };
   }
 
   private jumpToSelection(): void {
@@ -11995,6 +12361,27 @@ export class MapViewerScene {
   private releaseCameraRide(): void {
     this.cameraRide = null;
     this.voiceRide = [];
+  }
+
+  /**
+   * Ctrl+C's camera lock, also the gesture console's 镜头跟随 button (ui/gesture).
+   * A press with a lock already on is the release; otherwise it locks onto the leading FRIENDLY
+   * unit of the selection. Returns whether a lock is ON after the press, which is what the
+   * button paints.
+   */
+  private toggleCameraRide(): boolean {
+    if (this.cameraRide !== null) {
+      this.releaseCameraRide();
+      return false;
+    }
+    const id = this.rts?.cameraLockTarget() ?? null;
+    if (id === null) return false; // nothing selected, or what is selected is an enemy's
+    this.cameraRide = id;
+    this.voiceRide = [];
+    this.cameraLock = false; // one follow at a time — this replaces the portrait's…
+    this.groupFollow = false; // …and the held hotkey's
+    this.followVel[0] = this.followVel[1] = 0; // start at rest, wherever the camera is now
+    return true;
   }
 
   /** Command-card icon (BLP path) of the local race's worker, for the idle button. */
@@ -12619,20 +13006,7 @@ export class MapViewerScene {
       // Ctrl+C: lock the camera onto the leading FRIENDLY unit of the selection and ride it.
       // A press with a lock already on is the release — the binding is one key, so the state
       // it toggles is read here rather than mirrored in the HUD.
-      toggleCameraLock: () => {
-        if (this.cameraRide !== null) {
-          this.releaseCameraRide();
-          return false;
-        }
-        const id = this.rts?.cameraLockTarget() ?? null;
-        if (id === null) return false; // nothing selected, or what is selected is an enemy's
-        this.cameraRide = id;
-        this.voiceRide = [];
-        this.cameraLock = false; // one follow at a time — this replaces the portrait's…
-        this.groupFollow = false; // …and the held hotkey's
-        this.followVel[0] = this.followVel[1] = 0; // start at rest, wherever the camera is now
-        return true;
-      },
+      toggleCameraLock: () => this.toggleCameraRide(),
       heroBar: () => this.rts?.heroBar() ?? [],
       rightClickHero: (index, queued) => this.rts?.rightClickHero(index, queued) ?? false,
       dropItemOnHero: (index, slot) => {
@@ -12697,6 +13071,14 @@ export class MapViewerScene {
         this.rts?.moveInventorySlot(slot);
         this.hud?.setArmed(!!this.rts?.orderMode); // enter "target to move" mode
       },
+      dropInventory: (slot) => {
+        // 手势物品格右上角的「丢弃」：一步丢到脚下。只有格子里真有东西时才响这一声——
+        // 空格的钮是隐藏的，这里再挡一次是防 DOM 与模拟不同步的那一帧。
+        const held = this.rts?.inventorySlots()[slot];
+        if (!held || held.patronView) return;
+        if (this.rts?.dropInventorySlot(slot)) this.sounds?.playUiVariants("InterfaceClick", INVENTORY_CLICKS);
+      },
+      carryingItem: () => this.carryingItemSlot(),      cancelOrder: () => this.cancelArmedOrder(),
       minimapImage: () => this.minimap,
       minimapBlight: () => this.minimapBlight(),
       consoleSkinned: () => this.consoleSkinned(),
@@ -14465,6 +14847,24 @@ export class MapViewerScene {
       }
       return;
     }
+    // 中继来的地图对话框：按钮携带权威端句柄。点击只送回权威端执行——本机脚本的那份
+    // 不能抢先跑（否则会新建一个只存在于本机、下一帧就被快照抹掉的单位），但也要一并
+    // 隐藏，不然下一帧 visibleDialog() 又会把它弹回来。
+    if ((this.remoteDialog !== null || this.rts?.isMatchClient === true) && button.dialogId >= 0 && button.handleId >= 0) {
+      const local = this.mapScript?.interp.rt.dialogs.find((d) => d.handleId === button.dialogId);
+      if (local && local.visibleFor.has(this.localPlayer)) {
+        local.visibleFor.delete(this.localPlayer);
+        local.revision++;
+      }
+      this.remoteDialog = null;
+      this.showDialog(null);
+      this.rts?.sendDialogClick(button.dialogId, button.handleId);
+      if (button.quit) {
+        this.scriptPaused = false;
+        void this.leave(button.doScoreScreen);
+      }
+      return;
+    }
     const engine = this.mapScript;
     const dialog = engine?.interp.rt.dialogs.find((d) => d.handleId === button.dialogId);
     if (dialog) {
@@ -15247,6 +15647,24 @@ export class MapViewerScene {
     return !(mode === "item" && this.rts?.armedItem?.mode === "move");
   }
 
+  /** 手上拿着、还没落地的物品槽（右键拿起 / 触屏长按拿起）；没有则 null。 */
+  private carryingItemSlot(): number | null {
+    const rts = this.rts;
+    return rts?.orderMode === "item" && rts.armedItem?.mode === "move" ? rts.armedItem.slot : null;
+  }
+
+  /** 放回手上的物品、解除任何瞄准：桌面右键、触屏双指轻点、再长按物品格共用的一条清理。 */
+  private cancelArmedOrder(): void {
+    const rts = this.rts;
+    if (!rts) return;
+    rts.orderMode = null;
+    rts.armedCast = null;
+    rts.armedItem = null;
+    rts.armedLoad = null;
+    rts.armedUnload = null;
+    this.hud?.clearOrderMode();
+  }
+
   /**
    * The card a LAN client drew from its own prediction the moment a press went to the host, and
    * what it was drawn FOR. Payloads already on the wire at the click were built without it, and
@@ -15362,6 +15780,112 @@ export class MapViewerScene {
   }
 
   /** Build the command card for the current selection. */
+  /** 英雄学技能页：花一点技能点学一门或升一级，每格带一个「+」。从 `buildCommandCard` 里
+   *  抽出来，是因为手势 HUD 要在**没进这一页**时也拿到它（`GestureMatchHost.learnCard`），
+   *  把还没学的技能直接排在攻击钮左侧的半弧上——一个面板看全，不再有第二个页面。
+   *  卡片按开发者的要求从左上往右填，每格写明下一级给什么。 */
+  private learnPageCard(sel: SelectionInfo): CommandButton[] {
+    const out: CommandButton[] = [];
+    const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
+    const su = this.rts!.simView.units.get(sel.id);
+    if (!su) return out;
+    for (const ab of su.abilities) {
+      const def = ab.def ?? this.abilities.get(ab.id); // the unit's own instance, if a script rewrote it
+      // Only the hero's SKILLS: an innate unit ability on a hero's sheet (the Warden's
+      // Shadow Meld) is a command-card button and never a row here (SimWorld.learnable).
+      if (!def || !this.rts!.simView.learnable(su, ab.id)) continue;
+      const col = def.learnX; // researchbuttonpos — the WC3 learn-page slot (row 0)
+      const row = def.learnY;
+      const maxed = ab.level >= def.levels;
+      const nextRank = ab.level + 1;
+      const need = requiredHeroLevel(def, nextRank);
+      const canLearn = su.skillPoints > 0 && !maxed && su.level >= need;
+      // The learn page has its own pair of strings in AbilityStrings: Researchtip
+      // ("Learn Holy Ligh|cffffcc00t|r - [|cffffcc00Level %d|r]") and Researchubertip,
+      // which spells out what every rank does. Use them, and add the game's own
+      // requirement line while the hero is too low to take the next rank: GlobalStrings
+      // REQUIREDLEVELTOOLTIP, which is the bare words "Hero level:" with NO colour of its
+      // own — unlike REQUIRESTOOLTIP, which carries `|Cffffff00`. It is the same KIND of
+      // line, so it is dressed in the same yellow here rather than in a gold of our own.
+      const shown = Math.min(nextRank, def.levels);
+      const tip = def.researchTip
+        ? def.researchTip.replace(/%d/g, String(shown))
+        : `Learn ${def.name} - [Level ${shown}]`;
+      const body = def.researchUberTip
+        ? this.tipText(def.researchUberTip, def, shown)
+        : this.abilityDesc(def, shown);
+      const levelLine = `|n|n|Cffffff00${this.uiText("REQUIREDLEVELTOOLTIP", "Hero level:")} ${need}`;
+      const desc = maxed || su.level >= need ? body : `${body}${levelLine}`;
+      out.push(this.cmd({
+        // 灰掉的那几格也带真实的 ability id：手势 HUD 靠它判断「这门已经学过」，免得左
+        // 半弧和命令环各画一次；真去点也由模拟层拒绝（没点 / 等级不够 / 已满级）。
+        id: `learn:${ab.id}`,
+        icon: this.blpIcon(def.icon),
+        name: maxed ? `${def.name} (Max)` : `+ ${def.name} [${ab.level}/${def.levels}]`,
+        hotkey: def.researchHotkey, // Researchhotkey — a passive has no cast Hotkey to borrow
+        tip: maxed ? `${def.name} - [|cffffcc00Level ${def.levels}|r]` : tip,
+        desc,
+        col, row, disabled: !canLearn,
+      }));
+    }
+    out.push(this.cmd({
+      id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+      ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+        "Drops the current un-issued order and allows you to select a different order."),
+    }));
+    return out;
+  }
+
+  /** Whether the selected unit has a Build command at all. The `Builds` list is the authority
+   *  (`buildPageCard` reads it), not `SelectionInfo.isWorker`: a custom map's builder may carry
+   *  no harvest ability and still be the only thing that may raise structures. */
+  private canBuild(sel: SelectionInfo): boolean {
+    return this.tech.builds(sel.typeId).length > 0;
+  }
+
+  /** 工人的建造页：`Builds` 行里的每一座建筑（前置没到就灰掉，见 issue #98），最后是
+   *  Cancel。从 `buildCommandCard` 里抽出来，是因为手势 HUD 要在**没进建造页**时也拿到它
+   *  （`GestureMatchHost.buildCard`），把建筑直接排在攻击钮左侧的半弧上。 */
+  private buildPageCard(sel: SelectionInfo): CommandButton[] {
+    const world = this.rts!.simWorld;
+    const stash = this.rts!.stashFor(this.localPlayer);
+    const btnIcon = (n: string) => this.blpIcon(`ReplaceableTextures\\CommandButtons\\${n}.blp`);
+    const out: CommandButton[] = [];
+    // The worker's OWN `Builds` list from its profile — `[hpea] Builds=htow,hhou,hbar,…`.
+    // Structures whose prerequisites aren't met are greyed with a yellow "Requires:" line
+    // rather than hidden, which is what WC3 does (you can see the Guard Tower is there and
+    // that it wants a Lumber Mill).
+    for (const bid of this.tech.builds(sel.typeId)) {
+      const d = this.registry.get(bid);
+      if (!d) continue;
+      // …but a structure the MAP has capped at zero is not greyed, it is not there: the
+      // real client's Prologue02 build card is five buttons and a greyed Watch Tower, with
+      // no Spirit Lodge, Bestiary or Tauren Totem (`SetPlayerTechMaxAllowed(p, 'osld', 0)`
+      // in the map's own InitTechTree). Same rule as the train card.
+      if (world.tech?.maxAllowed(this.localPlayer, bid) === 0) continue;
+      const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
+      const metTech = world.canMake(this.localPlayer, bid, 0);
+      out.push(this.cmd({
+        id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
+        tip: d.tip, // "Build |cffffcc00F|rarm" — the verb is already in the game's Tip
+        desc: this.tipText(d.description || `Builds ${d.name}.`) + this.requirementLine(bid),
+        gold: d.goldCost, lumber: d.lumberCost, food: 0,
+        col: d.buttonX, row: d.buttonY,
+        // The issue-#98 case itself: a Guard Tower with no Lumber Mill is greyed AND
+        // inert — clicking it must not hand the worker a ghost to place. Being short
+        // of gold doesn't stop you picking the building up; placing it says why.
+        disabled: !metTech,
+        cantAfford: !afford,
+      }));
+    }
+    out.push(this.cmd({
+      id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
+      ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
+        "Drops the current un-issued order and allows you to select a different order."),
+    }));
+    return out;
+  }
+
   private buildCommandCard(): CommandButton[] {
     const sel = this.rts?.selectedInfo();
     if (!sel) return [];
@@ -15544,94 +16068,10 @@ export class MapViewerScene {
     }
 
     // Movable units. Build sub-page for workers, else the order set.
-    if (this.cardPage === "build" && sel.isWorker) {
-      const stash = this.rts!.stashFor(this.localPlayer);
-      // The worker's OWN `Builds` list from its profile — `[hpea] Builds=htow,hhou,hbar,…`.
-      // Structures whose prerequisites aren't met are greyed with a yellow "Requires:" line
-      // rather than hidden, which is what WC3 does (you can see the Guard Tower is there and
-      // that it wants a Lumber Mill).
-      for (const bid of this.tech.builds(sel.typeId)) {
-        const d = this.registry.get(bid);
-        if (!d) continue;
-        // …but a structure the MAP has capped at zero is not greyed, it is not there: the
-        // real client's Prologue02 build card is five buttons and a greyed Watch Tower, with
-        // no Spirit Lodge, Bestiary or Tauren Totem (`SetPlayerTechMaxAllowed(p, 'osld', 0)`
-        // in the map's own InitTechTree). Same rule as the train card.
-        if (world.tech?.maxAllowed(this.localPlayer, bid) === 0) continue;
-        const afford = stash.gold >= d.goldCost && stash.lumber >= d.lumberCost;
-        const metTech = world.canMake(this.localPlayer, bid, 0);
-        out.push(this.cmd({
-          id: `build:${bid}`, icon: this.blpIcon(d.icon), name: d.name, hotkey: d.hotkey || (d.name[0]?.toUpperCase() ?? ""),
-          tip: d.tip, // "Build |cffffcc00F|rarm" — the verb is already in the game's Tip
-          desc: this.tipText(d.description || `Builds ${d.name}.`) + this.requirementLine(bid),
-          gold: d.goldCost, lumber: d.lumberCost, food: 0,
-          col: d.buttonX, row: d.buttonY,
-          // The issue-#98 case itself: a Guard Tower with no Lumber Mill is greyed AND
-          // inert — clicking it must not hand the worker a ghost to place. Being short
-          // of gold doesn't stop you picking the building up; placing it says why.
-          disabled: !metTech,
-          cantAfford: !afford,
-        }));
-      }
-      out.push(this.cmd({
-        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
-        ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
-          "Drops the current un-issued order and allows you to select a different order."),
-      }));
-      return out;
-    }
+    if (this.cardPage === "build" && this.canBuild(sel)) return this.buildPageCard(sel);
 
     // Learn-skill sub-page (heroes): spend a skill point on a new/higher ability.
-    // Cards fill the TOP row(s) left→right (developer request), each showing a "+"
-    // affordance and the effect it grants at the next rank.
-    if (this.cardPage === "learn" && sel.isHero) {
-      const su = this.rts!.simView.units.get(sel.id);
-      if (su) {
-        for (const ab of su.abilities) {
-          const def = ab.def ?? this.abilities.get(ab.id); // the unit's own instance, if a script rewrote it
-          // Only the hero's SKILLS: an innate unit ability on a hero's sheet (the Warden's
-          // Shadow Meld) is a command-card button and never a row here (SimWorld.learnable).
-          if (!def || !this.rts!.simView.learnable(su, ab.id)) continue;
-          const col = def.learnX; // researchbuttonpos — the WC3 learn-page slot (row 0)
-          const row = def.learnY;
-          const maxed = ab.level >= def.levels;
-          const nextRank = ab.level + 1;
-          const need = requiredHeroLevel(def, nextRank);
-          const canLearn = su.skillPoints > 0 && !maxed && su.level >= need;
-          // The learn page has its own pair of strings in AbilityStrings: Researchtip
-          // ("Learn Holy Ligh|cffffcc00t|r - [|cffffcc00Level %d|r]") and Researchubertip,
-          // which spells out what every rank does. Use them, and add the game's own
-          // requirement line while the hero is too low to take the next rank: GlobalStrings
-          // REQUIREDLEVELTOOLTIP, which is the bare words "Hero level:" with NO colour of its
-          // own — unlike REQUIRESTOOLTIP, which carries `|Cffffff00`. It is the same KIND of
-          // line, so it is dressed in the same yellow here rather than in a gold of our own.
-          const shown = Math.min(nextRank, def.levels);
-          const tip = def.researchTip
-            ? def.researchTip.replace(/%d/g, String(shown))
-            : `Learn ${def.name} - [Level ${shown}]`;
-          const body = def.researchUberTip
-            ? this.tipText(def.researchUberTip, def, shown)
-            : this.abilityDesc(def, shown);
-          const levelLine = `|n|n|Cffffff00${this.uiText("REQUIREDLEVELTOOLTIP", "Hero level:")} ${need}`;
-          const desc = maxed || su.level >= need ? body : `${body}${levelLine}`;
-          out.push(this.cmd({
-            id: canLearn ? `learn:${ab.id}` : "noop",
-            icon: this.blpIcon(def.icon),
-            name: maxed ? `${def.name} (Max)` : `+ ${def.name} [${ab.level}/${def.levels}]`,
-            hotkey: def.researchHotkey, // Researchhotkey — a passive has no cast Hotkey to borrow
-            tip: maxed ? `${def.name} - [|cffffcc00Level ${def.levels}|r]` : tip,
-            desc,
-            col, row, disabled: !canLearn,
-          }));
-        }
-        out.push(this.cmd({
-        id: "cancel", icon: btnIcon("BTNCancel"), name: "Cancel", hotkey: "Escape", col: 3, row: 2,
-        ...this.cmdSection("CmdCancel", "Cancel (|cffffcc00ESC|r)",
-          "Drops the current un-issued order and allows you to select a different order."),
-      }));
-      }
-      return out;
-    }
+    if (this.cardPage === "learn" && sel.isHero) return this.learnPageCard(sel);
 
     // A SPELLBOOK's page: the abilities the book holds, in their own cells, and Cancel.
     if (this.cardPage.startsWith("book:")) {
@@ -15711,10 +16151,14 @@ export class MapViewerScene {
     // What a worker gets instead is its GATHER button, and that arrives through the ability
     // path too now (isHarvestCode) — one row, `Buttonpos=3,1`, showing Return Goods while
     // there is a load to carry home.
-    if (sel.isWorker && this.tech.builds(sel.typeId).length) {
+    // WC3's rule for the Build command is the unit's `Builds` list, NOT the harvest ability.
+    // `sel.isWorker` is `!!u.worker`, i.e. "carries Ahar", and a builder-only unit (人族无敌's
+    // 野蛮人 raises eleven structures with no harvest row at all) failed that test and so had
+    // no Build button. Asking the tech table is the same question the real client asks.
+    if (this.canBuild(sel)) {
       // …and the VERB is the worker's race's: build / create / summon (see buildCmdKey).
       out.push(this.cmd({
-        id: "build", icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", col: 0, row: 2, active: active === "build",
+        id: "build", submenu: true, icon: btnIcon("BTNHumanBuild"), name: "Build Structure", hotkey: "B", col: 0, row: 2, active: active === "build",
         ...this.cmdSection(this.buildCmdKey(sel.typeId), "|cffffcc00B|ruild Structure",
           "Brings up a list of the available buildings that you may choose to construct."),
       }));
@@ -16067,6 +16511,10 @@ export class MapViewerScene {
       // the engine GREYS THE BUTTON, so the click never happens and nothing needs saying.
       // A passive is untouched: Silence stops spellcasting, not Critical Strike.
       const muted = !passive && (ready.unit.silenced || ready.unit.stunned);
+      // 手势 HUD 的「+」：这个技能此刻还能靠技能点升一级（英雄、有剩余点数、等级够、
+      // 未满级）时，把 `learnSkill` 要的 id 交给它，点「+」就直接升级。
+      const canUpgrade = su.isHero && !bookId && su.skillPoints > 0 && this.rts.simView.learnable(su, ab.id)
+        && ab.level < def.levels && su.level >= requiredHeroLevel(def, ab.level + 1);
       out.push(this.cmd({
         // An autocastable ability answers to BOTH mouse buttons, as in the game: left casts
         // it here and now (Heal that wounded Footman), right flips whether the unit casts it
@@ -16087,6 +16535,9 @@ export class MapViewerScene {
         // does in the original. `Amel` (the Meat Wagon's Get Corpse) carries neither pair and
         // stays a toggle, as it is in the game.
         id: passive ? "noop" : def.autocast && !def.orderOn ? `autocast:${ab.code}` : `ability:${pressKey}`,
+        // 法术书（Aspb）点下去只是翻到它自己那页，和「建造 / 英雄技能」一样属于进入型按钮。
+        submenu: ab.code === "Aspb",
+        learnId: canUpgrade ? ab.id : undefined,
         altId: passive || !def.autocast ? undefined : `autocast:${ab.code}`,
         icon: this.blpIcon(reversed ? def.unIcon : iconAt(def, ab.level)),
         // The reverse direction has no `Unname` of its own — the row carries one Name — so
@@ -16147,6 +16598,7 @@ export class MapViewerScene {
       // unavailable.
       out.push(this.cmd({
         id: "learnpage",
+        submenu: true,
         icon: this.blpIcon("ReplaceableTextures\\CommandButtons\\BTNSkillz.blp"),
         name: "Hero Abilities",
         hotkey: "O",
@@ -20274,7 +20726,10 @@ export class MapViewerScene {
       // it, and in WC3 the view scrolls under the silhouette while you do (the ghost is
       // re-seated under the cursor every frame, so it rides along).
       this.pointerInWindow &&
-      !document.body.classList.contains("game-menu-open");
+      !document.body.classList.contains("game-menu-open") &&
+      // The gesture console has no classic HUD edges to lean on: the cursor crosses the screen
+      // to reach its controls, and the view must not slide out from under it while it does.
+      !document.body.classList.contains("gesture-ui");
     let dx = 0;
     let dy = 0;
     if (active) {
@@ -20577,7 +21032,7 @@ export class MapViewerScene {
   /** Draw the drag-selection rectangle. `x`/`y` are CANVAS coords (offsetX/offsetY), so the
    *  box lives in the world layer, whose box is the canvas's — not on the body, which is the
    *  window's and would offset it by the letterbox. */
-  private updateSelectBox(x: number, y: number, additive = false): void {
+  private updateSelectBox(x: number, y: number, additive = false, fromX = this.downX, fromY = this.downY): void {
     if (!this.selectBoxEl) {
       this.selectBoxEl = document.createElement("div");
       this.selectBoxEl.className = "select-box";
@@ -20585,12 +21040,12 @@ export class MapViewerScene {
     }
     const el = this.selectBoxEl;
     el.hidden = false;
-    el.style.left = `${Math.min(this.downX, x)}px`;
-    el.style.top = `${Math.min(this.downY, y)}px`;
-    el.style.width = `${Math.abs(x - this.downX)}px`;
-    el.style.height = `${Math.abs(y - this.downY)}px`;
+    el.style.left = `${Math.min(fromX, x)}px`;
+    el.style.top = `${Math.min(fromY, y)}px`;
+    el.style.width = `${Math.abs(x - fromX)}px`;
+    el.style.height = `${Math.abs(y - fromY)}px`;
     // Ring the units the box currently covers (green preview) as it's dragged.
-    this.rts?.setPreviewBox(this.downX, this.downY, x, y, additive);
+    this.rts?.setPreviewBox(fromX, fromY, x, y, additive);
   }
 
   private hideSelectBox(): void {
@@ -20869,6 +21324,13 @@ export class MapViewerScene {
     const c = this.canvas;
     this.bindVoiceKeys();
     this.on(window, "keydown", (e: KeyboardEvent) => {
+      // A map's own key triggers (DzTriggerRegisterKeyEvent) see the press BEFORE the engine's
+      // F-key shortcuts — the DzAPI maps bind ESC and F1 themselves and those return below.
+      // Text fields keep their keystrokes, a replay's script must not run map logic on the
+      // watcher's keyboard, and holding a key is one press, not a stream.
+      if (!isTyping(e.target) && !this.replayPlayback && !e.repeat) {
+        this.mapScript?.interp.fireDzKey(dzKeyCode(e), 1, this.localPlayer);
+      }
       // ESC during a cinematic SKIPS it — WC3 raises EVENT_PLAYER_END_CINEMATIC for the
       // local player and the map's own skip trigger takes it from there (see
       // Interpreter.firePlayerEvent for the NightElfX01 trigger this exists for).
@@ -20946,6 +21408,9 @@ export class MapViewerScene {
       this.checkCheatCode(e.key);
     });
     this.on(window, "keyup", (e: KeyboardEvent) => {
+      if (!isTyping(e.target) && !this.replayPlayback) {
+        this.mapScript?.interp.fireDzKey(dzKeyCode(e), 0, this.localPlayer);
+      }
       const k = e.key.toLowerCase();
       this.keys.delete(k);
       // Letting go of SHIFT ends a shift-queued placement (issue #123 — the original game

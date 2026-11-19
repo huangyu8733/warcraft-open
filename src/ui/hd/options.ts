@@ -415,7 +415,7 @@ export async function mountHdOptions(
 
   // 3.0's GetScale(): the sheet is authored at 1080 lines.
   const rescale = (): void => {
-    zoom.style.setProperty("zoom", Math.max(0.5, window.innerHeight / 1080).toFixed(3));
+    zoom.style.setProperty("zoom", Math.max(0.25, window.innerHeight / 1080).toFixed(3));
   };
   rescale();
   window.addEventListener("resize", rescale);

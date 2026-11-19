@@ -99,6 +99,27 @@ console.log("same sequence, same command stream");
     [...kinds].join(","));
 }
 
+// ── 3. 渲染面：手势模式下经典控制台整条让位（这段 CSS 两版本共用） ──────────────────────────
+// 命令流一致还不够：`#gesture-hud` 是在经典 HUD 之上叠出来的，若某一版本的经典 chrome
+// 没被藏掉，两个版本看上去就是两套界面。所以把 `body.gesture-ui` 的让位清单也钉住。
+console.log("classic chrome yields to #gesture-hud");
+{
+  const css = fs.readFileSync(join(REPO, "src", "style.css"), "utf8");
+  const start = css.indexOf("body.gesture-ui .fdf-screen.fdf-topbar");
+  const end = css.indexOf("}", start);
+  check("the hide list is present", start >= 0 && end > start);
+  const block = start >= 0 && end > start ? css.slice(start, end) : "";
+  const required = [
+    ".fdf-screen.fdf-topbar", ".hud-console", ".hud-console-background", ".hud-minimap-btn",
+    ".hud-idle-worker", ".hud-autocam", ".hud-msgcol", ".hud-chatcol",
+  ];
+  for (const sel of required) {
+    check(`hides ${sel}`, block.includes(`body.gesture-ui ${sel}`));
+  }
+  check("shows #gesture-hud", /body\.gesture-ui #gesture-hud \{ display: block; \}/.test(css));
+  check("the hide list has no flavor condition", !!block && !/\.(hd|de)\b/.test(block));
+}
+
 if (fails) {
   console.log(`\n${fails} gesture flavor check(s) FAILED`);
   process.exit(1);

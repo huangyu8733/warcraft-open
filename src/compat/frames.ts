@@ -78,6 +78,13 @@ export interface FrameObj {
   tooltip: number; // handle id of the frame shown as this one's tooltip, 0 for none
   /** This frame IS a tooltip — the engine shows it only while its owner is hovered. */
   tooltipOf: number;
+  /** `DzFrameSetFont`'s height, in the same units as a `FrameFont` property; 0 = the type's
+   *  own default. (The face it names is a .ttf inside the map archive, which the renderer
+   *  cannot mount — the drawing uses its UI font and this SIZE.) */
+  fontHeight: number;
+  /** `DzFrameSetPriority` — draw order among its siblings, lower first. 0 for every frame
+   *  that never set one, so the map's insertion order is kept. */
+  priority: number;
 }
 
 /** What the drawing reads: every frame, the map's templates, and two counters that say
@@ -136,12 +143,14 @@ const registryKey = (name: string, createContext: number): string => `${createCo
 const TOPLEFT = 0;
 const BOTTOMRIGHT = 8;
 
-function blankFrame(name: string, createContext: number, origin: boolean, parent: number, type: string): FrameObj {
+/** A frame with every field at its default — shared with the DzUI layer (compat/dzui.ts),
+ *  whose frames are the same model with an integer id instead of a framehandle. */
+export function blankFrame(name: string, createContext: number, origin: boolean, parent: number, type: string): FrameObj {
   return {
     handleId: 0, name, createContext, origin, type, template: "", instance: 0, inherits: "", parent,
     visible: true, enabled: true, alpha: 255, scale: 1, text: "", textSet: false, texture: "",
     textureSet: false, value: 0, width: 0, height: 0, sized: false, points: [], cleared: false,
-    tooltip: 0, tooltipOf: 0,
+    tooltip: 0, tooltipOf: 0, fontHeight: 0, priority: 0,
   };
 }
 

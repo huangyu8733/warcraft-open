@@ -65,8 +65,41 @@ console.log("single pointer");
   at(0); rec.pointerDown(touch(1, 100, 100, 0));
   at(100); rec.pointerMove(touch(1, 100, 180, 100));
   at(150); rec.pointerUp(touch(1, 100, 180, 150));
-  check("quick flick = swipe", kinds(out).join(",") === "swipe", JSON.stringify(kinds(out)));
-  check("swipe velocity is px/ms", out[0]?.vx === 0 && out[0]?.vy > 0.4, JSON.stringify(out[0]));
+  check("quick flick is a dragbox too (no swipe takes it)", kinds(out).join(",") === "dragbox", JSON.stringify(kinds(out)));
+}
+{
+  // 触摸拖框的实时预览：一动就回调（每次都带起点与当前点），抬手收掉一次。
+  const seen = [];
+  let ended = 0;
+  const { rec, out, at } = rig({
+    dragboxPreview: (from, to) => seen.push([from, to]),
+    dragboxPreviewEnd: () => { ended += 1; },
+  });
+  at(0); rec.pointerDown(touch(1, 100, 100, 0));
+  at(60); rec.pointerMove(touch(1, 140, 160, 60));
+  at(90); rec.pointerMove(touch(1, 180, 220, 90));
+  check("dragbox preview follows the finger", seen.length === 2
+    && seen[1][0].x === 100 && seen[1][0].y === 100 && seen[1][1].x === 180 && seen[1][1].y === 220,
+  JSON.stringify(seen));
+  at(120); rec.pointerUp(touch(1, 180, 220, 120));
+  check("dragbox preview ends once on release", ended === 1 && kinds(out).join(",") === "dragbox", `${ended} ${JSON.stringify(kinds(out))}`);
+}
+{
+  // 第二根手指进来：单指框作废，预览要收掉，也不产出 dragbox。
+  const seen = [];
+  let ended = 0;
+  const { rec, out, at } = rig({
+    dragboxPreview: (from, to) => seen.push([from, to]),
+    dragboxPreviewEnd: () => { ended += 1; },
+  });
+  at(0); rec.pointerDown(touch(1, 100, 100, 0));
+  at(40); rec.pointerMove(touch(1, 160, 160, 40));
+  at(60); rec.pointerDown(touch(2, 300, 300, 60));
+  check("a second finger drops the box preview", ended === 1, `${ended}`);
+  at(80); rec.pointerMove(touch(2, 320, 320, 80));
+  at(100); rec.pointerUp(touch(1, 160, 160, 100));
+  at(120); rec.pointerUp(touch(2, 320, 320, 120));
+  check("no dragbox after a second finger", !kinds(out).includes("dragbox"), JSON.stringify(kinds(out)));
 }
 {
   const { rec, out, at } = rig({ areaAt: (x) => (x > 500 ? "card" : "world") });
@@ -118,7 +151,7 @@ console.log("edge hold");
   at(100); rec.pointerMove(touch(1, 200, 300, 100));
   check("dragging off the edge is not an edge hold", rec.edgeCandidate() === false);
   at(120); rec.pointerUp(touch(1, 200, 300, 120));
-  check("a drag off the edge stays a swipe", kinds(out).join(",") === "swipe", JSON.stringify(kinds(out)));
+  check("a drag off the edge stays a dragbox", kinds(out).join(",") === "dragbox", JSON.stringify(kinds(out)));
 }
 {
   // 边缘带之外的慢按仍是普通轻点。

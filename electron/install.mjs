@@ -16,7 +16,7 @@
 // The manifest's shape is the renderer's `InstallManifest` (src/assets/remoteInstall.ts), and
 // paths in it speak WC3's `\` separator so they can be used as `InstallFiles` keys verbatim.
 
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
@@ -254,14 +254,37 @@ export async function downloadedMapExists(root, name) {
  *  message the game shows; it is no longer the only version the picker accepts. */
 export const REQUIRED_VERSION = "1.30.4";
 
-/** Version prefixes the folder picker accepts: `1.3` (the classic line this engine reads) and
- *  `3.` (the Reforged line). Prefixes, not exact builds — MUST equal `ACCEPTED_VERSION_PREFIXES`
- *  in src/vfs/version.ts, which is what the game itself checks on every launch. */
+/** Version prefixes the folder picker accepts: `1.3` (the classic line's content-store half) and
+ *  `3.` (the Reforged line, 3.0 and above — the Definitive Edition generation). 2.x is the
+ *  previous Reforged generation and is refused like any other build this engine does not play.
+ *  The classic line's 1.2x half is MPQ and has no `.build.info`; it is refused as too old (the
+ *  mount could read it, the 1.30.4 menus and tables cannot). Prefixes, not exact builds — MUST
+ *  equal `ACCEPTED_VERSION_PREFIXES` in src/vfs/version.ts, which is what the game itself checks
+ *  on every launch. */
 export const ACCEPTED_VERSION_PREFIXES = ["1.3", "3."];
+
+/** The classic line's content stores, and Reforged's — per line, because SD must not take a
+ *  3.x store and HD must not take a 1.3x one. */
+const SD_VERSION_PREFIXES = ["1.3"];
+const HD_VERSION_PREFIXES = ["3."];
+
+/** `war3.mpq` — the one archive every MPQ-era install has. */
+const BASE_MPQ = /^war3\.mpq$/i;
 
 /** Does a version string name a supported line? */
 export function isAcceptedInstallVersion(version) {
   return !!version && ACCEPTED_VERSION_PREFIXES.some((prefix) => version.startsWith(prefix));
+}
+
+/** Is this folder an MPQ-era install? It has no `.build.info`; `war3.mpq` at its root is the
+ *  signature of the classic line before 1.30 (1.27, 1.28, …) — a folder this build refuses. */
+export function isMpqInstall(root) {
+  if (!root || !existsSync(root)) return false;
+  try {
+    return readdirSync(root, { withFileTypes: true }).some((e) => e.isFile() && BASE_MPQ.test(e.name));
+  } catch {
+    return false;
+  }
 }
 
 /** The builds the game's mount turns back into REQUIRED_VERSION (src/vfs/version.ts, which says
@@ -294,14 +317,17 @@ export function installVersion(root) {
  * never SAVED as the remembered one. The game checks again every launch (src/vfs/version.ts);
  * this is the same rule asked earlier, not a second one.
  *
- * The rule is the version PREFIX: `1.3` is the classic line, `3.` the remastered line. A
- * pre-1.30 (MPQ) folder has no `.build.info` at all and so cannot pass, which is correct: it
- * predates the content-store layout this engine reads.
+ * The rule is the DATA LINE: the classic line is a `1.3x` content store (1.30 and above); the
+ * Reforged line is a `3.` store (3.0 and above). MPQ-era folders (1.2x) are refused — the
+ * game's mount can read them, but its 1.30.4 menus and tables cannot.
  */
-export function looksLikeInstall(root) {
+export function looksLikeInstall(root, flavor = "sd") {
   if (!root || !existsSync(root)) return false;
-  if (!existsSync(join(root, "Data"))) return false;
-  return isAcceptedInstallVersion(installVersion(root));
+  const hd = normalizeFlavor(flavor) === "hd";
+  if (!existsSync(join(root, BUILD_INFO))) return false; // 1.2x: older than 1.30, refused
+  const version = installVersion(root);
+  const prefixes = hd ? HD_VERSION_PREFIXES : SD_VERSION_PREFIXES;
+  return !!version && prefixes.some((prefix) => version.startsWith(prefix));
 }
 
 /** The two data / asset lines the launcher can boot (src/data/flavor.ts). */

@@ -653,6 +653,9 @@ export interface EngineHooks {
   /** `BlzCreateUnitWithSkin` / `BlzSetUnitSkin` — the skin the unit is DRAWN as (a render-only
    *  fact; the authoritative state and the replay hash never see it). */
   setUnitSkin?(unitId: number, skinId: number): void;
+  /** `DzSetUnitModel` — wear a model PATH the map ships instead of the unit type's own
+   *  (the costume heroes of the DzAPI era). Render-only, like setUnitSkin. */
+  setUnitModel?(unitId: number, path: string): void;
   /** GetUnitAcquireRange — the range the unit auto-acquires at: a script's, else its own
    *  (a creep's placed aggro range, else its weapon's `acquire`). undefined when it is gone. */
   getUnitAcquireRange?(unitId: number): number | undefined;
@@ -1699,6 +1702,11 @@ export class Runtime {
    *  the sim raises an event, and the live timers advanceTime() pumps. */
   readonly triggerRegs: TriggerReg[] = [];
   readonly timers: TimerObj[] = [];
+  /** `DzFrameSetScript`'s listeners: frame handle → event index → the function names it
+   *  should call. Registered by the DzUI compat layer (compat/dzui.ts) and run by
+   *  Interpreter.fireFrameEvent in the SAME event context as a frame-event trigger — the
+   *  DzAPI names a bare function instead of taking a trigger. */
+  readonly frameScripts = new Map<number, Map<number, string[]>>();
   /** Live floating text tags (CreateTextTag). The renderer polls this list; dead
    *  entries (DestroyTextTag) are flagged so it can drop them. */
   readonly textTags: TextTagObj[] = [];

@@ -30,6 +30,7 @@ import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
@@ -338,7 +339,7 @@ public class MainActivity extends Activity {
     }
 
     private static void walkStore(DocumentFile dir, String prefix, int depth, JSONArray config,
-                                  JSONArray idx, JSONObject data) {
+                                  JSONArray idx, JSONObject data) throws JSONException {
         if (dir == null || depth > MAX_STORE_DEPTH) return;
         for (DocumentFile entry : dir.listFiles()) {
             String name = entry.getName();

@@ -974,12 +974,12 @@ export class Authority {
         return this.ownedBy(player, cmd.unitId) && this.sim.learnAbility(cmd.unitId, cmd.abilityId);
       case "build": {
         // Everything the renderer used to decide for itself, decided here instead: that the
-        // worker is yours and is a worker, what the building costs, and whether you can
-        // afford it. Placement validity stays client-side for now — it needs the footprint
-        // grid the renderer owns (docs/multiplayer.md).
+        // unit is yours, that it may raise THIS building, what the building costs, and whether
+        // you can afford it. Placement validity stays client-side for now — it needs the
+        // footprint grid the renderer owns (docs/multiplayer.md).
         if (!this.ownedBy(player, cmd.unitId)) return false;
         const worker = this.sim.units.get(cmd.unitId);
-        if (!worker?.worker) return false;
+        if (!worker) return false;
         const def = this.registry.get(cmd.defId);
         if (!def) return false;
         // "Does this worker even build that, and is it unlocked yet?" — the two gates
@@ -987,6 +987,12 @@ export class Authority {
         // Barracks could be raised with no Great Hall behind it (issue #98). The card
         // greys those buttons, but a card is not a check: it doesn't come over the
         // wire, and until now nothing downstream asked.
+        //
+        // This IS the "is it a worker" test — deliberately, not `worker.worker`. That field
+        // means "carries Ahar", and a builder-only unit is a real thing: 人族无敌's 野蛮人
+        // raises eleven structures with no harvest row at all, so requiring it refused every
+        // Build click after the card had already offered it. The Builds list answers both
+        // halves of the question, and a unit with no builds simply fails below.
         if (!this.tech.builds(worker.typeId).includes(cmd.defId)) return false;
         if (!this.sim.canMake(player, cmd.defId, 0)) return false;
         // …and not against a gold mine's mouth: a hall inside `HALL_MINE_DISTANCE` is refused

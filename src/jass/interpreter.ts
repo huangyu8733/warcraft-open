@@ -2288,6 +2288,35 @@ export class Interpreter {
     this.dispatchToRegs(responses, (reg) =>
       reg.kind === "frameEvent" && reg.params[0]?.k === "handle" && reg.params[0].h === frameHandleId &&
       this.rt.enumIndex(reg.params[1] ?? JNULL) === eventIndex);
+    // …and DzFrameSetScript's bare function names (compat/dzui.ts), which the DzUI API
+    // registered instead of a trigger. Same event context, own thread — a wait in one must not
+    // hold the other listeners up, exactly as one trigger's action does not hold another's.
+    const scripts = this.rt.frameScripts.get(frameHandleId)?.get(eventIndex);
+    if (scripts) {
+      for (const fn of [...scripts]) {
+        try {
+          const ts = new Trace();
+          this.startThread(`dzframe#${frameHandleId}`, this.callFunctionG(fn, [], ts), ts, responses);
+        } catch (err) {
+          if (err instanceof ThreadAbort) throw err;
+          if (!(err instanceof ReturnSignal)) this.rt.warnOnce(fn, `Dz frame script threw: ${(err as Error).message}`);
+        }
+      }
+    }
+  }
+
+  /** A key pressed or released on this machine — `DzTriggerRegisterKeyEvent`. `key` is the
+   *  Windows virtual-key code the DzAPI speaks (`KeyboardEvent.keyCode`: letters are their
+   *  ASCII capitals, F1..F12 are 112..123) and `status` is 1 for a press, 0 for a release.
+   *  Raised by the canvas's own key handlers, only for the local player and never in a replay
+   *  (whose script would then re-run map logic on the watcher's keyboard). */
+  fireDzKey(key: number, status: number, player: number): void {
+    const responses = new Map<string, JassValue>([
+      ["TriggerPlayer", this.rt.playerHandle(player)],
+    ]);
+    this.dispatchToRegs(responses, (reg) => reg.kind === "dzKey" &&
+      (reg.params[0]?.k === "int" ? reg.params[0].n : -1) === key &&
+      (reg.params[1]?.k === "int" ? reg.params[1].n : -1) === status);
   }
 
   /**

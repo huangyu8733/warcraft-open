@@ -120,7 +120,8 @@ export function lanShell(
       localStorage.setItem("warcraft-open.playerName", nameField?.value.trim() || savedPlayerName());
     serversButton = primaryButton(t("lan.serversList"), () => opts.onServers?.());
     nameSection.append(el("span", "LANGames-FieldLabel", t("hd.playerName")), nameField, serversButton);
-    strip.appendChild(nameSection);
+    // On the band beside the title, level with 局域网 — the tab strip below keeps only the tabs.
+    header.appendChild(nameSection);
   }
 
   const lower = el("div", "LANGames-LowerLeftSection");
@@ -156,9 +157,12 @@ export function lanShell(
   backButton(root, t("hd.back"), opts.onBack);
   screen.element.appendChild(cornerDecorations(opts.assets, !isRoc()));
 
-  // 3.0 authors the band at 1080 lines and zooms with the window (`GetScale`).
+  // 3.0 authors the band at 1080 lines and zooms with the window (`GetScale`). The lower
+  // bound used to be 0.5 — taller than a landscape phone's viewport (393px → 540px), which
+  // cut the bottom band (where Create Game sits) off screen. 0.25 lets the 1080-line sheet
+  // actually fit; the phone keeps the whole plate, just smaller.
   const rescale = (): void => {
-    root.style.zoom = String(Math.max(0.5, window.innerHeight / 1080));
+    root.style.zoom = String(Math.max(0.25, window.innerHeight / 1080));
   };
   rescale();
   window.addEventListener("resize", rescale);

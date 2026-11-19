@@ -17,24 +17,32 @@ import { flavor, type GameFlavor } from "../data/flavor";
 // time (src/assets/nativeInstall.ts), and a player can patch Warcraft III between one launch and
 // the next without touching Warcraft Open at all.
 //
-// **The gate checks the version PREFIX**, not an exact patch: SD wants a `1.3` install (1.30.4,
-// 1.31.1, … — the pre-Reforged client line this engine reads), and HD wants a `3.` install (the
-// remastered line). Pre-1.30 builds are MPQ ones, which have no `.build.info` and are therefore
-// refused by the content-store check below. Balance drift inside a line is a question for the
-// match/replay, not for the folder gate.
+// **The gate follows the DATA LINE**, not one patch. The classic line is a 1.30+ CASC content
+// store (1.30.4, 1.31.1, …); the Reforged line is 3.0 and above, the Definitive Edition
+// generation whose `_DE.w3mod` art module `data/flavor.ts` mounts by default. 2.x is the
+// previous Reforged generation (`_HD.w3mod` only, Classic HD): refused, because its art/data
+// generation is not the one this engine was validated against. Balance drift inside a line is a
+// question for the match/replay, not for the folder gate.
+//
+// **1.2x (the MPQ era) is refused.** The mount can still read those folders (vfs/loader.ts),
+// but the UI, tables and script runtime are all authored against 1.30.4: a 1.27 folder mounts
+// and then builds a black menu instead of a playable game. 1.30 is where CASC begins, so "has
+// no `.build.info`" is exactly "older than 1.30".
 
 /** The build Warcraft Open plays by default. Used as the downgrade target and in player-facing
  *  messages; MUST equal `REQUIRED_VERSION` in electron/install.mjs. */
 export const REQUIRED_VERSION = "1.30.4";
 
-/** Version prefixes the install gate accepts: `1.3` is the classic line this engine reads
- *  (1.30.4, 1.31.1, …), `3.` the Reforged line. Prefixes, not exact builds — the patch number
- *  inside a line is not the gate's question. MUST equal `ACCEPTED_VERSION_PREFIXES` in
- *  electron/install.mjs, which asks the same question of the folder dialog before the answer
- *  can be remembered. */
+/** Version prefixes the install gate accepts: `1.3` is the classic line's CASC half (1.30.4,
+ *  1.31.1, …), `3.` the Reforged line (3.0 and above). Prefixes, not exact builds —
+ *  the patch number inside a line is not the gate's question. MUST equal
+ *  `ACCEPTED_VERSION_PREFIXES` in electron/install.mjs, which asks the same question of the
+ *  folder dialog before the answer can be remembered. */
 export const ACCEPTED_VERSION_PREFIXES: readonly string[] = ["1.3", "3."];
 
-const [SD_VERSION_PREFIX, HD_VERSION_PREFIX] = ACCEPTED_VERSION_PREFIXES;
+const SD_VERSION_PREFIX = "1.3";
+/** Reforged 3.x is the Definitive Edition generation this engine plays; 2.x is refused. */
+const HD_VERSION_PREFIXES: readonly string[] = ["3."];
 
 /** Builds the mount turns BACK into REQUIRED_VERSION, and so plays as it: the Internet Archive's
  *  1.31.1, which "Download game files" falls back on (src/assets/downloadInstall.ts). Its store
@@ -44,10 +52,10 @@ const [SD_VERSION_PREFIX, HD_VERSION_PREFIX] = ACCEPTED_VERSION_PREFIXES;
 export const DOWNGRADE_VERSIONS: readonly string[] = ["1.31.1"];
 
 /**
- * HD 的参考构建（启动器用它的有无来决定 HD 入口开不开，版本提示里也拿它举例）。
- * 校验本身只看前缀 `3.`，不钉补丁——Reforged 各补丁同属一条数据线。
+ * HD 的最低版本（启动器用它的有无来决定 HD 入口开不开，版本提示里也拿它举例）。
+ * 校验本身只看前缀 `3.`，不钉补丁——2.x 是上一代重制版美术（只有 `_HD.w3mod`），不再接受。
  */
-export const HD_REQUIRED_VERSION = "3.0.1";
+export const HD_REQUIRED_VERSION = "3.0";
 
 /** What to say about a folder that is the wrong build. One sentence, naming BOTH versions, so
  *  the player can see what they have as well as what is wanted. Shared by the load gate and by
@@ -66,15 +74,22 @@ export interface VersionVerdict {
   message: string;
 }
 
-/** Can the CLASSIC data line play this build? Only `1.3x` (1.30.4, 1.31.1, …): 1.31.1 is turned
- *  back into 1.30.4 by the mount, and older 1.2x builds are MPQ ones the content store refuses
- *  before this is asked. 3.x is Reforged and belongs to HD (see versionVerdict). */
+/** Can the CLASSIC data line play this build? `1.3x` (1.30.4, 1.31.1, …): 1.31.1 is turned back
+ *  into 1.30.4 by the mount. 1.2x is MPQ and has no version string; the gate refuses it as too
+ *  old. 2.x/3.x is Reforged and belongs to HD (see versionVerdict). */
 export const isSdVersion = (version: string | null): boolean =>
   !!version && version.startsWith(SD_VERSION_PREFIX);
 
+/** Can the REFORGED line play this build? 3.0 and above (3.0.0, 3.0.1, …). */
+export const isHdVersion = (version: string | null): boolean =>
+  !!version && HD_VERSION_PREFIXES.some((prefix) => version.startsWith(prefix));
+
+/** `war3.mpq` at the folder's root, in whatever case the disk spells it. */
+const BASE_MPQ = /(^|\\)war3\.mpq$/i;
+
 /** Check a picked folder before it is mounted. `f` is the flavor the launcher chose. */
 export function checkVersion(install: PickedInstall, f: GameFlavor = flavor()): VersionVerdict {
-  if (!isCascInstall(install.casc) && ![...install.files.keys()].some((k) => k.toLowerCase().endsWith(".mpq"))) {
+  if (!isCascInstall(install.casc) && ![...install.files.keys()].some((k) => BASE_MPQ.test(k))) {
     // Neither a content store nor an archive: not an old Warcraft III, not a Warcraft III at all
     // (or one whose data has gone). "Older than 1.30.4" would send the player to patch a folder
     // that has nothing in it to patch.
@@ -85,12 +100,20 @@ export function checkVersion(install: PickedInstall, f: GameFlavor = flavor()): 
     };
   }
   if (!isCascInstall(install.casc)) {
-    // No content store: this is an MPQ-era folder, i.e. older than 1.30 by construction. Said
-    // that way round because "no .build.info" means nothing to a player.
+    // No content store but a `war3.mpq`: an MPQ-era folder, which is the classic line before
+    // 1.30 by construction. The mount can read it, but nothing above the mount can: the menu,
+    // the tables and the script runtime are 1.30.4's. Refuse here, where the wording is.
+    if (f === "hd") {
+      return {
+        ok: false,
+        version: null,
+        message: t("gate.hdWrongVersion", { version: t("flavor.sd"), required: HD_REQUIRED_VERSION }),
+      };
+    }
     return {
       ok: false,
       version: null,
-      message: t("gate.oldVersion", { required: REQUIRED_VERSION }),
+      message: t("gate.sdTooOld", { required: REQUIRED_VERSION }),
     };
   }
   return versionVerdict(buildInfoVersion(install.casc.buildInfo), f);
@@ -104,20 +127,33 @@ export function checkVersion(install: PickedInstall, f: GameFlavor = flavor()): 
  * Its words must stay the ones `checkVersion` hands out, or the launcher would say a folder is
  * fine and the mount then refuse it.
  */
-export function versionVerdict(version: string | null, f: GameFlavor = flavor()): VersionVerdict {
+export function versionVerdict(
+  version: string | null,
+  f: GameFlavor = flavor(),
+  mpq = false,
+): VersionVerdict {
   if (f === "hd") {
-    // HD 走 Reforged 数据线：只看 `3.` 前缀（3.0.1 / 3.0.2 …），不钉补丁；未设置参考构建时
-    // 一律拒绝（HD 入口在启动器里灰着）。
+    // HD 走 Reforged 数据线：接受 `3.`（3.0 起），不钉补丁；未设置最低版本时一律拒绝
+    // （HD 入口在启动器里灰着）。
     if (!HD_REQUIRED_VERSION) return { ok: false, version, message: t("gate.hdUnavailable") };
-    if (!version || !version.startsWith(HD_VERSION_PREFIX)) {
+    if (!isHdVersion(version)) {
       return {
         ok: false,
         version,
-        message: t("gate.hdWrongVersion", { version: version ?? "?", required: "3.x" }),
+        message: t("gate.hdWrongVersion", {
+          version: version ?? t("flavor.sd"),
+          required: HD_REQUIRED_VERSION,
+        }),
       };
     }
     return { ok: true, version, message: "" };
   }
   if (isSdVersion(version)) return { ok: true, version, message: "" };
+  // An MPQ-era classic folder, asked by the launcher about a REMEMBERED folder: no
+  // `.build.info` exists to carry a version, and it is 1.2x by construction — refused, exactly
+  // as `checkVersion` refuses it.
+  if (mpq && version === null) {
+    return { ok: false, version, message: t("gate.sdTooOld", { required: REQUIRED_VERSION }) };
+  }
   return { ok: false, version, message: wrongVersionMessage(version) };
 }

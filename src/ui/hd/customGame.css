@@ -436,13 +436,6 @@
 .hd-official .GameLobbyDropdown.Official-Select .GameLobbyDropdown-Options { top: 38px; }
 .hd-official .GameLobbyDropdown.Official-Select .GameLobbyDropdown-Options > div { padding: 8px 12px; font-size: 15px; }
 
-/* A row whose seat is Open/Closed shows its race and handicap as unpressable plates. */
-.hd-official .GameLobby-PlayerRace.isDisabled .GameLobbyDropdown-Selected-Item,
-.hd-official .GameLobby-PlayerHandicap.isDisabled .GameLobbyDropdown-Selected-Item {
-  border-image-source: url(Widgets/Buttons/war3_btn_small_non-interactable_4k.png);
-  pointer-events: none;
-}
-
 .hd-official .GameLobbyDropdown-Options > div.isSelected { color: #ffd428; }
 
 /* ---------------------------------------------------------------- lobby page */
@@ -452,7 +445,9 @@
   width: 100%;
   height: 100%;
   min-height: 0;
-  padding: 18px 8px 30px;
+  /* The rows run to the panel's edges, so the body keeps them off the BaseFrame's metal art:
+     at 8px the handicap box sat against the border. */
+  padding: 18px 26px 30px;
   overflow-y: auto;
   z-index: 6;
   scrollbar-width: thin;
@@ -467,6 +462,8 @@
 }
 
 .hd-official .Official-TeamColumn { flex: 1 1 50%; min-width: 0; }
+/* A single-team map's section takes the whole page rather than half of it. */
+.hd-official .Official-TeamColumn:only-child { flex: 1 1 100%; }
 
 .hd-official .Official-TeamName {
   margin: 24px 0 8px 4px;
@@ -482,7 +479,13 @@
 
 .hd-official .Official-LobbyRow {
   display: grid;
-  grid-template-columns: 112px minmax(0, 1fr) 160px 108px;
+  /* The name is the column that must be readable: the three fixed ones are sized to their
+   * own contents (slot + colour plate, race, handicap), not to the widest they can be. At
+   * the old 112/160/108 a half-width team column left it about twenty pixels, and even
+   * `开放` wrapped and was cut. */
+  /* Race needs its full 160px: as a grid item its min-content width is the widest label plus
+   * the dropdown's caps, so a narrower track lets it spill under the handicap button. */
+  grid-template-columns: 112px minmax(0, 1fr) 160px 96px;
   align-items: center;
   width: 100%;
   height: 48px;

@@ -10,6 +10,7 @@ import {
   NEUTRAL_DOT_COLOR, SELF_DOT_COLOR, upkeepBandIndex, upkeepBands,
 } from "../data/gameplayConstants";
 import type { MinimapPing } from "../jass/runtime";
+import type { GestureStatus } from "./gesture/host";
 import { escapeHtml, wc3StripMarkup, wc3ToHtml } from "./wc3Text";
 import { t, displayHeroName } from "../i18n";
 import { DevToolsDrawer } from "./devTools";
@@ -141,6 +142,39 @@ export interface CommandButton {
   cooldownLeft?: number; // seconds remaining on the ability's cooldown (0/undefined = ready)
   cooldownFrac?: number; // remaining fraction 0..1 (drives the radial sweep)
   count?: number; // corner badge (0/undefined = none) — e.g. a hero's unspent skill points
+  /** 手势 HUD：这个按钮是「进入下一张卡」的入口（建造页 / 英雄技能页 / 法术书页），
+   *  不是命令本身。手势 HUD 把它们移出 12 槽命令环，排到攻击钮右侧的独立半弧。 */
+  submenu?: boolean;
+  /** 手势 HUD：英雄还有技能点、等级也够时，这里是 `learnSkill` 要的 ability id。
+   *  手势 HUD 在图标角上画一个小「+」，点它直接升级技能。 */
+  learnId?: string;
+}
+
+/** One run of identical jobs in a building's queue, head first. A queue slot stands for a
+ *  GROUP, not a single entry: Barracks queued three Footmen is one icon wearing a "3" — and
+ *  the × on it cancels the run's newest Footman, one press at a time. Entries merge only while
+ *  they are adjacent AND the same icon and kind; a mixed queue keeps its order. */
+interface QueueGroup {
+  icon: string;
+  kind: string;
+  headIndex: number; // the group's first entry in `queue`
+  lastIndex: number; // …its last — what a cancel press removes
+  count: number;
+  name: string;
+}
+
+function groupQueue(queue: ReadonlyArray<{ icon: string; name: string; kind: string }>): QueueGroup[] {
+  const out: QueueGroup[] = [];
+  queue.forEach((q, i) => {
+    const last = out[out.length - 1];
+    if (last && last.icon === q.icon && last.kind === q.kind) {
+      last.count += 1;
+      last.lastIndex = i;
+    } else {
+      out.push({ icon: q.icon, kind: q.kind, headIndex: i, lastIndex: i, count: 1, name: q.name });
+    }
+  });
+  return out;
 }
 
 /** One hero inventory slot (null = empty). */
@@ -216,6 +250,10 @@ export interface HudSelection {
   secondsLeft: number; // seconds left on the active job (for the progress label)
   queueLength: number;
   queueOwned: boolean; // the local player's own queue (an ally's is shown, not cancellable)
+  /** Whether this selection has an inventory at all (`HudDriver.inventory()` returning an
+   *  empty list is "none"). The classic console covers the six painted slots with
+   *  ConsoleInventoryCover; the gesture HUD hides them outright. */
+  hasInventory?: boolean;
   /** The queue, head first: each job's icon, name and `BuildJob` kind (unit / research /
    *  upgrade / revive — which verb the observer's readout words it with). */
   queue: Array<{ icon: string; name: string; kind: string; desc: string }>;
@@ -488,6 +526,12 @@ export interface HudDriver {
   useInventory(slot: number): void;
   /** Right-click an inventory slot: arm its drop/give targeting. */
   moveInventory(slot: number): void;
+  /** 手势 HUD 物品格右上角的「丢弃」：把该格物品直接丢在持有者脚边，不进入瞄准。 */
+  dropInventory(slot: number): void;
+  /** 正被「拿在手上」、还没落地的物品槽（右键 / 触屏长按拿起）；没有时 null。 */
+  carryingItem(): number | null;
+  /** 放回手上的物品、解除瞄准：触屏再长按同一格、双指轻点取消都走这一条。 */
+  cancelOrder(): void;
   /** Click a passenger's slot in the cargo panel: put that one off where the hold stands.
    *  False when it cannot be put down there (a Zeppelin over water) — nothing happens. */
   unloadCargo(hostId: number, passengerId: number): boolean;
@@ -1482,6 +1526,9 @@ export class GameHud {
   private queueSlots: HTMLDivElement[] = [];
   private queueTrainable = false; // status icon shows a training job (not construction)
   private queueCancellable = false; // …and the queue is the local player's own, so a click cancels it
+  private statusSweep!: HTMLSpanElement; // radial progress drawn inside the in-progress icon
+  private statusCount!: HTMLSpanElement; // count of the collapsed run the head icon stands for
+  private statusCancel!: HTMLButtonElement; // the × at the in-progress icon's top-right
   // The cargo panel: one pocket per seat of the selected hold, rebuilt when the seat count
   // changes and refreshed in place every frame (docs/transports.md).
   private cargoGrid!: HTMLDivElement;
@@ -1562,6 +1609,8 @@ export class GameHud {
   private invCount: HTMLSpanElement[] = []; // per-slot charge count badge
   private invCdOverlay: HTMLDivElement[] = []; // per-slot radial cooldown sweep
   private invCdText: HTMLSpanElement[] = []; // per-slot cooldown seconds count
+  /** 手势界面专属的「丢弃」小钮（每格一个，右上角；经典 HUD 由 CSS 隐藏）。 */
+  private invDrop: HTMLSpanElement[] = [];
   private invKey = "";
   /** The `UI-ModalButtonOn.mdx` sparkle, simulated once and blitted onto every lit button. */
   private modalFx!: ModalButtonFx;
@@ -2201,11 +2250,47 @@ export class GameHud {
   }
 
   /** 手势 HUD（ui/gesture/hud.ts）的读数出口：与经典控制台同一个 driver，不另建状态源。 */
-  gestureStatus(): {
-    gold: number; lumber: number; foodUsed: number; foodMax: number;
-    selection: HudSelection | null;
-  } {
-    return { ...this.driver.resources(), selection: this.driver.selection() };
+  gestureStatus(): GestureStatus {
+    // Gold and lumber are FLOATS in the simulation — mining trickles in per tick, upkeep and
+    // bounties scale by fractions — so the raw numbers can be 32.692999999999996. The game
+    // only ever shows whole resources (the classic bar does the same `Math.floor` at 4284),
+    // so the gesture HUD's readout is floored here, at the one place it is handed out.
+    const r = this.driver.resources();
+    const sel = this.driver.selection();
+    return {
+      gold: Math.floor(r.gold),
+      lumber: Math.floor(r.lumber),
+      foodUsed: Math.floor(r.foodUsed),
+      foodMax: r.foodMax,
+      // `inventory()` 返回空数组就是「没有物品栏」（见 HudDriver.inventory）；手势 HUD 靠
+      // 这个标记决定画不画那六格。
+      selection: sel ? {
+        ...sel,
+        // 货舱里的是安装内的 BLP 路径（`ReplaceableTextures\CommandButtons\BTNWisp.blp`），
+        // 不是 URL：经典面板画货舱时都先过一遍 `blpUrl`（renderCargo），手势 HUD 的
+        // 小头像也必须走同一条，否则 background-image 直接 404，只剩一排空格子。
+        cargo: sel.cargo.map((c) => ({
+          ...c,
+          icon: (c.icon && this.driver.blpUrl(c.icon)) || "",
+          disIcon: c.disIcon ? this.driver.blpUrl(c.disIcon) : null,
+        })),
+        // 生产队列里的图标同样是 BLP 路径（训练单位 / 研究的 Art），手势 HUD 用它画
+        // 一排可点的队列图标，和货舱一样先换成 URL。
+        queue: sel.queue.map((q) => ({ ...q, icon: (q.icon && this.driver.blpUrl(q.icon)) || "" })),
+        hasInventory: this.driver.inventory().length > 0,
+        // 手势 HUD 的「说明」面板：把物品栏里每件东西的名字和正文一起交出去。
+        // `HudInvSlot.icon` 已经是 data URL，不用再过 blpUrl。
+        items: this.driver.inventory()
+          .filter((s): s is HudInvSlot => !!s)
+          .map((s) => ({ name: s.name, desc: s.desc, icon: s.icon ?? "" })),
+      } : null,
+    };
+  }
+
+  /** 手势 HUD 的货舱图标：把一个乘客放到载具 / 金矿脚下。与经典控制台点货舱格子
+   *  走同一条 driver 通道（`unloadCargo`），不新增 Command。 */
+  unloadCargo(hostId: number, passengerId: number): boolean {
+    return this.driver.unloadCargo(hostId, passengerId);
   }
 
   /** Keep the portrait on screen for a speaker who is not the selection — a transmission during
@@ -3417,6 +3502,28 @@ export class GameHud {
     this.statusIcon.onclick = () => {
       if (this.queueCancellable) this.driver.runCommand("cancelqueue:0");
     };
+    // Three layers ON the in-progress icon: a radial sweep showing the job's own fraction
+    // (the bar under the label says the same thing in seconds — the sweep says it at a
+    // glance), the count when the icon stands for a run of identical units, and the × at
+    // the top-right corner that takes the job back. The corner is where the reference puts
+    // cancel; the icon itself stays a cancel target as well, for muscle memory.
+    this.statusSweep = document.createElement("span");
+    this.statusSweep.className = "hud-q-sweep";
+    this.statusCount = document.createElement("span");
+    this.statusCount.className = "hud-q-count";
+    this.statusCount.hidden = true;
+    this.statusCount.setAttribute("aria-hidden", "true");
+    this.statusCancel = document.createElement("button");
+    this.statusCancel.type = "button";
+    this.statusCancel.className = "hud-q-cancel";
+    this.statusCancel.textContent = "×";
+    this.statusCancel.hidden = true;
+    this.statusCancel.setAttribute("aria-label", t("hud.cancel"));
+    this.statusCancel.onclick = (e) => {
+      e.stopPropagation();
+      if (this.queueCancellable) this.driver.runCommand("cancelqueue:0");
+    };
+    this.statusIcon.append(this.statusSweep, this.statusCount, this.statusCancel);
     this.bindQueueTooltip(this.statusIcon, 0);
     // The builder's button, under the building's own icon. An Orc peon builds from INSIDE the
     // structure, so while it is up there is no peon on the terrain to click — this is how you
@@ -3451,16 +3558,49 @@ export class GameHud {
     for (let i = 0; i < 6; i++) {
       const slot = document.createElement("div");
       slot.className = "hud-queue-slot";
-      // Queue slots hold positions 2..7 → queue indices 1..6. Clicking a filled
-      // slot cancels that unit and refunds it.
-      slot.onclick = () => {
-        if (this.queueCancellable && slot.classList.contains("filled")) this.driver.runCommand(`cancelqueue:${i + 1}`);
+      // The placeholder console's own 2…7; the skinned art paints them into the frame, and
+      // `.hud-queue-slot { color: transparent }` keeps ours out of the way there.
+      const num = document.createElement("span");
+      num.className = "hud-q-num";
+      num.textContent = String(i + 2);
+      // A run of the same unit collapses into one slot: its count sits in the middle.
+      const count = document.createElement("span");
+      count.className = "hud-q-count";
+      count.hidden = true;
+      count.setAttribute("aria-hidden", "true");
+      // …and the × at the top-right takes the run's newest entry back, one press a unit.
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "hud-q-cancel";
+      cancel.textContent = "×";
+      cancel.hidden = true;
+      cancel.setAttribute("aria-label", t("hud.cancel"));
+      cancel.onclick = (e) => {
+        e.stopPropagation();
+        const idx = Number(slot.dataset.queueIndex ?? 0);
+        if (this.queueCancellable && idx > 0) this.driver.runCommand(`cancelqueue:${idx}`);
       };
+      // Queue slots hold positions 2..7 → queue indices 1..6. A slot now stands for a RUN of
+      // identical entries, so it cancels the run's LAST one (clicking repeatedly walks back
+      // through the run, exactly as cancelling the separate slots used to).
+      slot.onclick = () => {
+        const idx = Number(slot.dataset.queueIndex ?? 0);
+        if (this.queueCancellable && slot.classList.contains("filled") && idx > 0) {
+          this.driver.runCommand(`cancelqueue:${idx}`);
+        }
+      };
+      slot.append(num, count, cancel);
       this.bindQueueTooltip(slot, i + 1);
       this.queueSlots.push(slot);
       this.queueRow.appendChild(slot);
     }
-    this.progressWrap.append(statusLine, track, this.queueRow);
+    // HD's queue backdrop paints a red ⊘ in the band left of the big slot — Reforged's own
+    // cancel affordance. Cancel now lives at the icon's top-right, so this narrow strip in
+    // the console's colour presses that glyph out. It sits under the icons and only shows
+    // with the skinned console (style.css).
+    const queueMask = document.createElement("div");
+    queueMask.className = "hud-q-mask";
+    this.progressWrap.append(statusLine, track, this.queueRow, queueMask);
 
     // Sub-line (hero level) and the stat rows: attack/armor with their type
     // icons, and hero STR/AGI/INT with attribute icons — all real WC3 infocard
@@ -3608,6 +3748,7 @@ export class GameHud {
     this.invCount = [];
     this.invCdOverlay = [];
     this.invCdText = [];
+    this.invDrop = [];
     for (let i = 0; i < 6; i++) {
       const btn = document.createElement("button");
       btn.className = "hud-slot hud-inv-slot empty";
@@ -3620,7 +3761,24 @@ export class GameHud {
       cdText.className = "hud-cmd-cd-text";
       cd.appendChild(cdText);
       const count = countBadge();
-      btn.append(cd, count);
+      // 触屏没有右键：物品格右上角的「×」一步把东西丢在脚下（只在手势界面显示，
+      // 由 CSS 按 #gesture-stage.gesture-on 控制）。用 span 而不是嵌套 button——
+      // 物品格本身就是 <button>，嵌套按钮是非法结构。所有指针事件都停在这里，
+      // 免得顺带触发格子的“使用 / 拿起”。
+      const drop = document.createElement("span");
+      drop.className = "hud-inv-drop";
+      drop.setAttribute("role", "button");
+      drop.setAttribute("aria-label", t("hud.dropItem"));
+      drop.textContent = "×";
+      drop.hidden = true;
+      for (const ev of ["pointerdown", "pointerup", "click"]) {
+        drop.addEventListener(ev, (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (ev === "click" && !drop.hidden) this.driver.dropInventory(i);
+        });
+      }
+      btn.append(cd, count, drop);
       // Both meanings through `onPress`, so the pocket sinks under EITHER button and the
       // item leaves on the release — the same reason the hero bar's portraits and the
       // autocast buttons do it, and the same bug when they did not: a right-click hung off
@@ -3628,6 +3786,17 @@ export class GameHud {
       // never moved. `contextmenu` keeps the menu off it and nothing else.
       onPress(btn, () => this.driver.useInventory(i), () => this.driver.moveInventory(i));
       btn.oncontextmenu = (e) => e.preventDefault();
+      // 触屏没有右键：长按物品格 = 右键。拿起之后，轻点地面是丢下、轻点友方单位是交给他、
+      // 轻点商店是卖掉（世界里的轻点走手势层的「落地」分支）；再长按同一格放回。
+      onLongPress(btn, () => {
+        const carrying = this.driver.carryingItem();
+        if (carrying !== null) {
+          if (carrying === i) this.driver.cancelOrder(); // 放回手上这一件
+          return;
+        }
+        if (!this.driver.inventory()[i]) return; // 空格子没有东西可拿
+        this.driver.moveInventory(i);
+      });
       // Drag an item OUT of the pocket and onto another hero's button in the top-left bar to
       // hand it over. The slot index is the whole payload; where it lands decides what
       // happens (see the hero bar's `drop`). Only a slot holding something can be dragged —
@@ -3648,6 +3817,7 @@ export class GameHud {
       this.invCount.push(count);
       this.invCdOverlay.push(cd);
       this.invCdText.push(cdText);
+      this.invDrop.push(drop);
     }
     inv.appendChild(grid);
     return inv;
@@ -3752,10 +3922,13 @@ export class GameHud {
         btn.classList.add("empty");
         btn.style.backgroundImage = "";
         btn.draggable = false; // nothing in the pocket to drag onto a hero's portrait
+        this.invDrop[i].hidden = true;
         setCount(this.invCount[i], "");
         continue;
       }
       btn.classList.remove("empty");
+      // 商店老板的物品格（patronView）只能看不能动，丢弃钮也不出现。
+      this.invDrop[i].hidden = !!s.patronView;
       btn.classList.toggle("disabled", s.disabled);
       btn.classList.toggle("patron-view", !!s.patronView);
       btn.style.backgroundImage = s.icon ? `url(${s.icon})` : "";
@@ -4289,6 +4462,16 @@ export class GameHud {
         this.statusLabel.textContent = `${verb} (${secs}s)`;
         const frac = Math.max(0, Math.min(1, constructing ? sel.buildProgress : sel.trainProgress));
         this.progressFill.style.width = `${frac * 100}%`;
+        // The same fraction, ON the icon: `.hud-q-sweep` reads `--q-progress` and darkens the
+        // part still to go. The head icon is the queue's first run (construction has none).
+        this.statusIcon.style.setProperty("--q-progress", String(frac));
+        const groups = groupQueue(sel.queue);
+        const headGroup = constructing ? undefined : groups[0];
+        const headCount = headGroup && headGroup.count > 1 ? String(headGroup.count) : "";
+        this.statusCount.textContent = headCount;
+        this.statusCount.hidden = !headCount;
+        // A construction has no × either: cancelling a building is the command card's Cancel.
+        this.statusCancel.hidden = !cancellable;
         // Status icon: the building (constructing) or the unit being trained.
         // Only a training job's icon is click-to-cancel (construction has its own
         // Cancel button), and only on the local player's own building — queueCancellable (set
@@ -4301,6 +4484,7 @@ export class GameHud {
         if (this.queueTipped !== cancellable) {
           this.queueTipped = cancellable;
           setGameTip(this.statusIcon, cancellable ? t("hud.cancel") : null);
+          setGameTip(this.statusCancel, cancellable ? t("hud.cancel") : null);
         }
         // The peon walled into the site (Orc only — nothing else builds from inside), as a
         // button that selects it. Its art is the icon's own, frame included, so there is no
@@ -4308,28 +4492,39 @@ export class GameHud {
         const bUrl = sel.builderId && sel.builderIcon ? this.driver.blpUrl(sel.builderIcon) : null;
         this.builderBtn.hidden = !bUrl;
         this.builderBtn.style.backgroundImage = bUrl ? `url(${bUrl})` : "";
-        // Queue slots hold positions 2..7 (the current unit is above the bar).
+        // Queue slots hold positions 2..7 (the current unit is above the bar). Each slot is a
+        // RUN of identical jobs now, so it carries the run's icon, its count, and an × that
+        // takes the run's newest entry back.
         this.queueRow.hidden = !training;
         if (training) {
-          const rest = sel.queue.slice(1);
+          const rest = groups.slice(1);
           this.queueSlots.forEach((slot, i) => {
-            const q = rest[i];
-            const qUrl = q?.icon ? this.driver.blpUrl(q.icon) : null;
+            const g = rest[i];
+            const qUrl = g?.icon ? this.driver.blpUrl(g.icon) : null;
+            const num = slot.querySelector<HTMLElement>(".hud-q-num")!;
+            const count = slot.querySelector<HTMLElement>(".hud-q-count")!;
+            const cancel = slot.querySelector<HTMLButtonElement>(".hud-q-cancel")!;
             // A filled slot is a cancel button exactly as the status icon is, and says so at
             // the cursor; an empty one is a number and says nothing, and so does an ally's.
             const tip = !!qUrl && cancellable;
+            slot.dataset.queueIndex = g && qUrl ? String(g.lastIndex + 1) : "0";
+            num.hidden = !!qUrl; // the placeholder's 2…7 only marks an EMPTY slot
             if (tip !== slot.classList.contains("clickable")) {
               slot.classList.toggle("clickable", tip);
               setGameTip(slot, tip ? t("hud.cancel") : null);
             }
-            if (qUrl) {
+            cancel.hidden = !tip;
+            if (g && qUrl) {
               slot.style.backgroundImage = `url(${qUrl})`;
-              slot.textContent = "";
               slot.classList.add("filled");
+              const n = g.count > 1 ? String(g.count) : "";
+              count.textContent = n;
+              count.hidden = !n;
             } else {
               slot.style.backgroundImage = "";
-              slot.textContent = String(i + 2);
               slot.classList.remove("filled");
+              count.textContent = "";
+              count.hidden = true;
             }
           });
         }
@@ -4711,7 +4906,10 @@ export class GameHud {
       this.cmdTooltip.hidden = true;
       return;
     }
-    const job = this.queueTrainable ? this.driver.selection()?.queue[index] : undefined;
+    // A slot stands for a RUN of jobs, so the hover's slot position has to be translated back
+    // into the queue index the slot currently cancels (or, for the head, index 0).
+    const jobIndex = index === 0 ? 0 : Number(this.queueSlots[index - 1]?.dataset.queueIndex ?? index);
+    const job = this.queueTrainable ? this.driver.selection()?.queue[jobIndex] : undefined;
     if (!job) {
       this.cmdTooltip.hidden = true;
       return;
@@ -5431,6 +5629,45 @@ function onPress(
     setPressed(null);
     forButton(e.button)?.(e);
   };
+}
+
+/**
+ * 触屏上的「右键」：按住 450ms 触发一次，之后这一串指针不再触发按下时的左键含义。
+ *
+ * 桌面的右键在这里没有对应物（触摸没有第二个键），所以物品格的长按就是右键：拿起要丢下 /
+ * 交给别人的物品。手指一移动超过容差就作废（那是滚动或框选），鼠标 / 笔的按压不算长按。
+ * 触发时 `setPressed(null)`：抬手时 `onPress` 会看到「按下的不是这个元素」而跳过左键含义，
+ * 否则放下物品的同时又把它用掉。
+ */
+function onLongPress(el: HTMLElement, fn: () => void, ms = 450): void {
+  let timer = 0;
+  let startX = 0;
+  let startY = 0;
+  let pointerId = -1;
+  const cancel = (): void => {
+    if (timer) window.clearTimeout(timer);
+    timer = 0;
+    pointerId = -1;
+  };
+  el.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+    cancel();
+    pointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    timer = window.setTimeout(() => {
+      timer = 0;
+      pointerId = -1;
+      setPressed(null); // 抬手不再走左键：这一次按压已经被长按用掉了
+      fn();
+    }, ms);
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== pointerId) return;
+    if (Math.abs(e.clientX - startX) > 12 || Math.abs(e.clientY - startY) > 12) cancel();
+  });
+  el.addEventListener("pointerup", cancel);
+  el.addEventListener("pointercancel", cancel);
 }
 
 /**

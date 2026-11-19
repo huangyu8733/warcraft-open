@@ -156,6 +156,9 @@ export async function mountHdSkirmish(
   // --- the map list ---------------------------------------------------------------------
   const listPane = el("div", "Official-CreateListPane");
   const list = el("div", "Official-List");
+  // One column of file names, not the lobby's three-column table: takes out the two empty
+  // cells the row builder always emits and lets long names wrap (official.css).
+  list.classList.add("Official-FileList");
   const listFade = el("div", "Official-List-BottomFade");
   listPane.append(list, listFade);
   body.appendChild(listPane);
@@ -193,7 +196,7 @@ export async function mountHdSkirmish(
   });
 
   const rescale = (): void => {
-    const zoom = String(Math.max(0.5, window.innerHeight / 1080));
+    const zoom = String(Math.max(0.25, window.innerHeight / 1080));
     root.style.zoom = zoom;
     back.style.zoom = zoom;
   };
@@ -235,6 +238,11 @@ export async function mountHdSkirmish(
   return screen.attach(container);
 
   // --- the folder browser ---------------------------------------------------------------
+  /** A folder or map's name in this list: two lines, then an ellipsis. */
+  function nameCell(name: string): HTMLElement {
+    return el("span", "Official-FileName", name);
+  }
+
   function paintFiles(): void {
     list.textContent = "";
     const { folders, files } = browseFolder(entries, folder, "\\");
@@ -250,7 +258,7 @@ export async function mountHdSkirmish(
     for (const name of folders) {
       if (needle && !name.toLowerCase().includes(needle)) continue;
       list.appendChild(
-        listRow([name, "", ""], () => {
+        listRow([nameCell(name), "", ""], () => {
           folder = folder ? `${folder}\\${name}` : name;
           paintFiles();
         }, { icon: "folder" }),
@@ -259,7 +267,7 @@ export async function mountHdSkirmish(
     files.sort((a, b) => baseName(a).localeCompare(baseName(b)));
     for (const path of files) {
       if (needle && !baseName(path).toLowerCase().includes(needle)) continue;
-      const row = listRow([baseName(path), "", ""], () => {
+      const row = listRow([nameCell(baseName(path)), "", ""], () => {
         void choose(path);
       }, { icon: "map", selected: picked?.path === path });
       row.dataset.mapPath = path;

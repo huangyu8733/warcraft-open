@@ -215,6 +215,14 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
     const f = func.getRow(id) as Row | undefined;
     const s = strs.getRow(id) as Row | undefined;
     const skinRow = skin.getRow(id) as Row | undefined;
+    // Icon/Buttonpos can arrive in either profile file: stock splits them (Func has the face,
+    // Strings the name), while a W3x2Lni "slk" map folds both into `ItemStrings.txt` and ships
+    // an EMPTY `ItemFunc.txt` — 人族无敌 is one, and without this every shop had nameless blank
+    // buttons. Strings first, the map's profile being the authority.
+    const prof: Row = {
+      string: (key: string): string | undefined =>
+        (s ? s.string(key) : undefined) || (f ? f.string(key) : undefined),
+    };
     // `ItemData.slk`'s own art columns are the SD (1.30) source and win when present; Reforged's
     // `itemSkin.txt` supplies them otherwise. Same precedence and same per-art key chain as
     // `units.ts`'s `unitSkin.txt` read.
@@ -225,7 +233,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
     // not have renders NOTHING, so keep the old chest fallback rather than lose the item.
     const artModel = itemModel(rawFile);
     const model = rawFile && vfs.exists(artModel) ? artModel : itemModel("");
-    const [bx, by] = buttonPos(f ? str(f, "Buttonpos") : "");
+    const [bx, by] = buttonPos(str(prof, "Buttonpos"));
     const abilities = (str(r, "abilList") || "")
       .split(",")
       .map((a) => a.trim())
@@ -235,7 +243,7 @@ export function loadItemRegistry(vfs: DataSource): ItemRegistry {
       name: (s && str(s, "Name")) || id,
       description: rawTip(s ? str(s, "Ubertip") : ""),
       summary: rawTip(s ? str(s, "Description") : ""),
-      icon: f ? str(f, "Art") : "",
+      icon: str(prof, "Art"),
       tip: rawTip(s ? str(s, "Tip") : ""),
       hotkey: s ? str(s, "Hotkey") : "",
       buttonX: bx,

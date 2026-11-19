@@ -189,10 +189,18 @@ export default class MpqFile {
     const data = this.rawBuffer;
     const flags = block.flags;
 
-    // One buffer of raw data.
-    // I don't know why having no flags means it's a chunk of memory rather than sectors.
-    // After all, there is no flag to say there are indeed sectors.
-    if (flags === FILE_EXISTS) {
+    // OpenWar3: a ZERO-byte file is a legal answer, not a broken one. W3x2Lni's "slk" maps
+    // replace the game's `Units\*Strings.txt` / `*Func.txt` with empty files (an empty profile
+    // means "no overrides", see src/vfs/mapTables.ts), and they are stored as
+    // FILE_COMPRESSED with no data at all. The sectored path below would then ask for
+    // `sectorCount + 1` offsets over a 0-byte buffer and throw "Invalid typed array length",
+    // which killed the whole map load — the black screen. Empty in, empty out.
+    if (block.normalSize === 0) {
+      this.buffer = new Uint8Array(0);
+    } else if (flags === FILE_EXISTS) {
+      // One buffer of raw data.
+      // I don't know why having no flags means it's a chunk of memory rather than sectors.
+      // After all, there is no flag to say there are indeed sectors.
       this.buffer = data.slice(0, block.normalSize);
     } else if (flags & FILE_SINGLE_UNIT) {
       // One buffer of possibly encrypted and/or compressed data.

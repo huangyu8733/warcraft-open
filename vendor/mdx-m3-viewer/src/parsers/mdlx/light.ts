@@ -76,8 +76,16 @@ export default class Light extends GenericObject {
       stream.skip(28);
     }
 
-    if (!animationsFirst) {
-      this.readAnimations(stream, size - (stream.index - start));
+    // The generic block's own size only bounds ITS animations (KGRT etc.), never the light's:
+    // a classic v800 light carries KGRT inside the node and then KLAC/KLBC/… AFTER the static
+    // fields. Those used to be skipped whenever the node came first, so the caller read KLAC's
+    // bytes as the next object's tag and the model failed with "Unknown animation tag".
+    // Counting to the object's inclusive size is the only bound that holds for both layouts
+    // (and readAnimations rewinds on a non-tag, so a short/generous bound is safe).
+    const remaining = start + size - stream.index;
+
+    if (remaining > 0) {
+      this.readAnimations(stream, remaining);
     }
   }
 

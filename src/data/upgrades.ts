@@ -152,7 +152,15 @@ export function loadUpgradeRegistry(vfs: DataSource): UpgradeRegistry {
   const defs = new Map<string, UpgradeDef>();
   const bytes = vfs.rawBytes("Units\\UpgradeData.slk");
   if (!bytes) return new UpgradeRegistry(defs);
-  const data = new MappedData(decodeGameText(bytes));
+  const text = decodeGameText(bytes);
+  const data = new MappedData(text);
+  // Stock data always carries a `race` column and uses a blank race to mark its header/scratch
+  // rows and cut upgrades. A W3x2Lni "slk" map drops the column outright — 人族无敌's
+  // UpgradeData.slk has 136 live rows and no `race` at all — so the absence of the column is
+  // itself the tell that every row is a map-authored upgrade. Testing the value alone dropped
+  // all 136 (0 loaded): the map's research buttons vanished and every script
+  // `SetPlayerTechResearched` (R007 armour/HP included) had no definition to apply.
+  const hasRaceColumn = /K"race"/i.test(text);
 
   const funcs = new MappedData();
   for (const p of UPGRADE_FUNC_FILES) {
@@ -173,12 +181,22 @@ export function loadUpgradeRegistry(vfs: DataSource): UpgradeRegistry {
     const r = data.getRow(id) as Row | undefined;
     if (!r) continue;
     // `used` is Blizzard's own "is this live in the game" flag; the header/scratch rows and
-    // the cut upgrades have no race and never reach a command card.
+    // the cut upgrades have no race and never reach a command card. Only judge by race where
+    // the column exists at all — a map-authored table without one (see above) has no blank
+    // sentinel to read.
     const race = str(r, "race");
-    if (!race) continue;
+    if (!race && hasRaceColumn) continue;
 
     const f = funcs.getRow(id) as Row | undefined;
     const s = strs.getRow(id) as Row | undefined;
+    // Art/Buttonpos can arrive in either profile file: stock splits them (Func has the icon,
+    // Strings the name), while a W3x2Lni "slk" map folds both into `*UpgradeStrings.txt` and
+    // ships EMPTY `*UpgradeFunc.txt` files — 人族无敌 is one, and without this every research
+    // button had a name and no face. Strings first, the map's profile being the authority.
+    const prof: Row = {
+      string: (key: string): string | undefined =>
+        (s ? s.string(key) : undefined) || (f ? f.string(key) : undefined),
+    };
 
     const effects: UpgradeEffect[] = [];
     for (const n of [1, 2, 3, 4]) {
@@ -196,7 +214,7 @@ export function loadUpgradeRegistry(vfs: DataSource): UpgradeRegistry {
       });
     }
 
-    const [bx, by] = buttonPos(f ? str(f, "buttonpos") : "");
+    const [bx, by] = buttonPos(str(prof, "buttonpos"));
     defs.set(id, {
       id,
       race,
@@ -213,7 +231,7 @@ export function loadUpgradeRegistry(vfs: DataSource): UpgradeRegistry {
       tips: csv(s, "Tip"),
       uberTips: quotedList(s, "Ubertip"),
       hotkeys: csv(s, "Hotkey"),
-      icons: csv(f, "Art"),
+      icons: csv(prof, "Art"),
       buttonX: bx,
       buttonY: by,
     });

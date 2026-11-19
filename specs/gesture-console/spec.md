@@ -69,3 +69,60 @@ Android 侧的存档 / 回放 / 自定义快捷键写入桥。
 pnpm typecheck
 pnpm gesture:test
 ```
+
+## 8. 退出对局 / 退出程序时收起手势面板（2026-11-19）
+
+### 缺陷
+
+F10 菜单的「退出游戏」`onEndGame` → `leave(true)`、「退出程序」`onExitProgram` →
+`leave(false)`，最终都经 `main.ts` 的 `exitToMenu()` → `endMatch()`。`endMatch()` 里
+`MapViewerScene.dispose()` 会调用 `setGestureHost(null)`，理论上经
+`onGestureHostChange` → `syncGestureConsole()` 把 `hudMode` 算成 false 并卸载
+`#gesture-hud`、隐藏 `#gesture-stage`。但实测退出后手势面板仍在，说明这条时序不可靠
+（`in-game` class 仍挂着、或退出程序旁路没有经过一次宿主变更）。
+
+### 方案（decision-complete）
+
+1. `src/ui/gesture/index.ts` 新增并导出：
+
+   ```ts
+   /** 一局结束 / 回主菜单 / 退出程序：立刻收起替代 HUD 与常驻控件。 */
+   export function endGestureMatch(): void {
+     // 先让常驻控件按当前状态同步一次（宿主已卸下时会自动隐藏）。
+     syncGestureConsole();
+     // 最后强制卸载：即使 body 上 in-game 还在、或某条旁路没触发宿主变更，也一定收掉。
+     setGestureUiActive(false);
+   }
+   ```
+
+   `setGestureUiActive(false)` 已在 `hud.ts` 中实现为
+   `stopPolling(); releaseAll(); unmount(); document.body.classList.remove("gesture-ui")`，
+   会移除 `#gesture-hud`（含说明浮层）与 `gesture-ui` class。
+
+2. `src/main.ts`：
+   - 第 68 行 import 改为包含 `endGestureMatch`。
+   - `endMatch()` 中 `mapScene = null;` 之后调用 `endGestureMatch();`。
+     `endMatch()` 同时服务「退出游戏」「退出程序」「回主菜单」与关卡切换
+     （`changeLevel`）；新一局装上宿主后 `syncGestureConsole()` 会按需重新挂载 HUD，
+     因此这里强制卸载不会影响下一局。
+
+3. 不改 `MapViewerScene.dispose()` 的既有 `setGestureHost(null)`；它保留为第一道清理。
+
+### 范围外
+
+右上角 `#gesture-toggle`（手势总开关）是菜单里的入口，退出对局后保留，不清理。
+
+### 验收
+
+```bash
+npx tsc --noEmit
+npx tsc -p tsconfig.node.json
+node tools/gesture-action-test.cjs
+node tools/gesture-flavor-test.cjs
+node tools/gesture-intent-test.cjs
+npm run --silent build:web
+```
+
+手动：对局中打开手势 → Esc →「退出游戏」→ 主菜单下 `#gesture-hud` 不存在、
+`#gesture-stage` 隐藏、`body` 无 `gesture-ui`；再进一局 HUD 正常出现。
+部署后用入口 hash 与线上文件比对。

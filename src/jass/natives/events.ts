@@ -15,7 +15,7 @@
 // advanceTime. Registration here + firing there keeps natives free of the eval loop.
 
 import { playerStateHolds, ThreadAbort, unitStateHolds, type BoolExpr, type NativeCtx, type Runtime, type TimerObj, type TriggerObj, type TriggerReg } from "../runtime";
-import { asNum, jBool, jHandle, jInt, JNULL, jReal, type JassValue } from "../values";
+import { asNum, jBool, jHandle, jInt, JNULL, jReal, jStr, type JassValue } from "../values";
 import { ATTACK_TYPES } from "../../data/unitFieldCodes";
 import type { AttackType } from "../../data/enums";
 
@@ -118,6 +118,13 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "DestroyCondition", () => JNULL);
   def(rt, "DestroyFilter", () => JNULL);
 
+  // --- 网易 DzAPI 的通用数据请求（RequestExtra*）---------------------------
+  // 10 张图通过它们包一层存档/商城接口。平台不存在时原版同样给出空值；这里返回
+  // 类型默认值（false/0/""），让封装层的 `if` 走"没有数据"分支，绝不伪造存档。
+  def(rt, "RequestExtraBooleanData", () => jBool(false));
+  def(rt, "RequestExtraIntegerData", () => jInt(0));
+  def(rt, "RequestExtraStringData", () => jStr(""));
+
   // --- event registration → recorded for the dispatcher (runtime.triggerRegs) ---
   const register = (c: NativeCtx, kind: string, a: JassValue[]): JassValue => {
     const t = trig(c, a[0]);
@@ -150,6 +157,10 @@ export function registerEventNatives(rt: Runtime): void {
     // raw and judged at dispatch (Interpreter.firePlayerChat), because the match depends on
     // what was actually said and `exactMatchOnly` decides whether it is equality or a prefix.
     TriggerRegisterPlayerChatEvent: "playerChat",
+    // TriggerRegisterPlayerAllianceChange(trigger, whichPlayer, whichAlliance) — 监视该玩家
+    // 与任意玩家的指定 alliance 位变化。params 原样保存 [player, alliance]，由
+    // SetPlayerAlliance 在真正改变矩阵后 fireEvent 匹配（vision.ts）。
+    TriggerRegisterPlayerAllianceChange: "playerAlliance",
   };
   for (const [name, kind] of Object.entries(REG_KINDS)) def(rt, name, (c, a) => register(c, kind, a));
   // TriggerRegisterUnitStateEvent needs one extra step: EVENT_UNIT_STATE_LIMIT is the one
@@ -211,6 +222,17 @@ export function registerEventNatives(rt: Runtime): void {
   // is. Null when nothing fired it (a `TriggerExecute` has no event), as in the game.
   def(rt, "GetTriggerEventId", (c) => resp(c, "TriggerEventId"));
   def(rt, "GetTriggerUnit", (c) => resp(c, "TriggerUnit"));
+  // GetEventTargetUnit — "当前事件的目标单位" 的通用读取。我们的泵按事件种类分开写
+  // OrderTargetUnit / SpellTargetUnit；这里按优先级回退，让只认通用名字的脚本
+  // （守卫剑阁 49 处）也能读到同一个单位。不新增响应键，避免改变既有事件语义。
+  def(rt, "GetEventTargetUnit", (c) => {
+    const direct = resp(c, "EventTargetUnit");
+    if (direct.k === "handle") return direct;
+    const order = resp(c, "OrderTargetUnit");
+    if (order.k === "handle") return order;
+    const spell = resp(c, "SpellTargetUnit");
+    return spell.k === "handle" ? spell : JNULL;
+  });
   def(rt, "GetEnteringUnit", (c) => resp(c, "EnteringUnit"));
   def(rt, "GetLeavingUnit", (c) => resp(c, "LeavingUnit"));
   def(rt, "GetDyingUnit", (c) => resp(c, "DyingUnit"));
@@ -231,6 +253,8 @@ export function registerEventNatives(rt: Runtime): void {
   def(rt, "GetLoadedUnit", (c) => resp(c, "LoadedUnit"));
   def(rt, "GetTransportUnit", (c) => resp(c, "TransportUnit"));
   def(rt, "GetFilterUnit", (c) => resp(c, "FilterUnit")); // set during enter/enum boolexpr filters
+  // 触发本次事件（进入/离开区域）的区域。区域泵只传单位响应，未设置时为 null。
+  def(rt, "GetTriggeringRegion", (c) => resp(c, "TriggeringRegion"));
   def(rt, "GetEventDamageSource", (c) => resp(c, "EventDamageSource")); // EVENT_UNIT_DAMAGED
   // EVENT_(PLAYER_)UNIT_SUMMON — the new unit, and the one that spawned it (Interpreter.pumpSummonEvents).
   def(rt, "GetSummonedUnit", (c) => resp(c, "SummonedUnit"));
@@ -335,6 +359,9 @@ export function registerEventNatives(rt: Runtime): void {
   });
   def(rt, "GetOrderTargetItem", (c) => resp(c, "OrderTargetItem"));
   def(rt, "GetOrderTargetUnit", (c) => resp(c, "OrderTargetUnit"));
+  // 命令目标的可破坏物：当前命令泵只携带单位/物品，未设置时为 null。
+  // 注册它至少让脚本拿到"空"而不是"未实现"，也不会误把单位当可破坏物。
+  def(rt, "GetOrderTargetDestructable", (c) => resp(c, "OrderTargetDestructable"));
   // The WIDGET-KIND refinement: an order aimed at an ITEM answers that handle, and null when the
   // order did not name one. (The unit form above keeps its meaning; WC3 has no "order target
   // destructable" native, which is why there is no third one here.)
@@ -413,6 +440,9 @@ export function registerEventNatives(rt: Runtime): void {
   // Hero responses (EVENT_PLAYER_HERO_LEVEL / _SKILL — 7.17).
   def(rt, "GetLevelingUnit", (c) => resp(c, "LevelingUnit"));
   def(rt, "GetLearningUnit", (c) => resp(c, "LearningUnit"));
+  // EVENT_PLAYER_HERO_REVIVE_* — 正在复活/已复活的英雄。英雄复活路径尚未泵响应，
+  // 未设置时为 null（与"事件没发生"一致），而不是让脚本读到错误的单位。
+  def(rt, "GetRevivingUnit", (c) => resp(c, "RevivingUnit"));
   def(rt, "GetLearnedSkill", (c) => {
     const v = resp(c, "LearnedSkill");
     return v.k === "int" ? v : jInt(0);

@@ -135,6 +135,70 @@ endfunction
 function NoToc takes nothing returns boolean
     return BlzLoadTOCFile("Missing.toc")
 endfunction
+
+// --- DzUI (compat/dzui.ts) — the integer-frame dialect the YDWE maps speak ---
+globals
+    integer dzText = 0
+    integer dzBack = 0
+    integer dzTop = 0
+    integer dzClicks = 0
+    integer dzClickFrame = 0
+    integer dzClickPlayer = -1
+    integer dzKeyHits = 0
+    integer dzKeyPlayer = -1
+    string dzSyncData = ""
+    integer dzSyncPlayer = -1
+    trigger dzKeyTrig = null
+    trigger dzSyncTrig = null
+endglobals
+function DzRoot takes nothing returns boolean
+    return DzGetGameUI() == 0
+endfunction
+function DzSetup takes nothing returns nothing
+    set dzBack = DzCreateFrameByTagName("BACKDROP", "背景", DzGetGameUI(), "", 0)
+    call DzFrameSetPoint(dzBack, 0, DzGetGameUI(), 0, 0.1, -0.1)
+    call DzFrameSetSize(dzBack, 0.3, 0.2)
+    call DzFrameSetPriority(dzBack, 1)
+    set dzText = DzCreateFrameByTagName("TEXT", "标题", DzGetGameUI(), "template", 0)
+    call DzFrameSetPoint(dzText, 4, DzGetGameUI(), 4, 0.02, -0.195)
+    call DzFrameSetSize(dzText, 0.09, 0.036)
+    call DzFrameSetText(dzText, "开始游戏")
+    call DzFrameSetFont(dzText, "war3mapImported\\hanya.ttf", 0.013, 0)
+    set dzTop = DzCreateFrameByTagName("TEXT", "血条", DzGetGameUI(), "", 0)
+    call DzFrameSetPoint(dzTop, 7, DzFrameGetTopMessage(), 7, 0, -0.03)
+endfunction
+function DzTextIs takes nothing returns boolean
+    return DzFrameGetText(dzText) == "开始游戏"
+endfunction
+function DzClickAction takes nothing returns nothing
+    set dzClicks = dzClicks + 1
+    set dzClickFrame = DzGetTriggerUIEventFrame()
+    set dzClickPlayer = GetPlayerId(DzGetTriggerUIEventPlayer())
+endfunction
+function DzWire takes nothing returns nothing
+    call DzFrameSetScript(dzText, 1, "DzClickAction", false)
+endfunction
+function DzKeyAction takes nothing returns nothing
+    set dzKeyHits = dzKeyHits + 1
+    set dzKeyPlayer = GetPlayerId(DzGetTriggerKeyPlayer())
+endfunction
+function DzKeyWire takes nothing returns nothing
+    set dzKeyTrig = CreateTrigger()
+    call DzTriggerRegisterKeyEvent(dzKeyTrig, 69, 1, false, "")
+    call TriggerAddAction(dzKeyTrig, function DzKeyAction)
+endfunction
+function DzSyncAction takes nothing returns nothing
+    set dzSyncData = DzGetTriggerSyncData()
+    set dzSyncPlayer = GetPlayerId(DzGetTriggerSyncPlayer())
+endfunction
+function DzSyncWire takes nothing returns nothing
+    set dzSyncTrig = CreateTrigger()
+    call DzTriggerRegisterSyncData(dzSyncTrig, "UI", false)
+    call TriggerAddAction(dzSyncTrig, function DzSyncAction)
+endfunction
+function DzSendSync takes nothing returns nothing
+    call DzSyncData("UI", "42")
+endfunction
 `;
 
 const realInfo = console.info;
@@ -200,6 +264,46 @@ check('a SIMPLEFRAME is free of it', tree2.root.children.some((c) => c.type === 
 check('…and so is a frame on ConsoleUIBackdrop', tree2.root.children.some((c) => c.name === tree2.names.get(g('panel').h)), true);
 call('Hides');
 check('BlzHideOriginFrames and ConsoleUIBackdrop reach the screen', JSON.stringify(hides), JSON.stringify([['origin', true], ['backdrop', false], ['origin', false]]));
+
+console.log('\n--- DzUI: integer frames on the same model ---');
+check('DzGetGameUI is the plain game-UI root (0)', call('DzRoot').b, true);
+call('DzSetup');
+const dzTextId = g('dzText').n;
+const dzBackId = g('dzBack').n;
+const dzTopId = g('dzTop').n;
+check('DzCreateFrameByTagName hands back an integer the other natives take', typeof dzTextId, 'number');
+check('DzFrameSetText / DzFrameGetText round-trip', call('DzTextIs').b, true);
+const tree3 = buildScriptFrameTree(model, model.lib);
+const find3 = (n, name) => (n.name === name ? n : n.children.map((c) => find3(c, name)).find(Boolean));
+const dzTextName = tree3.names.get(dzTextId);
+const dzTextNode = find3(tree3.root, dzTextName);
+check('a Dz point on the GameUI is an ABSOLUTE point in the centred 4:3 box',
+  prop(dzTextNode, 'SetPoint'), [['CENTER', SCRIPT_UI_43, 'BOTTOMLEFT', 0.4 + 0.02, 0.3 - 0.195]]);
+check('…its size and its font height survive the mapping',
+  [prop(dzTextNode, 'Width'), prop(dzTextNode, 'Height'), prop(dzTextNode, 'FrameFont')[0][1]], [[[0.09]], [[0.036]], 0.013]);
+check('DzFrameGetTopMessage is an anchor rect at the top centre',
+  prop(find3(tree3.root, tree3.names.get(dzTopId)), 'SetPoint'), [['BOTTOM', SCRIPT_UI_43, 'BOTTOMLEFT', 0.4, 0.522]]);
+const dzBox = tree3.root.children.find((c) => c.name === SCRIPT_UI_43);
+const dzOrder = dzBox.children.map((c) => c.name).filter((n) => n === dzTextName || n === tree3.names.get(dzBackId));
+check('DzFrameSetPriority lifts a later frame over an earlier one', dzOrder, [dzTextName, tree3.names.get(dzBackId)]);
+call('DzWire');
+interp.fireFrameEvent(dzTextId, 1, 3);
+check('DzFrameSetScript runs its bare function on the frame event', g('dzClicks').n, 1);
+check('…with DzGetTriggerUIEventFrame the frame', g('dzClickFrame').n, dzTextId);
+check('…and DzGetTriggerUIEventPlayer the player', g('dzClickPlayer').n, 3);
+
+call('DzKeyWire');
+interp.fireDzKey(69, 1, 2);
+check('DzTriggerRegisterKeyEvent answers E for the local player', [g('dzKeyHits').n, g('dzKeyPlayer').n], [1, 2]);
+interp.fireDzKey(69, 0, 2);
+interp.fireDzKey(82, 1, 2);
+check('…and only the status and key it registered', g('dzKeyHits').n, 1);
+
+call('DzSyncWire');
+interp.rt.localPlayer = 1;
+call('DzSendSync');
+check('DzSyncData finds the trigger registered for its prefix', g('dzSyncData').s, '42');
+check('…with the local player as its sender', g('dzSyncPlayer').n, 1);
 
 console.log(failures ? `\n${failures} failure(s).` : '\nAll frame checks passed.');
 process.exit(failures ? 1 : 0);

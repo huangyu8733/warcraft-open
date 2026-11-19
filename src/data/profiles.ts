@@ -23,7 +23,12 @@ const STORAGE_KEY = "warcraft-open.profiles";
  *  clears all of them for the profile it removes, which is what PROFILE_MESSAGE promises.
  *  Add a key here the moment something new is stored per profile. */
 const PROFILE_OWNED = [
-  "warcraft-open.campaigns", "warcraft-open.campaignDifficulty", "warcraft-open.saves",
+  // Campaign progress is namespaced by the install line (data/campaignProgress.ts): the classic
+  // and Reforged campaigns are separate games, so both spellings belong to a profile. The bare
+  // ones are the pre-line keys, kept so existing progress is adopted and old data deleted.
+  "warcraft-open.campaigns", "warcraft-open.campaigns.sd", "warcraft-open.campaigns.hd",
+  "warcraft-open.campaignDifficulty", "warcraft-open.campaignDifficulty.sd", "warcraft-open.campaignDifficulty.hd",
+  "warcraft-open.saves",
   // …and the campaign's GAME CACHES — a hero's level and inventory on their way from one
   // chapter to the next — which are per-profile by common.j's own account of them ("stored in
   // the current campaign profile dir"). Every cache FILE a profile has is inside this one key,

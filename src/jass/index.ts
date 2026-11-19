@@ -17,9 +17,10 @@ import { COMPAT_PRELUDE } from "../compat/prelude";
 import { createLuaMapScript, type LuaMapScript } from "../compat/lua/index";
 import { localizeWts } from "../i18n/campaignZh";
 import { localizeMapWtsText } from "../i18n/mapLanguage";
+import { decodeMapText } from "../data/text";
 
 // war3map.wts is UTF-8 (with a BOM); decode it as such so authored text isn't mojibake.
-const decodeUtf8 = (b: Uint8Array): string => new TextDecoder("utf-8").decode(b);
+const decodeUtf8 = decodeMapText;
 /**
  * A SCRIPT is UTF-8 too, whenever its bytes are. The game keeps every string as UTF-8 bytes —
  * the .wts above, the FDF files, and a string literal the World Editor writes straight into
@@ -28,15 +29,11 @@ const decodeUtf8 = (b: Uint8Array): string => new TextDecoder("utf-8").decode(b)
  * every literal came out as "Ð¡Ñ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ°" while the TRIGSTR_ text beside it read
  * correctly — World of Angel Arena's quest titles, its leaderboard and its chat lines.
  * Strict, so a script that is NOT valid UTF-8 (an old editor's single-byte code page) keeps
- * the one-byte reading it always had rather than turning into replacement characters.
+ * the one-byte reading it always had rather than turning into replacement characters — but a
+ * GBK map's script is neither UTF-8 nor 1252, so `decodeMapText` reads it as GBK before falling
+ * back (Castle Fight: every literal was "åŸŽå ¡" wide-character mojibake).
  */
-const decode = (b: Uint8Array): string => {
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(b);
-  } catch {
-    return new TextDecoder("windows-1252").decode(b);
-  }
-};
+const decode = decodeMapText;
 
 function readScript(vfs: DataSource | MpqDataSource, ...paths: string[]): string | null {
   for (const p of paths) {

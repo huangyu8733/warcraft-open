@@ -1,4 +1,5 @@
 import type { Campaign, CampaignEntry } from "./campaigns";
+import { flavor } from "./flavor";
 import { profileKey } from "./profiles";
 
 // Campaign progress (issue #101) — which campaigns are open and how far into each one the
@@ -24,10 +25,35 @@ import { profileKey } from "./profiles";
 // tracks how far a profile has got — the screens show it, and finishing a mission still
 // advances the count — but it no longer hides or disables anything.
 
-// The BASE keys. Never read one directly — `profileKey` suffixes it with the profile in play,
-// and these two are listed in that module's PROFILE_OWNED so a deleted profile takes them with it.
+// The BASE keys. Never read one directly — `lineKey` adds the install line and `profileKey`
+// suffixes the profile in play (both are listed in profiles.ts's PROFILE_OWNED so a deleted
+// profile takes them with it).
 const STORAGE_KEY = "warcraft-open.campaigns";
 const DIFFICULTY_KEY = "warcraft-open.campaignDifficulty";
+
+/**
+ * A campaign-owned key namespaced by the LINE it belongs to (`sd` = the classic install,
+ * `hd` = Reforged). The two lines list different campaigns and chapters from different
+ * installs, so one line's progress must never open the other's chapters — they are separate
+ * games that happen to share a browser profile.
+ */
+const lineKey = (base: string): string => `${base}.${flavor()}`;
+
+/** The value stored under `base` for the profile in play, adopting the pre-line key (written
+ *  before the lines were split) the first time the new one is asked for. */
+function readLine(base: string): string | null {
+  try {
+    const key = profileKey(lineKey(base));
+    const raw = localStorage.getItem(key);
+    if (raw !== null) return raw;
+    const legacy = localStorage.getItem(profileKey(base));
+    if (legacy === null) return null;
+    localStorage.setItem(key, legacy);
+    return legacy;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * common.j's `gamedifficulty` rungs, by name — MAP_DIFFICULTY_EASY / NORMAL / HARD.
@@ -49,7 +75,7 @@ const OFFERED: Difficulty[] = ["normal", "hard"];
  *  remembers it per profile. WC3's own default is Normal. */
 export function loadDifficulty(): Difficulty {
   try {
-    const raw = localStorage.getItem(profileKey(DIFFICULTY_KEY)) as Difficulty | null;
+    const raw = readLine(DIFFICULTY_KEY) as Difficulty | null;
     return raw && OFFERED.includes(raw) ? raw : "normal";
   } catch {
     return "normal";
@@ -58,7 +84,7 @@ export function loadDifficulty(): Difficulty {
 
 export function saveDifficulty(d: Difficulty): void {
   try {
-    localStorage.setItem(profileKey(DIFFICULTY_KEY), d);
+    localStorage.setItem(profileKey(lineKey(DIFFICULTY_KEY)), d);
   } catch { /* storage unavailable */ }
 }
 
@@ -67,7 +93,7 @@ type Progress = Record<string, number>;
 
 export function loadProgress(): Progress {
   try {
-    const raw = localStorage.getItem(profileKey(STORAGE_KEY));
+    const raw = readLine(STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as unknown) : null;
     if (!parsed || typeof parsed !== "object") return {};
     const out: Progress = {};
@@ -82,7 +108,7 @@ export function loadProgress(): Progress {
 
 function saveProgress(p: Progress): void {
   try {
-    localStorage.setItem(profileKey(STORAGE_KEY), JSON.stringify(p));
+    localStorage.setItem(profileKey(lineKey(STORAGE_KEY)), JSON.stringify(p));
   } catch { /* storage unavailable — progress is lost, the menus still work */ }
 }
 

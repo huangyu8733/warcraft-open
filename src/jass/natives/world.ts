@@ -767,6 +767,93 @@ export function registerWorldNatives(rt: Runtime): void {
     return jBool(u && u.simId >= 0 ? c.rt.hooks?.waygateIsActive?.(u.simId) ?? false : false);
   });
 
+  // --- fixed unit pools (CreateUnitPool / UnitPoolAddUnitType / PlaceRandomUnit) ---
+  // 与物品池同一套语义：池里放的是"类型 + 相对权重"，PlaceRandomUnit 按权重抽一个类型
+  // 并在指定点 CreateUnit。地图用它在刷怪点随机出怪（而不是在脚本里手写随机表）。
+  // 抽取走 rt.random()，重放/联机才能得到同一结果。
+  interface JassUnitPool {
+    handleId: number;
+    entries: Array<{ typeId: string; weight: number }>;
+  }
+  const unitPool = (c: NativeCtx, v: JassValue): JassUnitPool | undefined => c.rt.data<JassUnitPool>(v);
+  def(rt, "CreateUnitPool", (c) => {
+    const p: JassUnitPool = { handleId: 0, entries: [] };
+    p.handleId = c.rt.handles.alloc(p);
+    return jHandle(p.handleId, "unitpool");
+  });
+  def(rt, "UnitPoolAddUnitType", (c, a) => {
+    const p = unitPool(c, a[0]);
+    if (p) p.entries.push({ typeId: intToRawcode(asInt(a[1])), weight: Math.max(0, asInt(a[2])) });
+    return JNULL;
+  });
+  def(rt, "UnitPoolRemoveUnitType", (c, a) => {
+    const p = unitPool(c, a[0]);
+    if (!p) return JNULL;
+    const typeId = intToRawcode(asInt(a[1]));
+    p.entries = p.entries.filter((e) => e.typeId !== typeId);
+    return JNULL;
+  });
+  def(rt, "DestroyUnitPool", (c, a) => {
+    const p = unitPool(c, a[0]);
+    if (!p) return JNULL;
+    p.entries.length = 0;
+    c.rt.handles.free(p.handleId);
+    return JNULL;
+  });
+  def(rt, "PlaceRandomUnit", (c, a) => {
+    const p = unitPool(c, a[0]);
+    if (!p || p.entries.length === 0) return JNULL;
+    let total = 0;
+    for (const e of p.entries) total += e.weight;
+    if (total <= 0) return JNULL; // 全被权重清零：抽不出任何单位
+    let roll = c.rt.random() * total;
+    let pick = p.entries[p.entries.length - 1];
+    for (const e of p.entries) {
+      if (e.weight <= 0) continue;
+      roll -= e.weight;
+      if (roll < 0) {
+        pick = e;
+        break;
+      }
+    }
+    return createUnit(c, a[1], rawcodeToInt(pick.typeId), asNum(a[2]), asNum(a[3]), asNum(a[4]));
+  });
+
+  // --- 转向窗口（prop window）与动画提示 -----------------------------------
+  // propWin 没有进入数据层，模拟也不消费它；但脚本会读回自己写过的值来恢复
+  // （`SetUnitPropWindow(u, GetUnitDefaultPropWindow(u))`），所以至少把这个数
+  // 保存在句柄上，读什么写什么。默认取 180°（UnitData 里绝大多数单位的 propWin），
+  // 不虚构逐单位数值。
+  const propWindows = new WeakMap<object, number>();
+  def(rt, "SetUnitPropWindow", (c, a) => {
+    const u = unit(c, a[0]);
+    if (u) propWindows.set(u, asNum(a[1]));
+    return JNULL;
+  });
+  def(rt, "GetUnitPropWindow", (c, a) => {
+    const u = unit(c, a[0]);
+    return jReal(u ? propWindows.get(u) ?? Math.PI : 0);
+  });
+  def(rt, "GetUnitDefaultPropWindow", () => jReal(Math.PI));
+  // Rarity 只影响模型动画的选择；这里直接播同一段动画，不丢调用。
+  def(rt, "SetUnitAnimationWithRarity", (c, a) => anim(c, a[0], a[1].k === "string" ? a[1].s : ""));
+  // 纯视觉提示：模型看向、忽略警报、暂停腐烂、混合时间。我们的渲染与模拟都不消费，
+  // 按"已确认并丢弃"处理（与 SetAltMinimapIcon 同一类）。
+  const visualNoop = (): JassValue => JNULL;
+  def(rt, "SetUnitLookAt", visualNoop);
+  def(rt, "ResetUnitLookAt", visualNoop);
+  def(rt, "UnitIgnoreAlarm", visualNoop);
+  def(rt, "UnitSuspendDecay", visualNoop);
+  def(rt, "SetUnitBlendTime", visualNoop);
+
+  // PreloadGenEnd(filename) — 写入预载文件，纯粹是加载期的资源提示（单机/战役用）。
+  // 浏览器与无头运行都没有预载文件可写；确认并丢弃，不影响任何资源加载路径。
+  def(rt, "PreloadGenEnd", () => JNULL);
+  // Cheat(cheatStr) — 单机秘籍入口（"greedisgood"、"whosyourdaddy" 等）。玩家的作弊
+  // 由 RtsController.cheat / 控制台处理；地图脚本里的字符串秘籍不接过去，避免改变
+  // 已经工作的作弊面板语义。
+  def(rt, "Cheat", () => JNULL);
+
   // Floating text tags + on-screen messages (the "text actions") live in
   // natives/text.ts alongside the string/name text-logic natives.
 }

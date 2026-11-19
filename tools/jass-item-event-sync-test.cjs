@@ -48,10 +48,16 @@ const check = (name, got, want) => {
 const unit = (id) => ({ id, typeId: 'Hpal', owner: 1, x: 0, y: 0, facing: 0 });
 let nextItem = 100;
 const types = new Map();
+const spots = new Map();
 let queue = [];
 const hooks = {
-  createItem: (typeId) => { const id = nextItem++; types.set(id, typeId); return id; },
-  itemInfo: (id) => (types.has(id) ? { id, typeId: types.get(id), charges: 0, x: 0, y: 0, holder: 0, slot: -1, owner: 15, life: 1 } : null),
+  createItem: (typeId, x = 0, y = 0) => {
+    const id = nextItem++;
+    types.set(id, typeId);
+    spots.set(id, { x, y });
+    return id;
+  },
+  itemInfo: (id) => (types.has(id) ? { id, typeId: types.get(id), charges: 0, x: spots.get(id).x, y: spots.get(id).y, holder: 0, slot: -1, owner: 15, life: 1 } : null),
   getUnitX: () => 0,
   getUnitY: () => 0,
   unitAddItem: (u, itemId) => { queue.push({ unit: unit(u), item: { id: itemId, typeId: types.get(itemId), charges: 0 }, phase: 'pickup' }); return true; },
@@ -110,6 +116,41 @@ function Stamp takes nothing returns integer
     call UnitAddItem(hero, it)
     return before * 100 + GetPlayerId(GetItemPlayer(it))
 endfunction
+globals
+    itempool dropPool = null
+    integer dropsA = 0
+    integer dropsC = 0
+    integer dropsOther = 0
+    real dropX = 0
+    real dropY = 0
+endglobals
+function FillPool takes nothing returns nothing
+    set dropPool = CreateItemPool()
+    call ItemPoolAddItemType(dropPool, 'I010', 1)
+    call ItemPoolAddItemType(dropPool, 'I011', 0)
+    call ItemPoolAddItemType(dropPool, 'I012', 3)
+endfunction
+function RollOnce takes nothing returns nothing
+    local item it = PlaceRandomItem(dropPool, 100, 200)
+    if GetItemTypeId(it) == 'I010' then
+        set dropsA = dropsA + 1
+    elseif GetItemTypeId(it) == 'I012' then
+        set dropsC = dropsC + 1
+    else
+        set dropsOther = dropsOther + 1
+    endif
+    set dropX = GetItemX(it)
+    set dropY = GetItemY(it)
+    call RemoveItem(it)
+endfunction
+function EmptyPoolIsNull takes nothing returns boolean
+    return PlaceRandomItem(CreateItemPool(), 0, 0) == null
+endfunction
+function ZeroPoolIsNull takes nothing returns boolean
+    local itempool p = CreateItemPool()
+    call ItemPoolAddItemType(p, 'I010', 0)
+    return PlaceRandomItem(p, 0, 0) == null
+endfunction
 `;
 const interp = buildInterpreter([common, src], { hooks });
 const rt = interp.rt;
@@ -137,6 +178,16 @@ check('…and runs, with the function\'s own answer, once it returns', [g('bough
 console.log('\nan item\'s player');
 const stamp = interp.callFunction('Stamp', []);
 check('Neutral Passive from birth, the stamp afterwards, whoever holds it', stamp?.n, 15 * 100 + 3);
+
+console.log('\nthe map\'s own drop tables');
+interp.callFunction('FillPool', []);
+for (let i = 0; i < 400; i++) interp.callFunction('RollOnce', []);
+check('a weight of 0 never drops', g('dropsOther'), 0);
+check('every weighted type can drop', [g('dropsA') > 0, g('dropsC') > 0], [true, true]);
+check('…in proportion to its weight (1 vs 3)', g('dropsC') > g('dropsA') * 2, true);
+check('PlaceRandomItem places the item at the point it was given', [g('dropX'), g('dropY')], [100, 200]);
+check('an empty pool drops nothing', interp.callFunction('EmptyPoolIsNull', []).b, true);
+check('a pool weighted entirely to 0 drops nothing', interp.callFunction('ZeroPoolIsNull', []).b, true);
 
 console.log(failures ? `\n${failures} FAILED` : '\nall item-event checks passed');
 process.exit(failures ? 1 : 0);

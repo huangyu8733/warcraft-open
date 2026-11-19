@@ -278,6 +278,10 @@ const STRING_FILES = [
   "Units\\UndeadUnitStrings.txt",
   "Units\\NightElfUnitStrings.txt",
   "Units\\NeutralUnitStrings.txt",
+  // The catch-all profile: a map optimiser folds every race's rows into the Campaign ones
+  // (W3x2Lni's "slk" mode does, and 人族无敌's whole tech tree lives here), so reading the
+  // five race files alone missed every map-authored Builds/Trains/Researches.
+  "Units\\CampaignUnitStrings.txt",
   "Units\\HumanUpgradeStrings.txt",
   "Units\\OrcUpgradeStrings.txt",
   "Units\\UndeadUpgradeStrings.txt",
@@ -354,13 +358,23 @@ export function loadTechRegistry(vfs: DataSource): TechRegistry {
   const strs = new MappedData();
   for (const path of STRING_FILES) {
     const bytes = vfs.rawBytes(path);
-    if (bytes) strs.load(decodeGameText(bytes));
+    if (bytes) strs.load(mergeRepeatedLists(decodeGameText(bytes)));
   }
   const defs = new Map<string, TechDef>();
-  for (const id of Object.keys(funcs.map)) {
-    const row = funcs.getRow(id) as { string(key: string): string | undefined } | undefined;
-    if (!row) continue;
+  // The profile half of a row can arrive in EITHER the FUNC or the STRINGS file. Stock data
+  // splits them (tech lists in Func, name/tooltip in Strings), but an optimised map may fold
+  // both into `Units\*UnitStrings.txt` and ship an EMPTY `*UnitFunc.txt` — W3x2Lni's "slk"
+  // mode does exactly that, and 人族无敌 arrives this way. Reading the tech lists off Func
+  // alone left every worker with no Builds and every hall with no Trains, i.e. no command
+  // card. Strings first, because a map's own profile is the one that overrides the install's.
+  const ids = new Set([...Object.keys(funcs.map), ...Object.keys(strs.map)]);
+  for (const id of ids) {
+    const f = funcs.getRow(id) as { string(key: string): string | undefined } | undefined;
     const s = strs.getRow(id) as { string(key: string): string | undefined } | undefined;
+    const row = {
+      string: (key: string): string | undefined =>
+        (s ? s.string(key) : undefined) || (f ? f.string(key) : undefined),
+    };
     // An upgrade renames itself per level ("Iron Forged Swords,Steel…"); for a requirement
     // line the first is the one to show.
     const name = ((s && s.string("Name")) || "").split(",")[0]?.replace(/^"|"$/g, "").trim() || id;

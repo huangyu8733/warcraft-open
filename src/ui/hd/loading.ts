@@ -9,6 +9,7 @@ import type { LoadingScreen, LoadingScreenOptions } from "../loadingScreen";
 import { webUiAssets } from "./assets";
 import { loadOfficialStyle } from "./official";
 import { el } from "./screen";
+import { createFullscreenToggle } from "../fullscreen";
 import { PLAYER_COLORS } from "../hud";
 
 /** No pointer while a map loads — style.css `body.loading-screen`. */
@@ -118,13 +119,16 @@ export async function mountHdLoadingScreen(opts: LoadingScreenOptions): Promise<
   gameInfo.append(left, mapInfo, right);
   root.append(background, gameInfo);
   opts.container.appendChild(root);
+  // 载入界面同样没有控制台可以放全屏按钮；进对局后由 HUD 自己那颗接手。
+  const fullscreen = createFullscreenToggle("screen-fullscreen");
+  if (fullscreen) opts.container.appendChild(fullscreen.element);
 
   // The sheet authors the loading screen for 1080 lines; scale its type and cards with the
   // window the same way the rest of the 3.0 front end does. The bar is pinned by its own bottom
   // because the sheet's 82px flex margin does not survive `zoom` — the column ends up floating
   // well above the ornament it is meant to rest on.
   const rescale = (): void => {
-    const z = Math.max(0.5, window.innerHeight / 1080);
+    const z = Math.max(0.25, window.innerHeight / 1080);
     gameInfo.style.zoom = String(z);
     barColumn.style.zoom = String(z);
     barColumn.style.bottom = `${Math.round(BAR_BOTTOM * z)}px`;
@@ -205,6 +209,7 @@ export async function mountHdLoadingScreen(opts: LoadingScreenOptions): Promise<
     },
     dispose(): void {
       document.body.classList.remove(LOADING_CURSOR_CLASS);
+      fullscreen?.dispose();
       window.removeEventListener("resize", rescale);
       stopWaiting?.();
       root.remove();

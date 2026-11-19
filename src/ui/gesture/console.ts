@@ -161,7 +161,7 @@ export function mountGestureConsole(): void {
   list.className = "gesture-hints__list";
   for (const key of [
     "gesture.HINT_TAP", "gesture.HINT_LONG", "gesture.HINT_DRAG",
-    "gesture.HINT_TWO", "gesture.HINT_GROUPS",
+    "gesture.HINT_TWO", "gesture.HINT_GROUPS", "gesture.HINT_ITEM",
   ] as const) {
     const item = document.createElement("li");
     item.textContent = t(key);

@@ -68,6 +68,11 @@ export async function mountHdLanCreateScreen(
     bottomRow: false,
   });
   const { list, aside, listHeader } = shell;
+  // The create screen's rows are files and folders — one column, wrapped names — not the
+  // browser's three-column table (official.css keys both rules off this class). The header
+  // wears it too, so its two empty column titles collapse with the cells.
+  list.classList.add("Official-FileList");
+  listHeader.classList.add("Official-FileList");
 
   // --- the map list -----------------------------------------------------------------
   const entries = [...maps.keys()]
@@ -152,7 +157,7 @@ export async function mountHdLanCreateScreen(
     }
     for (const name of folders) {
       list.appendChild(
-        listRow([name, "", ""], () => {
+        listRow([nameCell(name), "", ""], () => {
           folder = folder ? `${folder}\\${name}` : name;
           paintFiles();
         }, { icon: "folder" }),
@@ -160,7 +165,7 @@ export async function mountHdLanCreateScreen(
     }
     files.sort((a, b) => baseName(a).localeCompare(baseName(b)));
     for (const path of files) {
-      const row = listRow([baseName(path), "", ""], () => void choose(path), {
+      const row = listRow([nameCell(baseName(path)), "", ""], () => void choose(path), {
         icon: "map",
         selected: picked?.path === path,
       });
@@ -331,7 +336,12 @@ export async function mountHdLanCreateScreen(
 
   function targetLabel(x: HostTarget | null): string {
     if (!x) return "—";
-    if (x.kind === "own") return t("hd.thisComputer");
+    if (x.kind === "own") {
+      // The hosted copy serves Warcraft Open's own relay, so a game created "here" is created
+      // on Warcraft Open — not on this player's machine.
+      const official = lobby.servedOfficialUrl;
+      return official ? officialServerName(relayAuthority(official)) : t("hd.thisComputer");
+    }
     if (x.kind === "official") return officialServerName(relayAuthority(x.url));
     return relayAuthority(x.url);
   }
@@ -375,6 +385,11 @@ function advancedField(label: string, field: HTMLElement): HTMLElement {
 function baseName(path: string): string {
   const file = path.split("\\").pop() ?? path;
   return file.replace(MAP_EXT, "");
+}
+
+/** A folder or map's name in the create screen's one-column list: two lines, then an ellipsis. */
+function nameCell(name: string): HTMLElement {
+  return el("span", "Official-FileName", name);
 }
 
 /** The browsed path: an install map path without the `Maps\` root the list starts from. */

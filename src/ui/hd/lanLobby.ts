@@ -153,7 +153,7 @@ export async function mountHdLanLobbyScreen(
   screen.element.appendChild(cornerDecorations(assets, tft));
 
   const rescale = (): void => {
-    root.style.zoom = String(Math.max(0.5, window.innerHeight / 1080));
+    root.style.zoom = String(Math.max(0.25, window.innerHeight / 1080));
   };
   rescale();
   window.addEventListener("resize", rescale);

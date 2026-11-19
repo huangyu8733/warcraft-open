@@ -7,6 +7,7 @@
 // 位置在 `#ui` 内、安全区以内（§6.2）：和 `#gesture-stage` 一样跟随 stage 盒与 `--hud-scale`；
 // 只有对局里才显示（CSS 的 `body:not(.in-game)` 规则）。44px 命中区是触摸的下限。
 
+import { Hand, MousePointer2, createElement as lucideIcon } from "lucide";
 import { t } from "../../i18n";
 import { gestureEnabled } from "./device";
 
@@ -33,11 +34,15 @@ export function mountGestureToggle(onToggle: (on: boolean) => void): void {
   syncGestureToggle();
 }
 
-/** 开关状态变化后同步高亮与文案；`index.ts` 在每次起停之后各调一次。 */
+/** 开关状态变化后同步高亮与图标；`index.ts` 在每次起停之后各调一次。
+ *  图标画的是「点它会切到的输入方式」：手势开着 → 鼠标箭头（点了切回鼠标操作），
+ *  手势关着 → 手（点了切到触摸手势）。 */
 export function syncGestureToggle(): void {
   if (!button) return;
   const on = gestureEnabled();
   button.dataset.on = String(on);
   button.setAttribute("aria-pressed", String(on));
-  button.textContent = t(on ? "home.gestureToggleOn" : "home.gestureToggleOff");
+  button.replaceChildren(
+    lucideIcon(on ? MousePointer2 : Hand, { "stroke-width": 2, "aria-hidden": "true" }),
+  );
 }

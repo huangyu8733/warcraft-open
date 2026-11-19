@@ -195,6 +195,14 @@ export function registerConfigNatives(rt: Runtime): void {
     if (c.rt.enumIndex(a[1]) === PLAYER_STATE_ALLIED_VICTORY) return jInt(p.alliedVictory);
     return jInt(c.rt.hooks?.getPlayerState?.(p.index, c.rt.enumIndex(a[1])) ?? 0);
   });
+  // 结算画面（score screen）不在本引擎里建模：GetPlayerScore 返回 0，
+  // SetPlayerOnScoreScreen 只是开关，记录与否都不影响对局。显式回答 0，
+  // 让脚本的比较逻辑走"没有分数"分支，而不是读到未实现的噪声。
+  def(rt, "GetPlayerScore", () => jInt(0));
+  def(rt, "SetPlayerOnScoreScreen", () => JNULL);
+  // SetReservedLocalHeroButtons(n) — 为本地玩家的英雄栏预留按钮数，纯界面布局提示。
+  // 我们的英雄栏由 HUD 自己排版，没有"预留槽"概念，确认并丢弃。
+  def(rt, "SetReservedLocalHeroButtons", () => JNULL);
   // SetPlayerAlliance + GetPlayerAlliance + CripplePlayer live in natives/vision.ts (7.22).
   // They used to be no-ops HERE — and `SetPlayerAllianceStateBJ` was registered as a no-op
   // native too, which was worse than it looks: it is not a native at all but a blizzard.j

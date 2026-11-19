@@ -131,4 +131,12 @@ export function registerImageryNatives(rt: Runtime): void {
     c.rt.hooks?.setWaterBaseColor?.(m(0), m(1), m(2), m(3));
     return JNULL;
   });
+
+  // --- 纯视觉开关：确认并丢弃 ---------------------------------------------
+  // 这些调用只改变"怎么画"（水面变形、装饰物动画、贴图/阴影渲染层），不改变世界状态，
+  // 也不影响任何查询。按"已接受但未建模"处理，避免脚本以为调用失败。
+  def(rt, "SetWaterDeforms", () => JNULL);
+  def(rt, "SetDoodadAnimationRect", () => JNULL);
+  def(rt, "SetUbersplatRender", () => JNULL); // 与 SetUbersplatRenderAlways 不同，不能混用
+  def(rt, "SetImageAboveWater", () => JNULL); // 图像高度已由 CreateImage 的参数决定
 }

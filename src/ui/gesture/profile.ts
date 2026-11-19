@@ -12,7 +12,8 @@ export type GestureLayout = "minimal" | "light" | "full";
 export type GestureHandedness = "right" | "left";
 
 export interface GestureProfile {
-  /** 总开关；关闭时识别器一个监听都不注册（device.gestureEnabled 还会要求设备有触摸）。 */
+  /** 总开关；关闭时识别器一个监听都不注册。默认值按设备定（手机 / 平板开，桌面关），
+   *  但任何平台都能在 Options / 右上角切换，切换后由 options 的 gesture-mode 记住。 */
   enabled: boolean;
   /** 控制台形态 A/B/C（§6.3）。P3 的 console.ts 读它。 */
   layout: GestureLayout;

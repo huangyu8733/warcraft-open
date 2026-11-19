@@ -20,7 +20,7 @@ import { buildInfoVersion } from "../vfs/casc";
 import { flavor, type GameFlavor } from "../data/flavor";
 import { dismissBootSplash, mountBootSplash, type BootSplash } from "./bootSplash";
 import { createGestureHelp } from "./gestureHelp";
-import { createGestureToggle } from "./gestureToggle";
+import { createFullscreenToggle } from "./fullscreen";
 
 /** A mounted install, as the launcher hands it to the game (main.ts `mountInstall`). */
 export interface GateLoad {
@@ -171,10 +171,9 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   const topActions = document.createElement("div");
   topActions.className = "home-topbar-actions";
   topActions.append(createLanguagePicker());
-  // A phone / tablet browser can only reach the touch console's Options rows after a match has
-  // started, so the launcher carries its master switch. Desktop browsers use it with DevTools
-  // touch emulation.
-  if (!native) topActions.append(createGestureToggle());
+  // 浏览器里首页顶栏也带一颗全屏开关；桌面应用由外壳管窗口，工厂会返回 null。
+  const fullscreen = createFullscreenToggle("home-fullscreen");
+  if (fullscreen) topActions.append(fullscreen.element);
   // A browser tab is the only place a swipe can leave the page (back / forward), so only the
   // browser build carries the way to turn it off.
   if (!native) topActions.append(createGestureHelp());
@@ -373,7 +372,79 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
   const aboutText = document.createElement("p");
   aboutText.className = "home-page-text";
   aboutText.textContent = t("home.aboutText");
-  aboutView.append(aboutTitle, aboutText);
+
+  // 与 README、网站联系页共用同一份信息：站点 / GitHub / QQ 群 / 作者 QQ。
+  // 用公网地址而不是 SITE：开发版与桌面版的 SITE 指向本机或自身，这里要的是对外入口。
+  const PUBLIC_SITE = "https://warcraft.hhkj.me";
+  const GITHUB = "https://github.com/huangyu8733/warcraft-open";
+  const aboutLinks = document.createElement("dl");
+  aboutLinks.className = "home-meta-list home-about-links";
+  const aboutRow = (label: string, value: string, href?: string): void => {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    if (href) {
+      const a = document.createElement("a");
+      a.href = href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = value;
+      dd.appendChild(a);
+    } else {
+      dd.textContent = value;
+    }
+    aboutLinks.append(dt, dd);
+  };
+  aboutRow(t("home.aboutSite"), PUBLIC_SITE, PUBLIC_SITE);
+  aboutRow(t("home.aboutGithub"), GITHUB, GITHUB);
+  aboutRow(t("home.aboutQqGroup"), "567744625");
+  aboutRow(t("home.aboutAuthorQq"), "360268423");
+
+  const aboutFeatures = document.createElement("section");
+  aboutFeatures.className = "home-about-block";
+  const aboutFeaturesTitle = document.createElement("h2");
+  aboutFeaturesTitle.textContent = t("home.aboutFeatures");
+  const aboutFeatureList = document.createElement("ul");
+  aboutFeatureList.className = "home-about-list";
+  for (const line of [
+    t("home.aboutF1"),
+    t("home.aboutF2"),
+    t("home.aboutF3"),
+    t("home.aboutF4"),
+    t("home.aboutF5"),
+  ]) {
+    const item = document.createElement("li");
+    item.textContent = line;
+    aboutFeatureList.appendChild(item);
+  }
+  aboutFeatures.append(aboutFeaturesTitle, aboutFeatureList);
+
+  // 赞赏：二维码在网站上（聊天工具里贴图容易被压缩），这里只给入口。
+  const aboutDonate = document.createElement("section");
+  aboutDonate.className = "home-about-block";
+  const aboutDonateTitle = document.createElement("h2");
+  aboutDonateTitle.textContent = t("home.aboutDonate");
+  const aboutDonateText = document.createElement("p");
+  aboutDonateText.className = "home-page-text";
+  aboutDonateText.textContent = t("home.aboutDonateText");
+  const aboutDonateLink = document.createElement("a");
+  aboutDonateLink.className = "home-about-link";
+  aboutDonateLink.href = `${PUBLIC_SITE}/${siteLocale()}/contact`;
+  aboutDonateLink.target = "_blank";
+  aboutDonateLink.rel = "noopener noreferrer";
+  aboutDonateLink.textContent = t("home.aboutDonateLink");
+  aboutDonate.append(aboutDonateTitle, aboutDonateText, aboutDonateLink);
+
+  const aboutLegal = document.createElement("section");
+  aboutLegal.className = "home-about-block";
+  const aboutLegalTitle = document.createElement("h2");
+  aboutLegalTitle.textContent = t("home.aboutDisclaimer");
+  const aboutLegalText = document.createElement("p");
+  aboutLegalText.className = "home-page-text home-page-muted";
+  aboutLegalText.textContent = `${t("home.aboutDisclaimerText")}\n${t("home.aboutLicense")}`;
+  aboutLegal.append(aboutLegalTitle, aboutLegalText);
+
+  aboutView.append(aboutTitle, aboutText, aboutLinks, aboutFeatures, aboutDonate, aboutLegal);
 
   // ── Map detail page (#/maps/<slug>) — the site's detail, with a launcher download ──
   const detailView = document.createElement("section");
@@ -586,11 +657,14 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     const info = installs[line];
     if (!info.path) return { text: t("home.folderNone"), error: false };
     if (!info.present) return { text: t("home.folderMissing", { path: info.path }), error: true };
-    const verdict = versionVerdict(info.version, line);
+    const verdict = versionVerdict(info.version, line, info.mpq);
     // The path is said even when the folder is refused: "wrong build" alone leaves the player
     // looking at two rows and no way to tell which folder either one means.
     if (!verdict.ok) return { text: t("home.folderIssue", { path: info.path, reason: verdict.message }), error: true };
-    return { text: t("home.lineInstalled", { version: info.version ?? "", path: info.path }), error: false };
+    // `verdict.ok` implies a version — an MPQ-era folder is refused by the verdict above — so
+    // this fallback only keeps the type honest.
+    const version = info.version ?? t("flavor.sd");
+    return { text: t("home.lineInstalled", { version, path: info.path }), error: false };
   };
 
   const paintInstall = (): void => {
@@ -644,10 +718,35 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     void refreshDownloaded();
   };
 
-  const setBusy = (on: boolean): void => {
+  /** Which button is working right now: the pressed Launch, or the pressed Change Folder. */
+  let busyAction: { line: GameFlavor; kind: "play" | "folder" } | null = null;
+
+  /** A ring over the button that is working, so a second press reads as "already doing it"
+   *  instead of a dead button (a folder picker or a mount can take a while). */
+  const setSpinner = (btn: GlueButton, on: boolean): void => {
+    let spin = btn.button.querySelector<HTMLElement>(".home-btn-spinner");
+    if (on && !spin) {
+      spin = document.createElement("span");
+      spin.className = "home-btn-spinner";
+      spin.setAttribute("aria-hidden", "true");
+      btn.button.append(spin);
+    }
+    if (spin) spin.hidden = !on;
+    btn.button.classList.toggle("is-loading", on);
+    btn.button.setAttribute("aria-busy", on ? "true" : "false");
+  };
+
+  /** Lock both rows (one launch at a time) and spin the button the player pressed. Without an
+   *  `act` the spinner already showing is kept — the inner start helpers lock without knowing
+   *  which row was pressed. */
+  const setBusy = (on: boolean, act?: { line: GameFlavor; kind: "play" | "folder" }): void => {
     busy = on;
+    if (!on) busyAction = null;
+    else if (act) busyAction = act;
     for (const line of LINES) {
       const locked = line === "hd" && !hdOpen;
+      setSpinner(rows[line].play, !!busyAction && busyAction.line === line && busyAction.kind === "play");
+      setSpinner(rows[line].change, !!busyAction && busyAction.line === line && busyAction.kind === "folder");
       rows[line].play.setDisabled(on || locked);
       rows[line].change.setDisabled(on || locked);
     }
@@ -777,7 +876,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
    *  SOME accepted build, which is not the same question per line. */
   const usable = (line: GameFlavor): boolean => {
     const info = installs[line];
-    return !!info.path && info.present && versionVerdict(info.version, line).ok;
+    return !!info.path && info.present && versionVerdict(info.version, line, info.mpq).ok;
   };
 
   /** Make sure `line` has a folder the mount would take, asking for one when it has none (or the
@@ -795,7 +894,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     const info = installs[line];
     setStatus(
       info.present
-        ? t("home.folderIssue", { path: info.path ?? picked, reason: versionVerdict(info.version, line).message })
+        ? t("home.folderIssue", { path: info.path ?? picked, reason: versionVerdict(info.version, line, info.mpq).message })
         : t("home.folderMissing", { path: info.path ?? picked }),
       true,
     );
@@ -865,8 +964,11 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       setStatus(t("gate.noWar3Folder"), true);
       return;
     }
-    // One press, one launch: a double-click on the same row would otherwise start two.
+    // One press, one launch: a double-click on the same row would otherwise start two. The
+    // pressed button starts spinning HERE — before the folder picker or the mount, both of which
+    // can hold the page for a while.
     launching = true;
+    setBusy(true, { line, kind: "play" });
     try {
       if (native) {
         if (isGamePage) {
@@ -897,31 +999,38 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       location.assign(playUrl(line));
     } finally {
       launching = false;
+      setBusy(false);
     }
   };
 
   /** Change ONE line's folder. The shell keeps them apart (`installPath` / `installPathHd`), so
-   *  picking a Reforged folder here cannot take the classic one away. */
+   *  picking a Reforged folder here cannot take the classic one away. Locked and spinning while
+   *  the picker is open, so a second press cannot open a second one. */
   const changeFolder = async (line: GameFlavor): Promise<void> => {
-    if (busy) return;
-    if (!native) {
-      const picked = await pickInstall(line);
+    if (busy || launching) return;
+    setBusy(true, { line, kind: "folder" });
+    try {
+      if (!native) {
+        const picked = await pickInstall(line);
+        if (!picked) return;
+        browserInstalls[line] = picked;
+        rememberInstallInfo(line, picked);
+        browserHandles[line] = await rememberedInstallHandle(line);
+        paintInstall();
+        setStatus(picked.label ? t("home.folderChanged", { path: picked.label }) : t("home.folderChangedBrowser"));
+        return;
+      }
+      const picked = await pickNativeInstall(line);
       if (!picked) return;
-      browserInstalls[line] = picked;
-      rememberInstallInfo(line, picked);
-      browserHandles[line] = await rememberedInstallHandle(line);
+      installs[line] = await rememberedInstall(line);
       paintInstall();
-      setStatus(picked.label ? t("home.folderChanged", { path: picked.label }) : t("home.folderChangedBrowser"));
-      return;
+      const info = installs[line];
+      const verdict = versionVerdict(info.version, line, info.mpq);
+      if (info.present && verdict.ok) setStatus(t("home.folderChanged", { path: info.path ?? picked }));
+      else setStatus(t("home.folderIssue", { path: info.path ?? picked, reason: verdict.message }), true);
+    } finally {
+      setBusy(false);
     }
-    const picked = await pickNativeInstall(line);
-    if (!picked) return;
-    installs[line] = await rememberedInstall(line);
-    paintInstall();
-    const info = installs[line];
-    const verdict = versionVerdict(info.version, line);
-    if (info.present && verdict.ok) setStatus(t("home.folderChanged", { path: info.path ?? picked }));
-    else setStatus(t("home.folderIssue", { path: info.path ?? picked, reason: verdict.message }), true);
   };
 
   for (const line of LINES) {
@@ -1534,6 +1643,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     dispose: () => {
       abort.abort();
       unbindHotkeys();
+      fullscreen?.dispose();
       window.removeEventListener("hashchange", route);
       page.remove();
     },

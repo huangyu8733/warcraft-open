@@ -45,6 +45,22 @@ export class LooseFilesDataSource implements DataSource {
   list(): string[] {
     return [...new Set([...this.inner.list(), ...this.files.keys()])];
   }
+
+  /**
+   * The store's exploded archives, NOT ours: a player's loose copy of a chapter is a whole
+   * `.w3x` file, which `exists`/`read` already answer. Without this pass-through a 1.30+ store
+   * could not hand a campaign chapter over at all — `readMapBytes` (vfs/mapArchive.ts) asks
+   * the mounted source for one, and this wrapper is what the game actually holds.
+   */
+  openArchive(path: string): DataSource | null {
+    return this.inner.openArchive?.(path) ?? null;
+  }
+
+  /** Same reason, for the renderer's art fallback: this wrapper must not hide the store's
+   *  base-module copies (see DataSource.baseBytes). */
+  baseBytes(path: string): Promise<Uint8Array | null> {
+    return this.inner.baseBytes?.(path) ?? Promise.resolve(null);
+  }
 }
 
 const key = (path: string): string => normalizeMpqPath(path).toLowerCase();

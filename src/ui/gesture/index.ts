@@ -149,6 +149,18 @@ function startGestureEngine(): void {
     isHotZone: (x, y) => gestureGeometry.isHotZone(x, y),
     edgePan: (x, y) => gestureGeometry.edgePan(x, y),
     enabled: gestureEnabled,
+    // 触摸拖框的实时反馈：识别器一动就换算到 canvas 坐标，交给宿主画选框 + 预览圈。
+    // 门控与动作同一条：不能操作（菜单 / 暂停）时只画框也没意义。
+    dragboxPreview: (from, to) => {
+      const h = currentGestureHost();
+      if (!h?.boxPreview || h.canAct?.() === false) return;
+      const a = gestureGeometry.canvasPoint(from.x, from.y);
+      const b = gestureGeometry.canvasPoint(to.x, to.y);
+      if (a && b) h.boxPreview(a.x, a.y, b.x, b.y);
+    },
+    dragboxPreviewEnd: () => {
+      currentGestureHost()?.boxPreviewEnd?.();
+    },
     emit: (intent) => {
       if (debug) debugIntent(intent);
       hapticFor(intent.kind);
@@ -249,6 +261,20 @@ export function stopGesture(): void {
   setGestureUiActive(false);
   debugEl?.remove();
   debugEl = null;
+}
+
+/**
+ * 一局结束 / 回主菜单 / 退出程序：立刻收起替代 HUD 与常驻控件。
+ *
+ * 正常路径里 `MapViewerScene.dispose()` 的 `setGestureHost(null)` 会经
+ * `onGestureHostChange` → `syncGestureConsole()` 收一遍；但 `endMatch()` 之后 body 上的
+ * `in-game` 还可能挂着，退出程序也可能不经过宿主变更。这里显式再收一次，
+ * 不依赖那条时序。新一局装上宿主后 `syncGestureConsole()` 会按需重新挂载。
+ */
+export function endGestureMatch(): void {
+  syncGestureConsole();
+  // 放在最后：即使 in-game 与宿主都还在，也强制卸载。
+  setGestureUiActive(false);
 }
 
 /**

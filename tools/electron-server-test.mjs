@@ -116,17 +116,32 @@ try {
       build("1.31.1.12164");
       ok("the Internet Archive's 1.31.1 is accepted — the mount downgrades it", looksLikeInstall(tmp));
       build("2.0.3.22692");
-      ok("the 2.x line is refused — HD is the 3.x line", !looksLikeInstall(tmp));
+      ok("the previous Reforged generation is refused by HD — the line starts at 3.0",
+         !looksLikeInstall(tmp, "hd"));
+      ok("…and a Reforged store is not the classic line", !looksLikeInstall(tmp, "sd"));
       build("3.0.0.1");
-      ok("the Reforged 3.x line is accepted — HD pins the exact patch", looksLikeInstall(tmp));
+      ok("the Reforged 3.x line is accepted by HD", looksLikeInstall(tmp, "hd"));
       build("4.0.0.1");
-      ok("a prefix outside 1.3/3. is refused", !looksLikeInstall(tmp));
+      ok("a prefix outside 1.3/3. is refused", !looksLikeInstall(tmp, "hd"));
       // The build NUMBER is not part of the rule: it varies with the download and says nothing
       // about the data.
       build("1.30.4.99999");
       ok("a different build number of the same version still passes", looksLikeInstall(tmp));
       rmSync(join(tmp, ".build.info"));
       ok("a folder that says nothing is refused", !looksLikeInstall(tmp));
+      // An MPQ-era folder (1.2x and older) has no `.build.info` at all. The mount can read it, but
+      // the 1.30.4 menus and tables cannot use it — a real 1.27 install loads to a black screen —
+      // so the classic line starts at 1.30 and such a folder is refused on both lines.
+      const mpq = join(process.env.TMPDIR ?? "/tmp", `ow3-mpq-test-${process.pid}`);
+      try {
+        rmSync(mpq, { recursive: true, force: true });
+        mkdirSync(mpq, { recursive: true });
+        writeFileSync(join(mpq, "war3.mpq"), "");
+        ok("an MPQ-era folder is refused as too old", !looksLikeInstall(mpq, "sd"));
+        ok("…and never HD", !looksLikeInstall(mpq, "hd"));
+      } finally {
+        rmSync(mpq, { recursive: true, force: true });
+      }
       // The installer puts the app INSIDE the game folder, so a packaged app finds the install
       // from where its own executable sits (electron/locate.mjs) — and an unpackaged one, run
       // out of node_modules, must not go looking there.

@@ -7,6 +7,7 @@
 // (CLAUDE.md "never hard-crash the map"). Grow coverage with tools/native-coverage.mjs.
 
 import type { NativeCtx, Runtime } from "../runtime";
+import { rawcodeToInt } from "../lexer";
 import { asInt, asNum, asStr, jInt, jReal, jStr, JNULL, type JassValue } from "../values";
 import { registerAbilityNatives } from "./abilities";
 import { registerCameraNatives } from "./camera";
@@ -26,6 +27,7 @@ import { registerHashtableNatives } from "./hashtable";
 // A NAMED SEAM into the compatibility layer (src/compat/README.md): the 1.31 frame API is
 // declared by our own prelude and answered there, because none of it exists in 1.30.4.
 import { registerFrameNatives } from "../../compat/frames";
+import { registerDzNatives } from "../../compat/dzui";
 import { registerFieldNatives } from "./blzFields";
 import { registerItemNatives } from "./items";
 import { registerMeleeNatives } from "./melee";
@@ -94,6 +96,9 @@ const CONVERT_NATIVES = [
  *  down "safe default" log noise. */
 function registerUtilNatives(rt: Runtime): void {
   def(rt, "I2S", (_c, a) => jStr(String(asInt(a[0]))));
+  // AbilityId("AHbz") — 把技能四字码字符串转成它的整数形式。blizzard.j 与编辑器生成的
+  // 代码都这么写（'AHbz' 字面量与 AbilityId("AHbz") 必须相等）。
+  def(rt, "AbilityId", (_c, a) => jInt(rawcodeToInt(asStr(a[0]))));
   def(rt, "R2S", (_c, a) => jStr(asNum(a[0]).toFixed(3)));
   def(rt, "R2SW", (_c, a) => jStr(asNum(a[0]).toFixed(Math.max(0, asInt(a[2])))));
   def(rt, "I2R", (_c, a) => jReal(asInt(a[0])));
@@ -192,6 +197,7 @@ export function registerNatives(rt: Runtime): void {
   registerGroupNatives(rt);
   registerHashtableNatives(rt); // InitHashtable & co — what every modern map keeps its state in
   registerFrameNatives(rt); // the 1.31 custom-UI frame API (src/compat/frames.ts)
+  registerDzNatives(rt); // the DzAPI custom-UI dialect, mapped onto the same frames (src/compat/dzui.ts)
   registerFieldNatives(rt); // the 1.31 object-FIELD accessors (src/compat/blzFields.ts)
   registerItemNatives(rt); // items + the item events (7.18)
   registerDestructableNatives(rt); // destructibles: gates open by dying (issue #85)

@@ -16,11 +16,11 @@ const { targsAdmit } = require(join(REPO, ".sim-build", "src", "sim", "targeting
 
 /** An AbilityDef with just the fields a handler reads. `data` is dataA..dataI. */
 function def(over = {}) {
-  const { data = [], duration = 0, area = 0, ...rest } = over;
+  const { data = [], dataStr = [], duration = 0, area = 0, ...rest } = over;
   return {
     id: "TEST", code: "TEST", missileArt: "", missileSpeed: 0, targetArt: "", casterArt: "", specialArt: "",
     effectArt: "", areaArt: "", buffArt: "", buffFx: [], buffEffectArt: "", buffSpecialArt: "", lightning: [],
-    levelData: [{ cost: 0, cooldown: 0, duration, heroDuration: duration, castRange: 0, area, castTime: 0, data, buffs: [], summon: "" }],
+    levelData: [{ cost: 0, cooldown: 0, duration, heroDuration: duration, castRange: 0, area, castTime: 0, data, dataStr, buffs: [], summon: "" }],
     ...rest,
   };
 }
@@ -31,7 +31,7 @@ function unit(over = {}) {
 
 /** Records what the handler did instead of touching a world. */
 function harness(units) {
-  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [], boltStops: [], waves: [], transmutes: [] };
+  const log = { buffs: [], damage: [], heals: [], effects: [], bolts: [], boltStops: [], waves: [], transmutes: [], infernos: [], summons: [], marks: [] };
   const api = {
     rng: () => 0.5,
     getUnit: (id) => units.find((u) => u.id === id),
@@ -63,6 +63,12 @@ function harness(units) {
     buffCarrierOf: (buffId) => (buffId === "BUim" ? { path: "ImpaleHitTarget", attach: [], carry: ["sprite", "first"] } : null),
     dispel: () => {}, emitSplat: () => {}, summon: () => {}, killUnit: () => {},
     transmute: (t, c, goldFactor, lumberFactor) => { log.transmutes.push({ id: t.id, by: c.id, goldFactor, lumberFactor }); return 0; },
+    // Rain of Chaos casts the ABILITY `Nrc1` names (ANin) at scattered points, Dark Portal
+    // asks for units to be created, and Parasite marks its victim for the death summon.
+    abilityOf: (id) => (id === "ANin" ? def({ id: "ANin", code: "ANin" }) : undefined),
+    inferno: (c, d, rank, x, y) => log.infernos.push({ code: d.code, rank, x, y }),
+    requestSummon: (unitId, x, y, facing, owner, team, durationSec, src, art, atPoint) => log.summons.push({ unitId, x, y, owner, team, durationSec, src, art: art?.summon, atPoint }),
+    markParasite: () => log.marks.push(true),
   };
   return { api, log };
 }
@@ -476,6 +482,40 @@ const round = (n) => Math.round(n * 1000) / 1000;
   check("…and ignites only the hazed ones, for dataE a second", log.buffs.map((b) => [b.id, b.kind, b.group, b.value]),
     [[2, "dot", "breathoffire", 5], [4, "dot", "breathoffire", 5]]);
   check("…for the row's own duration — on a hero too, whose HeroDur1 is the same 5 s", log.buffs.map((b) => b.timeLeft), [5, 5]);
+}
+
+// Rain of Chaos — `Nrc1` is the ABILITY that creates the unit (ANin, Inferno), `Nrc2` how
+// many of them fall, and they scatter over `Area1`. Reading Nrc1 as a unit id did nothing.
+{
+  const caster = unit({ id: 1, team: 0, x: 0, y: 0 });
+  const { api, log } = harness([caster]);
+  SPELL_HANDLERS.ANrc(api, caster, def({ code: "ANrc", data: [0, 2], dataStr: ["ANin"], area: 900 }), 1, { targetId: 0, x: 1000, y: 0 });
+  check("Rain of Chaos drops Nrc2 Infernos", log.infernos.map((i) => i.code), ["ANin", "ANin"]);
+  check("…each inside Area1 of the click", log.infernos.every((i) => Math.hypot(i.x - 1000, i.y) <= 900), true);
+}
+
+// Dark Portal — `Ndp1` is the demon list, `Ndp2`/`Ndp3` the fewest and the most that walk
+// out; they arrive AT the click (atPoint) and have no clock (durationSec 0 = permanent).
+{
+  const caster = unit({ id: 1, team: 0 });
+  const { api, log } = harness([caster]);
+  const d = def({ code: "ANdp", data: [0, 3, 5], dataStr: ["nbal,nfel"], effectArt: "DarkPortalTarget.mdl" });
+  SPELL_HANDLERS.ANdp(api, caster, d, 3, { targetId: 0, x: 500, y: -700 });
+  check("Dark Portal summons between Ndp2 and Ndp3 demons", log.summons.length, 4);
+  check("…drawn from Ndp1's list, at the click, for good", [log.summons.every((s) => s.unitId === "nbal" || s.unitId === "nfel"), log.summons.every((s) => s.atPoint && s.x === 500 && s.y === -700), log.summons.every((s) => s.durationSec === 0)], [true, true, true]);
+  check("…in the row's own portal art", log.summons[0].art, "DarkPortalTarget.mdl");
+}
+
+// Parasite — dataA damage per second for Dur1, and a mark for the death half (the warrior is
+// world.ts orbDeathEffects, gated on the buff, so an expired parasite births nobody).
+{
+  const caster = unit({ id: 1, team: 0 });
+  const foe = unit({ id: 2, team: 1 });
+  const { api, log } = harness([caster, foe]);
+  const d = def({ code: "ANpa", data: [5], duration: 30, buffs: ["BNpa", "BNpm"], summon: "ncfs" });
+  SPELL_HANDLERS.ANpa(api, caster, d, 1, { targetId: 2, x: 300, y: 0 });
+  check("Parasite burns dataA a second for Dur1", log.buffs.map((b) => [b.kind, b.group, b.value, b.timeLeft]), [["dot", "parasite", 5, 30]]);
+  check("…and marks the victim for the corpse birth", log.marks, [true]);
 }
 
 console.log(`\n${failed ? `${failed} FAILED` : "all passed"}`);

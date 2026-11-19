@@ -404,8 +404,10 @@ export const OPTION_DEFS: readonly OptionDef[] = [
   // `src/overrides/ui/*.fdf` and the labels from our `opt.*` table. They live on the Input panel
   // beside Voice Control and Gamepad: all four are ways of driving the game besides the mouse.
   //
-  // `gestureEnabled` is the master switch (device.ts also requires a touchscreen, so a desktop
-  // mouse never picks it up); off means not one listener is registered (P5). Everything below it
+  // `gestureEnabled` is the master switch: off means not one listener is registered (P5). Its
+  // DEFAULT is per device (phone/tablet on, everything else off — see `deviceGestureDefault`), but
+  // the row itself is live everywhere: any platform can switch to the touch console and back, and
+  // `saveOptions` remembers that choice in `warcraft-open.gesture-mode`. Everything below it
   // is read live by `src/ui/gesture/profile.ts`: thresholds feed the recogniser, the two semantic
   // switches feed the action layer, and the look-and-feel rows feed the console UI.
   { key: "gestureEnabled", frame: "GestureEnabledCheckBox", cap: "GESTURE_ENABLE", kind: "bool", panel: "input", def: true },
@@ -467,7 +469,51 @@ export type Options = Record<string, OptionValue>;
 export function defaultOptions(): Options {
   const o: Options = {};
   for (const d of OPTION_DEFS) o[d.key] = d.def;
+  // 手势 / 鼠标的选择没有固定的出厂值：手机和平板默认手势，其余平台默认鼠标
+  // （ui/gesture/device.ts 的总开关只读这里，所以换平台、换设备都由这一处决定）。
+  o.gestureEnabled = deviceGestureDefault();
   return o;
+}
+
+/** 手机、平板默认走手势；桌面（含触屏笔记本）默认鼠标。判定与 ui/gesture/device.ts 的
+ *  `classify()` 同一条标准：粗指针 + 真触摸才算手机/平板。 */
+function deviceGestureDefault(): boolean {
+  if (typeof navigator === "undefined" || typeof window === "undefined") return false;
+  if ((navigator.maxTouchPoints ?? 0) <= 0) return false;
+  // Android WebView / TV 的 `(pointer: coarse)` 不可靠，但它一定有触摸面（同 device.ts 的判定）。
+  if ((window as unknown as { ow3android?: unknown }).ow3android) return true;
+  try {
+    return !!window.matchMedia?.("(pointer: coarse)").matches;
+  } catch {
+    return false;
+  }
+}
+
+const GESTURE_MODE_KEY = "warcraft-open.gesture-mode";
+
+/** 玩家显式选过的显示模式：true 手势 / false 鼠标 / null 还没选过。
+ *  它单独存一条，是因为选项表里的布尔值分不清「默认」和「选过」——桌面旧存档里那个
+ *  `gestureEnabled: true` 只是当年默认值的回声，不能当成玩家要手势界面。 */
+export function storedGestureMode(): boolean | null {
+  const ls = typeof localStorage !== "undefined" ? localStorage : null;
+  if (!ls) return null;
+  try {
+    const raw = ls.getItem(GESTURE_MODE_KEY);
+    return raw === "on" ? true : raw === "off" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 记住这次的选择（保存选项、对局右上角切换都会经过这里）。 */
+function rememberGestureMode(on: boolean): void {
+  const ls = typeof localStorage !== "undefined" ? localStorage : null;
+  if (!ls) return;
+  try {
+    ls.setItem(GESTURE_MODE_KEY, on ? "on" : "off");
+  } catch {
+    /* storage disabled — the session still honours it */
+  }
 }
 
 const STORAGE_KEY = "warcraft-open.options";
@@ -524,6 +570,10 @@ export function loadOptions(): Options {
   } catch {
     /* unreadable store — the defaults stand */
   }
+  // 桌面旧存档里的 `gestureEnabled: true` 只是当年默认值的回声（旧版还要求设备有触摸，
+  // 桌面玩家根本没见过手势界面），不是谁的选择。没有新的显式标记时按设备默认来；
+  // 手机 / 平板的默认本来就是开，不受影响。
+  if (storedGestureMode() === null && !deviceGestureDefault()) base.gestureEnabled = false;
   return lowPerfFlag(base);
 }
 
@@ -556,6 +606,9 @@ export function saveOptions(opts: Options): void {
   try {
     // `computerPlusOn` marks a store written since Computer+ became the default — see `loadOptions`.
     ls.setItem(STORAGE_KEY, JSON.stringify({ ...opts, computerPlusOn: true }));
+    // 任何一次保存都顺手记下当前的显示模式：这样桌面玩家一旦在 Options / 右上角切到手势，
+    // 刷新后仍然进手势；也把「默认」与「选过」彻底分开（见 storedGestureMode）。
+    if (typeof opts.gestureEnabled === "boolean") rememberGestureMode(opts.gestureEnabled);
   } catch {
     /* quota exceeded / storage disabled — settings are best-effort */
   }

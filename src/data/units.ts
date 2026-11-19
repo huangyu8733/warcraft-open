@@ -701,7 +701,17 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
 
     const strings = names.getRow(id) as Row | undefined;
     const fn = funcs.getRow(id) as Row | undefined;
-    const [bx, by] = fn ? parseButtonPos(str(fn, "buttonpos")) : [0, 0];
+    // The profile half of a unit can arrive in EITHER the FUNC or the STRINGS file. Stock
+    // data splits them (art/slots in Func, name/tooltip in Strings), but an optimised map may
+    // fold both into `*UnitStrings.txt` and ship an EMPTY `*UnitFunc.txt` — W3x2Lni's "slk"
+    // mode does that, and 人族无敌 arrives this way. Reading art/buttonpos off Func alone left
+    // every custom unit with no icon and every button in slot 0. Strings first, because a
+    // map's own profile is the one that overrides the install's.
+    const prof: Row = {
+      string: (key: string): string | undefined =>
+        (strings ? strings.string(key) : undefined) || (fn ? fn.string(key) : undefined),
+    };
+    const [bx, by] = parseButtonPos(str(prof, "buttonpos"));
 
     // Heroes: the base hp/mana/def fields are level-1 BASE values; the game
     // precomputes the real level-1 stats (base + attributes) into realhp/realm/
@@ -726,10 +736,10 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
     // legacy attack* fields afterwards, by syncPrimaryWeapon. A unit with no weapons row, or
     // with weapsOn=0 (every building, the Scout Tower), ends up with no slots at all and
     // simply cannot attack.
-    const slots = weaponSlots(w, fn, primaryVal, u);
-    const animProps = fn ? (str(fn, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
-    const attachAnimProps = fn ? (str(fn, "Attachmentanimprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
-    const attachLinkProps = fn ? (str(fn, "Attachmentlinkprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
+    const slots = weaponSlots(w, prof, primaryVal, u);
+    const animProps = (str(prof, "Animprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const attachAnimProps = (str(prof, "Attachmentanimprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const attachLinkProps = (str(prof, "Attachmentlinkprops") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 
     defs.set(id, {
       id,
@@ -771,7 +781,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
       // and `specialart`, which is why the whole spawn catalogue had empty icons. Read both:
       // SD (and custom maps' Func overrides) still write `art` in the Func file.
       icon:
-        (fn ? str(fn, "art") : "") ||
+        str(prof, "art") ||
         (skinRow
           ? hd
             ? art === "sd"
@@ -779,7 +789,7 @@ export function loadUnitRegistry(vfs: DataSource): UnitRegistry {
               : str(skinRow, `art:${art}`) || str(skinRow, "art:hd") || str(skinRow, "art")
             : str(skinRow, "art")
           : ""),
-      specialArt: fn ? mdxPath(str(fn, "specialart")) : "",
+      specialArt: mdxPath(str(prof, "specialart")),
       // Tooltip text (Name/Tip/Ubertip/Hotkey) lives in the per-race *UnitStrings*
       // INI, NOT the *UnitFunc* INI (which only holds art/buttonpos/missile). The
       // description was previously read from `fn` → always empty → generic fallback.
@@ -1008,7 +1018,13 @@ function rawTip(v: string): string {
  *  the install by tools/sim-weapon-sound-test.cjs.) */
 function weaponSlots(w: Row | undefined, fn: Row | undefined, primaryVal: number, ui: Row | undefined): WeaponSlotDef[] {
   if (!w) return [];
-  const mask = num(w, "weapsOn", 0);
+  // A SLK-mode optimizer (W3x2Lni) drops every cell that equals the table's DEFAULT, and
+  // `weapsOn`'s default is "both" (3): a row that wants a slot off states 0/1/2. Reading a
+  // missing cell as 0 disarmed every optimized tower that left the default alone — on
+  // 【人族无敌】 the 哨塔/刀轮塔/图腾 set towers kept full weapon rows (targets, range,
+  // cooldown) and never acquired a target. Every stock row states the mask, so this only
+  // changes map-owned tables.
+  const mask = num(w, "weapsOn", 3);
   // `Missileart` / `Missilespeed` (UnitFunc.txt) are themselves per-slot comma lists when the
   // unit has two attacks: the Flying Machine's is "GyroCopterImpact.mdl,GyroCopterMissile.mdl"
   // at speeds 2000,900 — the air shot and the bombs. One entry serves both slots (the Gryphon

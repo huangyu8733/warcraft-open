@@ -27,6 +27,7 @@ import War3MapW3u from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file";
 import War3MapW3d from "mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file";
 import { MappedData } from "mdx-m3-viewer/dist/cjs/utils/mappeddata";
 import { PrimaryAttribute, toArmorType, toAttackType, toMoveType, toPrimaryAttribute, toRegenType, toWeaponType } from "./enums";
+import { decodeMapText } from "./text";
 import { gameNum } from "./gameplayConstants";
 import { syncPrimaryWeapon, type UnitDef, type UnitRegistry, type WeaponSlotDef } from "./units";
 import { emptyAbilityLevel, mdlPath, shapeRow, normalizeTargetFlags, type AbilityDef, type AbilityLevel, type AbilityRegistry } from "./abilities";
@@ -624,7 +625,7 @@ function cloneDef(base: UnitDef, id: string): UnitDef {
 /** Build a TRIGSTR_-resolver from a map's war3map.wts bytes (identity if none). */
 export function makeTrigStr(wtsBytes?: Uint8Array): (v: string) => string {
   const table = wtsBytes
-    ? localizeWtsTable(parseWts(new TextDecoder("utf-8").decode(wtsBytes)))
+    ? localizeWtsTable(parseWts(decodeMapText(wtsBytes)))
     : null;
   return (v: string): string => {
     if (!table || !v.startsWith("TRIGSTR_")) return v;

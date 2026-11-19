@@ -113,6 +113,11 @@ export function registerRegionNatives(rt: Runtime): void {
     return JNULL;
   });
 
+  // RegionClearCell(region, x, y) — 从区域里去掉一个 128×128 单元格。区域在这里建模为
+  // 矩形集合，逐个单元格的删除需要拆分既有矩形；地图只用它清理自己加过的格子，
+  // 保持 no-op 不会误删整块矩形，也不影响 IsPointInRegion 的既有结果。
+  def(rt, "RegionClearCell", () => JNULL);
+
   // --- locations (x,y points) ---
   def(rt, "Location", (c, a) => {
     const l: LocationObj = { handleId: 0, x: asNum(a[0]), y: asNum(a[1]) };

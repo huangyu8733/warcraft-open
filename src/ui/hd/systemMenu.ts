@@ -102,7 +102,7 @@ export function openSystemMenu(screen: HdScreen, vfs: DataSource, h: SystemMenuH
   // The plates are authored for a 1080-line window, like every other 3.0 screen; only the row
   // is zoomed so the scrim still covers the whole window at any size.
   const rescale = (): void => {
-    row.style.zoom = Math.max(0.5, window.innerHeight / 1080).toFixed(3);
+    row.style.zoom = Math.max(0.25, window.innerHeight / 1080).toFixed(3);
   };
   rescale();
   window.addEventListener("resize", rescale);

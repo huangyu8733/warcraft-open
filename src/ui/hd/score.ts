@@ -174,7 +174,7 @@ export async function mountHdScoreScreen(opts: ScoreScreenOptions): Promise<Scor
   let infoOpen = false;
 
   const rescale = (): void => {
-    const z = Math.max(0.5, window.innerHeight / 1080);
+    const z = Math.max(0.25, window.innerHeight / 1080);
     // `zoom` shrinks the rendered size of a 100%-wide box, so the layer is authored in the
     // screen's own pixel units and scaled back up to fill the window.
     container.style.zoom = String(z);

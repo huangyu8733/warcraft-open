@@ -470,6 +470,15 @@ export class LanLobby {
     return this.officialList;
   }
 
+  /** The official server behind this page, when the page IS one: the hosted copy at
+   *  warcraft.hhkj.me serves the relay itself, so the connection we stand on is Warcraft Open
+   *  and not "this computer". Null on the dev server and in the desktop app, whose relay is
+   *  genuinely local. */
+  get servedOfficialUrl(): string | null {
+    const here = this.servedRelayUrl;
+    return here !== null && this.officialList.includes(here) ? here : null;
+  }
+
   /**
    * Join a game from the list, wherever it is. `key` is a `ListedRoom.key`, not a relay's own
    * room id — see that type for why they are not the same thing.
@@ -617,7 +626,10 @@ export class LanLobby {
     // It is never the player's to remove, so it sits at the top with no ✕.
     const playing = this.servedRelayUrl;
     if (playing && !officialHere && !this.remotes.has(playing)) {
-      sorted.unshift({ url: playing, connected: this.transport?.connected ?? false, source: "primary" });
+      // On the hosted copy the relay behind the page is Warcraft Open itself: it is named, and
+      // it is nobody's to remove, exactly as it is when it is dialled rather than served.
+      const source: RelaySource = this.officialList.includes(playing) ? "official" : "primary";
+      sorted.unshift({ url: playing, connected: this.transport?.connected ?? false, source });
     }
     return sorted;
   }

@@ -2235,8 +2235,8 @@
 
 .hd-official .LANGames-UpperLeftSection .Simple-Header-Title { padding-left: 20px; }
 
-/* The category strip: the screen's own tabs on the left, the player's name and the Servers
- * List on the right, on the same wood band the title wears. */
+/* The category strip: the screen's own tabs on the left. The player's name and the Servers
+ * List ride on the title band above, level with 局域网 (see LANGames-MatchNameSection). */
 .hd-official .LANGames-TitleFrame {
   display: flex;
   align-items: center;
@@ -2259,7 +2259,9 @@
 .hd-official .LANGames-ButtonSection {
   display: flex;
   align-items: flex-end;
-  flex: 1 1 auto;
+  /* Fixed: the tabs sit on the left and the leftover width belongs to the name group, so the
+   * gap after 创建 is one deliberate gutter instead of half of the free space. */
+  flex: 0 0 auto;
   min-width: 0;
   height: 100%;
   padding-top: 18px;
@@ -2298,7 +2300,19 @@
   min-width: 0;
   justify-content: flex-end;
   gap: 12px;
+  margin-left: 28px;
 }
+
+/* In the title band it is a fixed-width passenger: the title keeps the rest of the row and the
+ * name + Servers List sit against the band's right edge, level with 局域网. */
+.hd-official .LANGames-UpperLeftSection .LANGames-MatchNameSection {
+  flex: 0 0 auto;
+  height: 100%;
+  margin-left: 0;
+  padding: 0 18px 0 24px;
+}
+
+.hd-official .LANGames-UpperLeftSection .LANGames-NameField { flex: 0 0 200px; }
 
 .hd-official .LANGames-FieldLabel {
   flex: none;
@@ -2335,6 +2349,41 @@
 }
 
 .hd-official .LANGames-LowerLeftSection .Official-ListFrame { padding: 0 0 14px; }
+
+/* The LAN game list's own column split. The shared 108/196px pair left 玩家人数 and 主机
+ * crowding each other at the right of the header bar, and the host column's caption stopped
+ * well short of the bar's end. A wider players column separates the captions; the host column
+ * is narrower and right-aligned so its caption and values sit against the bar's right edge. */
+.hd-official .LANGames .Official-Col1 { width: 150px; }
+.hd-official .LANGames .Official-Col2 { width: 160px; }
+
+.hd-official .LANGames .Official-ListHeader .Official-Col2 { justify-content: flex-end; padding-right: 20px; }
+.hd-official .LANGames .Official-EntryRow .Official-Col2 { text-align: right; padding-right: 20px; }
+
+/* --- a browsed file list (the create screens in lanCreate.ts and skirmish.ts) ------------- */
+/* Those lists browse folders and maps, so they have ONE column. Every row still carries the
+ * two cells the LAN table puts there, and at their widths they left the name column so little
+ * room that even a `Do…` folder was cut off. They are empty on these screens, so take them out. */
+.hd-official .Official-FileList .Official-Col1,
+.hd-official .Official-FileList .Official-Col2 { display: none; }
+
+/* A custom map's name is long: wrap it to two lines (then an ellipsis), not the first two
+ * letters. The row grows with the text; the icon stays centred against it. */
+.hd-official .Official-FileList .Official-EntryRow { min-height: 60px; height: auto; padding: 6px 0; }
+.hd-official .Official-FileList .Official-EntryRow .Official-Col0 {
+  white-space: normal;
+  text-overflow: clip;
+}
+.hd-official .Official-FileList .Official-FileName {
+  display: -webkit-box;
+  flex: 1;
+  min-width: 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
 
 .hd-official .LANGames-Status {
   min-height: 26px;

@@ -309,7 +309,12 @@ void lambert() {
   vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - VdH, 5.0);
   vec3 specular = min(fresnel * (D * G / (4.0 * NdV)), vec3(1.2));
 
-  color *= (1.0 - metallic) * clamp(lambertFactor * aoFactor + 0.1, 0.0, 1.0);
+  // OpenWar3: the old formula was ndotl * ao + 0.1 — a 10% ambient floor, so every face
+  // turned away from the light (building sides, a unit's back) went almost black, and the
+  // ORM AO channel darkened the rest on top. Classic (SD) art uses a 0.7 floor, which is why
+  // Reforged looked so much darker than the same map in SD. Mirror SD's floor and let AO
+  // only shade half as hard, so the HD scene sits at the same overall brightness.
+  color *= (1.0 - metallic) * clamp(lambertFactor * mix(1.0, aoFactor, 0.5) + 0.6, 0.0, 1.0);
   color += specular * aoFactor * 0.6;
   color += emissive;
 
@@ -338,7 +343,8 @@ void lambertLite() {
     color *= tc * tcFactor;
   }
 
-  color *= clamp(lambertFactor * aoFactor + 0.1, 0.0, 1.0);
+  // Same floor as lambert(): SD's 0.7 keeps the dark side of a building readable.
+  color *= clamp(lambertFactor * mix(1.0, aoFactor, 0.5) + 0.6, 0.0, 1.0);
 
   gl_FragColor = vec4(color, baseColor.a * v_layerAlpha);
 }

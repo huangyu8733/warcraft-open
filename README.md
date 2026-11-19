@@ -32,7 +32,8 @@ Warcraft III 安装目录（1.30.4 CASC，或自动降级兼容的 1.31.1），�
 
 A browser-first, asset-compatible re-creation of the **Warcraft III: The Frozen Throne**
 engine in TypeScript. It ships **zero Blizzard assets or code** — the engine reads the Warcraft III
-installation you point it at, at runtime. Online demo: <https://warcraft.hhkj.me/>
+installation you point it at, at runtime. It plays on phones and tablets through a touch gesture
+console, and supports LAN multiplayer. Online demo: <https://warcraft.hhkj.me/>
 
 ## 游戏截图
 
@@ -41,6 +42,8 @@ installation you point it at, at runtime. Online demo: <https://warcraft.hhkj.me
 | ![经典版主菜单](public/demoscreens/sd-main-menu.jpg) | ![重制版主菜单](public/demoscreens/hd-main-menu.jpg) |
 | **战役**：读取安装包内的章节并正常显示 | **对局**：原版模型、地形、战争迷雾与 HUD |
 | ![战役](public/demoscreens/sd-campaign.jpg) | ![经典版对局](public/demoscreens/sd-gameplay.jpg) |
+| **局域网联机**：队伍 / 空位、地图信息与开局设置 | **手机 / 平板手势面板**：虚拟摇杆 + 命令轮盘 |
+| ![局域网联机](public/demoscreens/lan-lobby.jpg) | ![手机平板手势面板](public/demoscreens/gesture-tablet.jpg) |
 
 ## 核心特性
 
@@ -58,8 +61,8 @@ installation you point it at, at runtime. Online demo: <https://warcraft.hhkj.me
 
 ### 联机与 AI
 
-- **局域网 + 在线联机**：桌面版开箱即用，在线地址为 https://warcraft.hhkj.me/
-  （[联机实现](docs/multiplayer.md)）。
+- **局域网 + 在线联机**：局域网房间列表，支持队伍 / 空位、观察者与人数校验；桌面版开箱即用，
+  在线地址为 https://warcraft.hhkj.me/（[联机实现](docs/multiplayer.md)）。
 - **断线重连**：掉线不再意味着整局作废。
 - **WebRTC 直连**：对局内客户端与主机建立可靠有序的 DataChannel，中继只负责信令与兜底。
 - **Computer+**：不作弊、会侦察、会转型的加强版电脑 AI（[实现说明](docs/computer-plus.md)）。
@@ -73,6 +76,8 @@ installation you point it at, at runtime. Online demo: <https://warcraft.hhkj.me
 - **内置地图下载器**：在地图列表中搜索并下载 EpicWar 地图，浏览 Hive Workshop 与 wc3maps；
   联机时若缺少房主地图会自动下载。
 - **手柄支持**：标准手柄布局，按键会被翻译成鼠标 / 键盘输入（[说明](docs/gamepad.md)）。
+- **手机 / 平板手势面板**：触屏虚拟摇杆、命令轮盘、编队条与物品栏，横竖屏自适应，
+  无需右键与悬停即可完整操作（[说明](docs/gesture-control.md)）。
 - **语音控制**：面向无障碍场景的命令识别模式。
 - **多语言界面**：简体中文 / English 随时切换。
 
@@ -123,7 +128,7 @@ pnpm test     # 全部检查（依赖游戏数据的套件在缺少安装目录�
 
 - [地图与数据格式](docs/wc3-data-formats.md) · [CASC 归档](docs/casc.md) · [参考资料索引](docs/REFERENCES.md)
 - [触发器 / JASS 进度](docs/triggers.md) · [战役](docs/campaigns.md) · [联机](docs/multiplayer.md)
-- [Computer+ AI](docs/computer-plus.md) · [观察者 HUD](docs/observer-hud.md) · [手柄](docs/gamepad.md) · [快捷键](docs/hotkeys.md)
+- [Computer+ AI](docs/computer-plus.md) · [观察者 HUD](docs/observer-hud.md) · [手柄](docs/gamepad.md) · [手势面板](docs/gesture-control.md) · [快捷键](docs/hotkeys.md)
 - [性能日志](docs/perf-logging.md) · [对局日志](docs/match-log.md) · [光照](docs/lighting.md) · [地形裁剪](docs/terrain-culling.md) · [法术特效](docs/spell-fx.md)
 
 ## 社区与反馈

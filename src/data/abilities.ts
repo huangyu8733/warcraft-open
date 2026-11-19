@@ -506,6 +506,12 @@ export const NO_AOE_CURSOR = new Set<string>([
   "Afla", // Flare — the Mortar Team's, the same flare
   // 3 — an Area measured around the caster, not at the click
   "AItp", // Scroll of Town Portal — `Area1` is the escort that travels with the Hero
+  // 4 — an Area that is a DISTANCE, not a footprint. Blink (`AEbl`, and every escape item
+  // whose row copies it, Kelen's Dagger's `AIbk` included) reads its max jump out of `Area1`,
+  // and a map that wants an unlimited blink writes the 999999 sentinel there — 人族无敌 does,
+  // and drawing that as an AoE splat painted the whole lawn white while the cursor was armed.
+  // The real client shows a bare reticle: a teleport catches nothing on the ground.
+  "AEbl",
 ]);
 
 /**
@@ -852,13 +858,29 @@ export const KNOWN_ABILITIES: Record<string, { target: TargetType; autocast?: bo
   AIda: { target: "none" }, // Item area armor
   AUfa: { target: "unit" }, // Frost Armor
   ANbr: { target: "none" }, // Battle Roar
-  ANpa: { target: "unit" }, // Parasite
+  // Parasite — "torments a target unit … damage per second … if the target dies while the
+  // parasite is still in effect, a warrior is born from the corpse". The profile carries the
+  // pair, `Order=parasite` with `Orderon=parasiteon`/`Orderoff=parasiteoff`, so it toggles
+  // autocast exactly like the Heal shape.
+  ANpa: { target: "unit", autocast: true },
   Amls: { target: "unit" }, // Magic Leash / Aerial Shackles — a channelled hold (spells.ts)
   Apsh: { target: "none" }, // Phase Shift — out of existence for Dur1 (spells.ts)
   // Spellbook — a button that opens a page of the abilities it holds (`bookSpells`); not a cast.
   Aspb: { target: "none" },
   ACrn: { target: "passive" }, // Reincarnation (creep) — the Centaur Khan / Sasquatch / Wendigo row
   ANin: { target: "point" }, // Inferno (creep/Pit Lord) — the Dreadlord's `AUin` under its own code
+  // Rain of Chaos — the Dreadlord campaign ultimate: `Nrc1` names the ABILITY that creates the
+  // unit (ANin, Inferno) and `Nrc2` how many of them fall, scattered over `Area1`.
+  ANrc: { target: "point" },
+  // Dark Portal — Archimonde's: `Ndp1` is the demon list, `Ndp2`/`Ndp3` the least and most that
+  // walk out of the portal at the click.
+  ANdp: { target: "point" },
+  // Spider Attack — a beta attack modifier with nothing in it: no buff id, no damage, no
+  // summon; the row's only Data field is `Spider Capacity` and its other numbers are the 1 s
+  // Dur pair. The spider missile and the ground-only targeting the name suggests are already
+  // the WEAPONS of nnwl/nnwr (CryptFiendMissile.mdx), not this row. Kept as a passive so the
+  // ability survives the load instead of being dropped as unknown.
+  Aspa: { target: "passive" },
   Asal: { target: "passive" }, // Pillage — gold on building attacks (gated on the Ropg upgrade)
   Acpf: { target: "none" }, // Corporeal/Ethereal Form (Spirit Walker) — self toggle between forms
   // === ITEM abilities that must be AIMED ===
@@ -1471,15 +1493,22 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
     const levels = Math.max(1, num(r, "levels", 1));
     const f = func.getRow(id) as Row | undefined;
     const s = strs.getRow(id) as Row | undefined;
-    const [bx, by] = f ? parseButtonPos(str(f, "buttonpos") || str(f, "researchbuttonpos")) : [0, 0];
+    // The profile half of an ability can arrive in either the FUNC or the STRINGS file. Stock
+    // data splits them (art in Func, name/tip in Strings), but an optimised map may fold both
+    // into `Units\*AbilityStrings.txt` and ship an EMPTY `*AbilityFunc.txt` — W3x2Lni's "slk"
+    // mode does exactly that, and 人族无敌 arrives this way. Reading art only off the func row
+    // left every custom ability with its hotkey and name but a blank button. Strings first,
+    // because a map's own art is the one that overrides the install's.
+    const prof = (key: string): string => (s ? str(s, key) : "") || (f ? str(f, key) : "");
+    const [bx, by] = parseButtonPos(prof("buttonpos") || prof("researchbuttonpos"));
     // The LEARN page reads `Researchbuttonpos` and nothing else: a skill that names none sits at
     // 0,0, the value an absent position has, rather than borrowing its cast-card `Buttonpos`.
     // DotA leaves it off the FIRST skill of many heroes (Shadow Shaman's Forked Lightning
     // `A010`: Buttonpos=0,2 and no Researchbuttonpos) because 0,0 is where that skill belongs —
     // borrowing put the hero's first skill on the bottom row. No stock MELEE hero relies on the
     // borrow: the seven stock hero skills without one are neutral and campaign rows.
-    const [lx, ly] = f ? parseButtonPos(str(f, "researchbuttonpos")) : [0, 0];
-    const [ux, uy] = f && str(f, "unbuttonpos") ? parseButtonPos(str(f, "unbuttonpos")) : [bx, by];
+    const [lx, ly] = parseButtonPos(prof("researchbuttonpos"));
+    const [ux, uy] = prof("unbuttonpos") ? parseButtonPos(prof("unbuttonpos")) : [bx, by];
     // Aiming is a property of the CODE, with one family of exceptions: the item rows, where
     // Blizzard hung two different aims on one code. `ALIAS_TARGETS` is that override, keyed
     // by the row's own id — see its comment for the case that forces it.
@@ -1515,8 +1544,8 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       targetFlags: normalizeTargetFlags(str(r, "targs1") || ""),
       autocast: !!known?.autocast,
       name: (s && str(s, "Name")) || id,
-      icon: f ? artList(str(f, "art"))[0] ?? "" : "",
-      icons: f ? artList(str(f, "art")) : [],
+      icon: artList(prof("art"))[0] ?? "",
+      icons: artList(prof("art")),
       hotkey: (s ? (str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
       researchHotkey: (s ? (str(s, "Researchhotkey").trim()[0] ?? str(s, "Hotkey").trim()[0] ?? "") : "").toUpperCase(),
       buttonX: bx,
@@ -1528,7 +1557,7 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       uberTips: splitList(s ? str(s, "Ubertip") : ""),
       researchTip: rawTip(s ? str(s, "Researchtip") : ""),
       researchUberTip: rawTip(s ? str(s, "Researchubertip") : ""),
-      unIcon: f ? str(f, "Unart") : "",
+      unIcon: prof("Unart"),
       unOrder: f ? str(f, "Unorder") : "",
       unHotkey: (s ? (str(s, "Unhotkey").trim()[0] ?? "") : "").toUpperCase(),
       unTip: rawTip(s ? str(s, "Untip") : ""),
@@ -1536,23 +1565,23 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       unButtonX: ux,
       unButtonY: uy,
       levelData,
-      missileArt: mdlPath(f ? str(f, "Missileart") : ""),
-      missileSpeed: f ? Number(str(f, "Missilespeed")) || 0 : 0,
-      missileArc: f ? parseFloat(str(f, "Missilearc").split(",")[0]) || 0 : 0,
-      targetArts: mdlPathList(f ? str(f, "TargetArt") : ""),
-      targetArt: mdlPath(f ? str(f, "TargetArt") : ""),
-      targetAttach: (f ? str(f, "Targetattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
-      targetAttaches: mdlPathList(f ? str(f, "TargetArt") : "").map((_, i) =>
-        (f ? str(f, i === 0 ? "Targetattach" : `Targetattach${i}`) : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+      missileArt: mdlPath(prof("Missileart")),
+      missileSpeed: Number(prof("Missilespeed")) || 0,
+      missileArc: parseFloat(prof("Missilearc").split(",")[0]) || 0,
+      targetArts: mdlPathList(prof("TargetArt")),
+      targetArt: mdlPath(prof("TargetArt")),
+      targetAttach: prof("Targetattach").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+      targetAttaches: mdlPathList(prof("TargetArt")).map((_, i) =>
+        prof(i === 0 ? "Targetattach" : `Targetattach${i}`).split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       ),
-      casterArt: mdlPath(f ? str(f, "Casterart") : ""),
-      casterAttach: (f ? str(f, "Casterattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
-      specialArt: mdlPath(f ? str(f, "SpecialArt") : ""),
-      specialAttach: (f ? str(f, "Specialattach") : "").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
-      effectArt: mdlPath(f ? str(f, "Effectart") : ""),
-      areaArt: mdlPath(f ? str(f, "Areaeffectart") : ""),
-      effectSound: f ? str(f, "Effectsound") : "", // a SLK label, NOT a path — no mdlPath here
-      effectSoundLooped: f ? str(f, "Effectsoundlooped") : "", // ditto — a label
+      casterArt: mdlPath(prof("Casterart")),
+      casterAttach: prof("Casterattach").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+      specialArt: mdlPath(prof("SpecialArt")),
+      specialAttach: prof("Specialattach").split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+      effectArt: mdlPath(prof("Effectart")),
+      areaArt: mdlPath(prof("Areaeffectart")),
+      effectSound: prof("Effectsound"), // a SLK label, NOT a path — no mdlPath here
+      effectSoundLooped: prof("Effectsoundlooped"), // ditto — a label
       // The persistent buff model lives on the BUFF, not the ability: resolve
       // buffid1's own [B….] func section TargetArt (Banish → BanishTarget, an aura →
       // GeneralAuraTarget, Flame Strike → FlameStrikeDamageTarget). Verified 2026-07
@@ -1570,12 +1599,13 @@ export function loadAbilityRegistry(vfs: DataSource): AbilityRegistry {
       fxTargetArt: mdlPath(buffField(func, str(r, "efctid1"), "Targetart")),
       fxLoopSound: buffField(func, str(r, "efctid1"), "Effectsoundlooped"), // a LABEL, not a path
       fxSound: buffField(func, str(r, "efctid1"), "Effectsound"),
-      lightning: (f ? str(f, "LightningEffect") : "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
-      animNames: (f ? str(f, "animnames") : "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
-      // Order strings (AbilityFunc `Order`/`Orderon`/`Orderoff`) — how a trigger casts it.
-      order: (f ? str(f, "Order") : "").trim().toLowerCase(),
-      orderOn: (f ? str(f, "Orderon") : "").trim().toLowerCase(),
-      orderOff: (f ? str(f, "Orderoff") : "").trim().toLowerCase(),
+      lightning: prof("LightningEffect").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
+      animNames: prof("animnames").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+      // Order strings (AbilityFunc `Order`/`Orderon`/`Orderoff`) — how a trigger casts it. A
+      // W3x2Lni map folds these into the STRINGS file with the rest of the profile.
+      order: prof("Order").trim().toLowerCase(),
+      orderOn: prof("Orderon").trim().toLowerCase(),
+      orderOff: prof("Orderoff").trim().toLowerCase(),
     });
   }
   for (const def of defs.values()) shapeRow(def);

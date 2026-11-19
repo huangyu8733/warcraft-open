@@ -3,6 +3,7 @@ import { readW3i } from "../compat/w3i";
 import { mapFlavor, readMapFormat, UNKNOWN_FORMAT, type MapFlavor, type MapFormatProfile } from "../compat/mapFormat";
 import { raceFromW3i, type Race } from "../data/races";
 import { parseWts } from "../jass/wts";
+import { decodeMapText } from "../data/text";
 import { localizeWtsTable } from "../i18n/campaignZh";
 import { mapWtsString } from "../i18n/mapLanguage";
 import { classifyMap, type MapClassification } from "./mapKind";
@@ -238,7 +239,7 @@ export function parseMapInfo(bytes: Uint8Array, fallbackName: string): MapInfo {
   // the first "STRING 0" header, and the map's NAME is the one entry that fails to parse.
   const wtsBytes = mpq.rawBytes("war3map.wts");
   const strings = wtsBytes
-    ? localizeWtsTable(parseWts(new TextDecoder("utf-8").decode(wtsBytes)))
+    ? localizeWtsTable(parseWts(decodeMapText(wtsBytes)))
     : new Map<number, string>();
   const customForces = (info.flags & W3I_USE_CUSTOM_FORCES) !== 0;
   // Player TYPE: 1 = user (a human may take the slot), 2 = computer (the map's own AI),

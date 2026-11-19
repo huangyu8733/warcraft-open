@@ -116,7 +116,14 @@ export interface DialogMessage {
   message: string;
   /** `hotkey` is the button's DialogAddButton key (GetLocalizedHotkey's char code), so the
    *  recipient's buttons answer the keyboard the way the authority's own would. */
-  buttons: { text: string; quit: boolean; hotkey?: number; score?: boolean }[];
+  buttons: { text: string; quit: boolean; hotkey?: number; score?: boolean; id?: number }[];
+  /**
+   * The AUTHORITY's dialog handle. A map's script runs on every machine, so the client's own
+   * copy exists — but the only click that changes the world is the one the authority sees.
+   * Carrying the handle lets the recipient send its answer back (`DialogClickMessage`).
+   * Engine-invented screens (quit, observer's game-over) have no handle and leave it unset.
+   */
+  dialogId?: number;
   /**
    * This dialog is the END of that player's game, not just something their script wants shown.
    *
@@ -137,6 +144,32 @@ export interface DialogMessage {
 
 export function isDialogMessage(data: unknown): data is DialogMessage {
   return typeof data === "object" && data !== null && (data as { k?: unknown }).k === "dlg";
+}
+
+/**
+ * A client's answer to a dialog the AUTHORITY's script raised (DialogMessage above).
+ *
+ * The host's script shows a dialog to a remote player; the client renders the relayed copy,
+ * whose buttons carry the authority's handles. Without sending the click back, the map's
+ * trigger fires only on the client — and a host-authoritative world ignores the client, so
+ * every choice that creates or changes something (hero/profession selection, mode votes)
+ * happened for the host alone. Stamped with the relay's sender, like chat, so a client can
+ * only answer its own dialogs.
+ */
+export interface DialogClickMessage {
+  k: "dlgclick";
+  dialog: number;
+  button: number;
+}
+
+export function isDialogClickMessage(data: unknown): data is DialogClickMessage {
+  if (typeof data !== "object" || data === null) return false;
+  const m = data as { k?: unknown; dialog?: unknown; button?: unknown };
+  return (
+    m.k === "dlgclick" &&
+    typeof m.dialog === "number" && Number.isInteger(m.dialog) && m.dialog >= 0 &&
+    typeof m.button === "number" && Number.isInteger(m.button) && m.button >= 0
+  );
 }
 
 /** The `GameMessage` member carrying one recipient's view of the world — plain JSON.
@@ -626,6 +659,9 @@ export class MatchLink {
    * victory/defeat screen. Default no-op: the host raises its own and never receives one.
    */
   onDialog: (msg: DialogMessage) => void = () => {};
+  /** Host side: a seated client answered a dialog this machine's script raised. The player
+   *  is the RELAY's stamp (never the payload's), so nobody can answer another seat's dialog. */
+  onDialogClick: (player: number, dialog: number, button: number) => void = () => {};
 
   /** The authority refused one of our commands (client side only). Default no-op. */
   onRefusal: (msg: RefusalMessage) => void = () => {};
@@ -716,6 +752,18 @@ export class MatchLink {
     return true;
   }
 
+  /**
+   * Client side: hand the AUTHORITY this player's answer to a dialog it raised.
+   *
+   * Returns false for a dialog with no authority handle (an engine-invented screen, whose
+   * buttons are local), so the caller keeps its existing local behaviour for those.
+   */
+  sendDialogClick(dialog: number, button: number): boolean {
+    if (!Number.isInteger(dialog) || dialog < 0 || !Number.isInteger(button) || button < 0) return false;
+    this.channel.send({ k: "dlgclick", dialog, button } satisfies DialogClickMessage, this.hostPeer);
+    return true;
+  }
+
   constructor(
     private readonly channel: MatchChannel,
     /** This machine's own slot. A snapshot addressed to anybody else is a routing bug. */
@@ -739,6 +787,12 @@ export class MatchLink {
         this.onCommand(from, data);
       }
       else if (isDialogMessage(data)) this.onDialog(data);
+      // Host side: a client answering a dialog the AUTHORITY's script raised. Stamped with the
+      // relay's sender, exactly like chat — the payload carries only which button.
+      else if (isDialogClickMessage(data)) {
+        const player = this.seats.find((s) => s.peer === from)?.id;
+        if (player !== undefined) this.onDialogClick(player, data.dialog, data.button);
+      }
       else if (isRefusalMessage(data)) this.onRefusal(data);
       // Host side: a client asking to say something. The sender is the RELAY's stamp, never
       // the payload's — see ChatMessage. A peer holding no seat is simply not heard.

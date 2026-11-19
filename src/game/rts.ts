@@ -659,6 +659,11 @@ const MINE_RING_SCALE = 1.4;
 const SAME_TYPE_REACH = 1.5;
 const ITEM_PICK_RADIUS = 72; // click/hover pick radius around a ground item
 const ITEM_RING_RADIUS = 40; // yellow selection/hover ring radius under a ground item
+/** 手势物品面板的「附近」：谁能被列成头像。一屏左右的距离——列的是「叫他去捡」的人，
+ *  不是整支军队；更远的单位要走很久，玩家自己拖镜头过去点更直接。 */
+const ITEM_PICKER_REACH = 1500;
+/** 面板一行最多画几张脸（与舱内乘客 / 队列同一套 34px 格子，320px 面板刚好排下）。 */
+const ITEM_PICKER_FACES = 6;
 // Extra world-unit gap added to the builder fan-out when several workers speed-
 // build one structure, so they spread around the whole footprint instead of
 // bunching up (a body-and-a-half wider than the tight gold-mine approach).
@@ -1720,6 +1725,16 @@ export class RtsController {
     return this.alliances.coAllied(owner, this.localPlayer);
   }
 
+  /** Does this unit's status bar need to read as an ENEMY's? The Default style paints those
+   *  red from full health down; a creep camp counts, a shop or a critter does not (WC3 seats
+   *  Neutral Hostile and Neutral Passive as different sides), and an observer, who is allied
+   *  with every player, sees nobody as an enemy. */
+  private barHostile(u: { owner: number; neutralPassive: boolean }): boolean {
+    if (this.observing) return false;
+    if (u.owner < 0) return !u.neutralPassive;
+    return this.colorSide(u.owner) === "enemy";
+  }
+
   /** Is this a MECHANICAL CRITTER that the local viewer must take for a neutral one — not on
    *  its owner's side (SimUnit.critterGuise, issue #194)? Asked by every picture the host draws
    *  of a unit for its own player: the ring, the bar, the hover slab, the cursor. A client is
@@ -2306,18 +2321,68 @@ export class RtsController {
     return this.execute(this.localPlayer, { c: "dropitem", unitId, slot, x: u.x + 32, y: u.y + 32 });
   }
 
+  /** 手势 HUD 物品格右上角的「丢弃」：直接把该格物品丢在持有者脚边，不经过拿起/瞄准。
+   *  与 `dropItem` 同一个命令，因此掉给谁、落在哪、是否可丢，仍由模拟裁决。 */
+  dropInventorySlot(slot: number): boolean {
+    const id = this.primary;
+    return id === null ? false : this.dropItem(id, slot);
+  }
+
   /** Send the ACTIVE unit to pick up a ground item — the order a right-click on it issues. False
    *  when there is no active unit of ours, it carries no inventory, or the item is gone. */
   pickUpGroundItem(itemId: number): boolean {
     const id = this.primary;
-    const u = id !== null && this.orderees.has(id) ? this.sim.units.get(id) : undefined;
+    if (id === null || !this.orderees.has(id)) return false;
+    return this.pickUpGroundItemWith(id, itemId);
+  }
+
+  /** Send ONE NAMED unit of ours to fetch a ground item — the gesture HUD's picker faces, where
+   *  the unit is chosen by tapping its portrait instead of by being the active selection. Same
+   *  `getitem` order, same yellow ring, same refusals as the right-click path. */
+  pickUpGroundItemWith(unitId: number, itemId: number): boolean {
+    const u = this.sim.units.get(unitId);
     const it = this.sim.items.get(itemId);
-    if (!it || id === null || !this.controls(id) || !u?.inventory.length) return false;
-    if (!this.execute(this.localPlayer, { c: "getitem", unitId: id, itemId })) return false;
+    if (!it || !u || !this.controls(unitId) || !u.inventory.length) return false;
+    if (u.isIllusion || u.hexed) return false; // neither can take anything off the ground
+    if (!this.execute(this.localPlayer, { c: "getitem", unitId, itemId })) return false;
     this.ack(false); // going to pick something up is a move, never the attack quote
     // Yellow (neutral) twin-blink at the item's own hover/selection ring size.
     this.flashRing(it.x, it.y, ITEM_RING_RADIUS, FLASH_YELLOW, true);
     return true;
+  }
+
+  /** The ground item the selection is ON, as a sim id — what the gesture HUD's item panel is
+   *  about (null when the selection is a unit, a mine, or nothing). */
+  selectedGroundItem(): number | null {
+    return this.selectedItem;
+  }
+
+  /** Our units that could take a ground item, nearest first — the faces under the gesture HUD's
+   *  item panel. "Near" is ITEM_PICKER_REACH (a screen's reach): the row is for sending someone
+   *  who is roughly there, not for listing the whole army. Units with no free slot are left out
+   *  (they would walk over and be refused), and so are illusions and hexed units, which cannot
+   *  pick anything up at all. A powerup needs no slot — it is consumed where it lies. */
+  itemPickers(itemId: number): Array<{ simId: number; name: string; icon: string }> {
+    const it = this.sim.items.get(itemId);
+    if (!it) return [];
+    const powerup = !!this.items.get(it.itemId)?.powerup;
+    const out: Array<{ simId: number; name: string; icon: string; d: number }> = [];
+    for (const u of this.sim.units.values()) {
+      if (u.hp <= 0 || u.isIllusion || u.hexed || !u.inventory.length) continue;
+      if (!this.controls(u.id) || this.sim.itemsLockedFor(u.id)) continue;
+      if (!powerup && u.inventory.every((slot) => slot !== null)) continue;
+      const d = Math.hypot(u.x - it.x, u.y - it.y);
+      if (d > ITEM_PICKER_REACH) continue;
+      const def = this.registry.get(u.typeId);
+      out.push({
+        simId: u.id,
+        name: displayHeroName(u.properName, def?.name ?? u.typeId),
+        icon: def?.icon ?? "",
+        d,
+      });
+    }
+    out.sort((a, b) => a.d - b.d);
+    return out.slice(0, ITEM_PICKER_FACES).map(({ simId, name, icon }) => ({ simId, name, icon }));
   }
 
   /** Whether a ground item's model should be drawn — the renderer's half of the same fog
@@ -3051,7 +3116,9 @@ export class RtsController {
     [x, y] = this.spawnSpot(def, x, y);
     this.addSimUnit(def, x, y, facing, f.owner, f.team, 0, heroId); // under the id it died with
     this.sim.reviveFallenHero(heroId, heroId, "altar", eyeCandy);
-    this.scriptSpawns.push({ typeId: f.typeId, x, y, facing, player: f.owner, team: f.team, simId: heroId }); // …a body later
+    // Same rule as createScriptUnit: the body is placed where the sim actually settled it.
+    const su = this.sim.units.get(heroId);
+    this.scriptSpawns.push({ typeId: f.typeId, x: su?.x ?? x, y: su?.y ?? y, facing, player: f.owner, team: f.team, simId: heroId }); // …a body later
     return true;
   }
 
@@ -3111,7 +3178,11 @@ export class RtsController {
     } else if (su && passive) {
       su.neutralPassive = true;
     }
-    this.scriptSpawns.push({ typeId, x, y, facing, player: owner, team, simId }); // …gets a body later
+    // The body goes where the sim unit ACTUALLY stands, not where the trigger asked it to.
+    // `SimWorld.add` settles a unit onto a clear spot, and a model left at the requested
+    // (blocked) point draws beside the target while its sim body is a cell or two away — which
+    // reads as a unit standing next to an enemy and refusing to attack it ("out of range").
+    this.scriptSpawns.push({ typeId, x: su?.x ?? x, y: su?.y ?? y, facing, player: owner, team, simId }); // …gets a body later
     return simId;
   }
 
@@ -9616,6 +9687,7 @@ export class RtsController {
     this.matchLink = link;
     this.matchLinkIsHost = setup.isHost;
     link.onDialog = this.remoteDialog; // set before the link existed, in either order
+    link.onDialogClick = this.dialogClick;
     // Chat, both directions: on the host a client's request, already stamped with a real
     // sender; on a client the host's ruling that we were meant to hear this. Both end up at
     // the same renderer callback, which routes (host) or just shows it (client).
@@ -10236,6 +10308,28 @@ export class RtsController {
     if (this.matchLink) this.matchLink.onDialog = fn;
   }
   private remoteDialog: (msg: DialogMessage) => void = () => {};
+
+  /** Host: a client answered a dialog this machine's script raised. The handler verifies the
+   *  dialog is really shown to that player and runs the script's own button trigger. */
+  set onDialogClick(fn: (player: number, dialog: number, button: number) => void) {
+    this.dialogClick = fn;
+    if (this.matchLink) this.matchLink.onDialogClick = fn;
+  }
+  private dialogClick: (player: number, dialog: number, button: number) => void = () => {};
+
+  /** Client: send this player's answer to a dialog the authority raised. False when the
+   *  dialog has no authority handle (an engine-invented screen) or this machine IS the
+   *  authority (its own click already ran the trigger). */
+  sendDialogClick(dialog: number, button: number): boolean {
+    if (!this.matchLink || this.matchLinkIsHost) return false;
+    return this.matchLink.sendDialogClick(dialog, button);
+  }
+
+  /** True on the non-host end of a LAN match: map dialogs belong to the authority there,
+   *  so an answer has to travel back even before the relayed copy has arrived. */
+  get isMatchClient(): boolean {
+    return this.matchLink !== null && !this.matchLinkIsHost;
+  }
 
   /** Once a tick: the host emits a snapshot per recipient; a client diffs the newest arrival
    *  against what it simulated and logs where they disagree. Nothing here changes what is
@@ -11916,6 +12010,8 @@ export class RtsController {
           : u.owner < 0
           ? (u.neutralPassive ? -2 : -1)
           : this.unitColor(u.owner, e.colorOverride),
+        // Is it a side we fight? The Default style's red, whatever its health says.
+        hostile: this.barHostile(u),
         // …and what an ALLY's hero has to hand. Nothing for anything else, which is almost
         // every bar on the field.
         abilities: row?.list ?? null,

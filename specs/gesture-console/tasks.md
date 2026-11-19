@@ -3,7 +3,7 @@
 ## 已完成
 
 - [x] L0 `device.ts`：能力快照、`gestureEnabled()`（`?gesture` 调试门 + 触摸判定）、
-      首启画质建议（手机 576p / 平板 720p / HD 手机 450p + Low Performance Mode）。
+      首启画质建议（手机 576p / 平板 720p / HD 手机 450p，Low Performance Mode 默认关）。
 - [x] L1 `geometry.ts`：`getBoundingClientRect()` 热区缓存、`areaAt()`、canvas CSS 像素换算、
       安全区与系统手势禁区。
 - [x] L1 `intents.ts` + `recognizer.ts`：tap / longpress / doubletap / dragbox / swipe /
@@ -49,3 +49,14 @@
 - [ ] （可选）手势重映射编辑器 + `warcraft-open.gestures`。
 - [ ] （可选）`holdMove` 虚拟摇杆。
 - [ ] （可选）竖屏独立布局（方案 P5）。
+
+## 退出对局清理手势面板（2026-11-19）
+
+- [x] `src/ui/gesture/index.ts`：新增导出 `endGestureMatch()` =
+      `syncGestureConsole(); setGestureUiActive(false);`
+- [x] `src/main.ts`：import 增 `endGestureMatch`；`endMatch()` 在 `mapScene = null;` 后调用。
+- [x] 验证：`npx tsc --noEmit`、`npx tsc -p tsconfig.node.json`、
+      `tools/gesture-{action,flavor,intent}-test.cjs`、`npm run --silent build:web`（全绿）。
+- [ ] 手动回归：对局中打开手势 → 退出游戏 / 退出程序 → 主菜单无 `#gesture-hud`、
+      `#gesture-stage` 隐藏、`body` 无 `gesture-ui`；再进一局 HUD 正常。
+- [x] 部署并校验线上 200 与入口 hash（`index-KkSgIbus.js`，2026-11-19）。

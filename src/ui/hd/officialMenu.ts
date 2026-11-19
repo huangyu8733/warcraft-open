@@ -66,7 +66,7 @@ export function officialMenu(
   // button is a sibling of the plate, so it carries the same zoom (looked up rather than held,
   // because the screen adds it after this runs).
   const rescale = (): void => {
-    const zoom = Math.max(0.5, window.innerHeight / 1080).toFixed(3);
+    const zoom = Math.max(0.25, window.innerHeight / 1080).toFixed(3);
     scaleHost.style.setProperty("zoom", zoom);
     holder.querySelector<HTMLElement>(".PersistentBackButton")?.style.setProperty("zoom", zoom);
   };
@@ -436,7 +436,7 @@ export function officialFileScreen(
   setColumns(opts.columns);
 
   const rescale = (): void => {
-    root.style.zoom = String(Math.max(0.5, window.innerHeight / 1080));
+    root.style.zoom = String(Math.max(0.25, window.innerHeight / 1080));
   };
   rescale();
   window.addEventListener("resize", rescale);

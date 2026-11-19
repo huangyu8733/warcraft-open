@@ -291,6 +291,10 @@ export interface SpellApi {
    *  `UnitID1` names. Same shape as Black Arrow's minion — the death is the trigger, so the
    *  fact has to be recorded on the victim rather than acted on here. */
   markDoom(target: SimUnit, caster: SimUnit, def: AbilityDef, rank: number): void;
+  /** Parasite (`ANpa`/`ACpa`): mark a unit so that dying with the parasite still on it births
+   *  the warrior its `UnitID1` names. Unlike Doom's, this mark is gated on the buff: time
+   *  running out (or a dispel) takes the warrior with it. */
+  markParasite(target: SimUnit, caster: SimUnit, def: AbilityDef, rank: number): void;
   /** Big Bad Voodoo (`AOvd`): open the ritual. A channel, so the world keeps handing the
    *  invulnerability out for as long as the Shadow Hunter stands there (tickVoodoo). */
   voodoo(caster: SimUnit, def: AbilityDef, rank: number): void;
@@ -2500,6 +2504,20 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
     api.markDoom(t, caster, def, rank);
   },
 
+  // Parasite (campaign; `ACpa` is the same row) — "torments the target with a deadly parasite,
+  // dealing <DataA> damage per second for <Dur1> seconds. If the target dies while the parasite
+  // is still on it, a warrior is born from the corpse." `UnitID1` is that warrior (ncfs on
+  // ANpa, nvdl on ACpa), `BuffID1` the pest it wears (BNpa) and `BuffID2` the birth (BNpm).
+  // The damage is a plain DoT; the death half is a mark read by world.ts orbDeathEffects and
+  // gated on the buff, so a parasite that ran out (or was dispelled) leaves no warrior.
+  ANpa: (api, caster, def, rank, ctx) => {
+    const t = api.getUnit(ctx.targetId);
+    if (!t) return;
+    const lvl = lv(def, rank);
+    api.applyBuff(t, { kind: "dot", group: "parasite", timeLeft: dur(lvl, t) || 30, sourceId: caster.id, value: d(lvl, 0, 5), ...fx(def) });
+    api.markParasite(t, caster, def, rank);
+  },
+
   // Soul Burn (Firelord) — a damage-over-time burn that also silences the target.
   ANso: (api, caster, def, rank, ctx) => {
     const t = api.getUnit(ctx.targetId);
@@ -3776,6 +3794,46 @@ export const SPELL_HANDLERS: Record<string, Handler> = {
   // Scroll of the Infernal's twin), not an alias of it — so it needs the row here or the
   // button does nothing at all.
   ANin: (api, caster, def, rank, ctx) => api.inferno(caster, def, rank, ctx.x, ctx.y),
+
+  // Rain of Chaos (Dreadlord campaign ultimate) — "summons several Infernals from the sky"
+  // and nothing else: the row carries no damage, area of effect or summon of its own, only
+  //   Nrc1 "Summoned Unit"  ANin — the ABILITY that creates the unit, not a unit id
+  //   Nrc2 "Number of …"    2/3/4
+  // so the whole spell is that many Infernos scattered over `Area1` = 900 around the click.
+  // Each one is then the Inferno row's own cast — its 1 s fall, its crash damage, its stun,
+  // its `ninf` — which is why reading Nrc1 as a unit id (the old reading) did nothing.
+  ANrc: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    const sub = api.abilityOf((lvl.dataStr[0] || "").trim());
+    if (!sub) return;
+    const count = Math.max(1, Math.round(d(lvl, 1, 2)));
+    const area = lvl.area || 0;
+    for (let i = 0; i < count; i++) {
+      // Scattered, not stacked: WC3 drops each meteor somewhere inside the circle.
+      const ang = api.rng() * Math.PI * 2;
+      const r = area * Math.sqrt(api.rng());
+      api.inferno(caster, sub, 1, ctx.x + Math.cos(ang) * r, ctx.y + Math.sin(ang) * r);
+    }
+  },
+
+  // Dark Portal (Archimonde's) — "opens a dark portal out of which all manner of demons walk
+  // to serve Archimonde". `Ndp1` is the comma-separated UNIT LIST (nbal,nfel), `Ndp2` the
+  // fewest and `Ndp3` the most that come out; a random band of that size is drawn from the
+  // list at the clicked point and stays (no clock — the demons are not timed summons).
+  // `Effectart` is the portal itself: DarkPortalTarget.mdl, played where each one steps out.
+  ANdp: (api, caster, def, rank, ctx) => {
+    const lvl = lv(def, rank);
+    const types = (lvl.dataStr[0] || "").split(",").map((s) => s.trim()).filter((s) => s.length === 4);
+    if (!types.length) return;
+    const least = Math.max(1, Math.round(d(lvl, 1, 1)));
+    const most = Math.max(least, Math.round(d(lvl, 2, least)));
+    const n = least + Math.floor(api.rng() * (most - least + 1));
+    const art = { summon: def.effectArt, unsummon: def.buffEffectArt };
+    for (let i = 0; i < n; i++) {
+      const type = types[Math.floor(api.rng() * types.length)] ?? types[0];
+      api.requestSummon(type, ctx.x, ctx.y, caster.facing, caster.owner, caster.team, 0, caster.id, art, true);
+    }
+  },
 
   // Animate Dead (Death Knight, ult) — `targs1 = air,ground,dead`, the same corpse-eating
   // family as Carrion Beetles, and cast the same way: pressed, not aimed. It sweeps `Area1`

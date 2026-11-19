@@ -40,11 +40,13 @@ const sdForget = installPathPatch("sd", null);
 ok("forgetting SD writes null, not a removal of HD", Object.keys(sdForget).join(",") === "installPath" && sdForget.installPath === null);
 
 // P2 proved the Reforged data line and pinned the patch (SD-HD开发进度.md P2-5). A blank
-// constant would mean the HD entry is still closed, which is no longer the case.
+// constant would mean the HD entry is still closed, which is no longer the case. The line is
+// 3.0 and above: 2.x is the previous Reforged generation (`_HD` only), refused with the rest.
 const version = readFileSync(join(root, "src/vfs/version.ts"), "utf8");
 const pinned = /export const HD_REQUIRED_VERSION = "([^"]*)";/.exec(version);
-ok("P2 pinned the Reforged patch", pinned?.[1] === "3.0.1", pinned?.[1] ?? "missing");
+ok("HD's floor is 3.0", pinned?.[1] === "3.0", pinned?.[1] ?? "missing");
 ok("the folder picker accepts the Reforged line", isAcceptedInstallVersion("3.0.1.24371"));
+ok("…and refuses the previous Reforged generation", !isAcceptedInstallVersion("2.0.3.22692"));
 ok("…and still refuses a line nobody has", !isAcceptedInstallVersion("4.0.0"));
 
 if (failed) {

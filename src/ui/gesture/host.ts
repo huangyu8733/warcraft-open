@@ -22,8 +22,31 @@ export interface GestureCardButton {
   icon?: string | null;
   /** 按钮标题；图标缺失时镜像用它的前四个字符兜底。 */
   name?: string;
+  /** 按钮的说明正文（WC3 富文本原样）。「说明」面板优先用它，图鉴里没有时兜底。 */
+  desc?: string;
+  /** 价钱与魔法消耗。「说明」面板把它们单独列一行——命令卡上的数字是画成图标的，
+   *  正文里没有。只读，缺省按 0。 */
+  gold?: number;
+  lumber?: number;
+  food?: number;
+  mana?: number;
+  /** 技能冷却剩余秒数（0/缺省 = 就绪）。与经典命令卡读同一份 `CommandButton`。 */
+  cooldownLeft?: number;
+  /** 冷却剩余比例 0..1：手势 HUD 用它画径向暗扇形。 */
+  cooldownFrac?: number;
   /** 正在生效（自动施法 / 开关类）：镜像画成高亮，和 HUD 的 `armed` 一致。 */
   active?: boolean;
+  /** 点下去只是翻到下一张卡（建造页 / 英雄技能页 / 法术书页），不是立刻下令。
+   *  手势 HUD 把它们从 12 槽命令环里拿出来，排到攻击钮右侧的独立半弧上。 */
+  submenu?: boolean;
+  /** 英雄还能把这个技能升一级时给出的 ability id：图标角上画「+」，点它直接
+   *  `learn:<id>`，不必先进技能页。 */
+  learnId?: string;
+  /** 能设自动施法的技能才有这一条：`autocast:<code>`，与经典命令卡上「右键」跑的是同一条
+   *  命令。手势 HUD 在图标右上角画一颗小闪电，点它翻开关，不占环上的施法格。 */
+  altId?: string;
+  /** 自动施法正开着（经典卡上的闪光同一份状态）。只有带 `altId` 的按钮会读它。 */
+  modal?: boolean;
 }
 
 /** 手势 HUD（ui/gesture/hud.ts）要读的最小读数：资源、人口与当前选择。 */
@@ -33,12 +56,58 @@ export interface GestureStatus {
   foodUsed: number;
   foodMax: number;
   selection: {
+    /** 选中的单位 / 建筑 sim id：手势 HUD 卸客（金矿里的精灵、飞艇里的乘客）要带上它。 */
+    id?: number;
     name: string;
     hp: number;
     maxHp: number;
     mana: number;
     maxMana: number;
+    /** 舱内乘客：金矿里的工人、飞艇 / 地洞里的单位。点一下就把那一个放到载具脚下，
+     *  手机上没有经典控制台的货舱面板，这是「进去以后怎么出来」的唯一出口。 */
+    cargo?: Array<{ simId: number; icon: string; name: string }>;
+    cargoSlots?: number;
+    /** 建筑队列：正在训练 / 研究 / 升级的那一条。手势面板用它画进度条和队列图标。 */
+    underConstruction?: boolean;
+    buildProgress?: number;
+    trainProgress?: number;
+    queueLength?: number;
+    queueOwned?: boolean;
+    /** 生产队列，队首在前：一排可点的图标，点哪一个就取消哪一个。 */
+    queue?: Array<{ icon: string; name: string }>;
+    /** 这个选择有没有物品栏（英雄 / 带背包的单位）。没有——比如农民、步兵——手势 HUD
+     *  连那六格都不画，跟经典控制台用 ConsoleInventoryCover 盖住是同一个意思。 */
+    hasInventory?: boolean;
+    /** 物品栏里每件东西的名字与说明（已解析好图标的 data URL）。手势 HUD 的「说明」
+     *  面板用它介绍右下角的物品，不另开一条读取通道。 */
+    items?: Array<{ name: string; desc: string; icon: string }>;
+    /** 选中的是地上的物品：面板改画名称 + 说明，不画血蓝条。 */
+    isItem?: boolean;
+    /** 物品说明正文（WC3 富文本），`isItem` 时才有意义。 */
+    description?: string;
+    /** 地上物品的 sim id（`pickUpItem` 拿它下令）；物品选择的 `id` 是负数占位，不能用。 */
+    itemId?: number;
+    /** 附近能来拾取的己方单位，由近到远：一排可点的头像，点谁就谁去捡。 */
+    pickers?: Array<{ simId: number; name: string; icon: string }>;
   } | null;
+}
+
+/** 手势帮助面板的一条图鉴条目：单位 / 建筑 / 技能 / 物品共用同一副形状。 */
+export interface HelpEntry {
+  id: string;
+  name: string;
+  /** 已解析成可加载 URL 的图标；拿不到时是空串（HUD 用名称首字兜底）。 */
+  icon: string;
+  /** 说明正文，WC3 富文本原样交给 HUD 去标记。 */
+  text: string;
+}
+
+/** 本图能出现的图鉴，对应面板的四个目录页。 */
+export interface HelpCatalog {
+  units: HelpEntry[];
+  buildings: HelpEntry[];
+  abilities: HelpEntry[];
+  items: HelpEntry[];
 }
 
 export interface GestureMatchHost {
@@ -56,6 +125,17 @@ export interface GestureMatchHost {
   press(id: string): void;
   /** 实时命令卡（P3 轮盘读它；与 hud.ts 同一份数据）。 */
   card(): readonly GestureCardButton[];
+  /** 资源条上的图标（金币 / 木材 / 人口），安装目录里的 ToolTip 贴图；缺资源时返回 null，
+   *  手势 HUD 就退回原来的色点。 */
+  resourceIcon?(kind: "gold" | "lumber" | "supply"): string | null;
+  /**
+   * 工人的建造列表（建造页的卡面内容），**不必先进入建造页**：手势 HUD 把它直接排在
+   * 攻击钮左侧的外圈半弧上，省掉「先点建造、再点建筑」的那一下。非工人 / 不可操作时为空。
+   */
+  buildCard?(): readonly GestureCardButton[];
+  /** 学技能页里**还没学**的技能（英雄）：和建造共用攻击钮左侧那条半弧，英雄于是只有
+   *  一个面板——环里是能按的技能（可升级的那几格角上带「+」），半弧上是还没学的。 */
+  learnCard?(): readonly GestureCardButton[];
   /** 是否正在瞄准：armed 施法 / 建造放置。下一次轻点必须落地，而不是重新选中。 */
   armed(): boolean;
 
@@ -68,8 +148,46 @@ export interface GestureMatchHost {
 
   /** 相机平移，单位是屏幕 CSS 像素（与中键拖拽同一套换算）。 */
   panBy(dx: number, dy: number): void;
+  /**
+   * 按住即持续的视角键（`up/down/left/right` 平移，`rotateLeft/rotateRight` 旋转）。
+   * 直接驱动相机已有的「按住方向键 / Insert·Delete」状态，逐帧速度、边缘限制、解除
+   * Ctrl+C 锁定都沿用原有逻辑，手势层不新增任何一个帧循环。
+   */
+  viewKey?(key: "up" | "down" | "left" | "right" | "rotateLeft" | "rotateRight", on: boolean): void;
+  /**
+   * 当前选择能不能吃移动命令：己方、活着、走得动的单位（建筑 / 金矿 / 敌人 / 物品
+   * 都不算）。手势 HUD 的八方向盘据此分流：能移动 → 方向盘下令，否则 → 平移镜头。
+   */
+  selectionMovable?(): boolean;
+  /**
+   * 把当前选择朝屏幕方向走一步。`dx`/`dy` 是屏幕单位向量（x 向右、y 向下），
+   * 与右键 `moveAt` 同一条命令通道（不是新的 Command）。
+   */
+  moveSelectionDir?(dx: number, dy: number): void;
+  /**
+   * 框选进行中（触摸没有鼠标的 hover 反馈）：画出选框，并给框里的单位打预览圈，
+   * 松手前就能看清这一块里会被选中谁。坐标是 canvas CSS 像素。
+   */
+  boxPreview?(x0: number, y0: number, x1: number, y1: number): void;
+  /** 这一次框选结束 / 作废：收掉选框与预览圈。 */
+  boxPreviewEnd?(): void;
+  /** 清空选择（手机没有 ESC、也不方便点空地）：走 `rts.clearSelection`，与脚本
+   *  `ClearSelection` / 语音同一条路。 */
+  clearSelection?(): void;
+  /** 把舱内一名乘客放到载具 / 金矿脚下（经典控制台点货舱格子的同一条通道）。 */
+  unloadCargo?(hostId: number, passengerId: number): boolean;
+  /** 让指定单位去拾取一件地上的物品——手势 HUD 左下面板里的头像，与右键点物品是同一条
+   *  `getitem` 命令。返回是否接下了。 */
+  pickUpItem?(unitId: number, itemId: number): boolean;
   /** 缩放档：+1 拉近一档，−1 拉远一档（7 档，夹到两端）。 */
   zoomBy(steps: number): void;
+  /** 斜视 / 俯视切换：只改镜头俯仰，不动缩放、朝向和位置。 */
+  toggleView?(): void;
+  /** 镜头跟随（与 Ctrl+C 同一个开关）：开 → 锁住当前选中的己方单位，再点一下松开。
+   *  返回这次点击之后「是否亮着」。 */
+  toggleCameraLock?(): boolean;
+  /** 跟随是否还亮着：玩家自己拖动镜头、目标阵亡都会自动松开，HUD 靠这个每帧回读。 */
+  cameraLocked?(): boolean;
   /**
    * 编队条：轻点召回、长按设编队、双指追加（§6.1）。`jump` 只在双击召回时给，
    * 与键盘 `N` / `NN` 同一条 `recallGroup` + `jumpToSelection` 通道。
@@ -98,6 +216,8 @@ export interface GestureMatchHost {
   hoverAt(clientX: number, clientY: number): void;
   /** 手势 HUD 的读数（资源 / 人口 / 当前选择）；没有 HUD 的宿主可以不实现。 */
   status?(): GestureStatus | null;
+  /** 本图能出现的单位 / 建筑 / 技能 / 物品（帮助面板的图鉴页）。 */
+  helpCatalog?(): HelpCatalog;
 }
 
 let host: GestureMatchHost | null = null;

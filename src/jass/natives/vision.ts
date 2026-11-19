@@ -83,7 +83,22 @@ export function registerVisionNatives(rt: Runtime): void {
   // the BJ that fronts it, SetPlayerAllianceBJ, is (source, SETTING, VALUE, other). The
   // BJ is blizzard.j's, so it re-orders for us; only the native's order matters here.
   def(rt, "SetPlayerAlliance", (c, a) => {
-    c.rt.hooks?.setPlayerAlliance?.(playerIndex(c, a[0]), playerIndex(c, a[1]), c.rt.enumIndex(a[2]), truthy(a[3]));
+    const source = playerIndex(c, a[0]);
+    const other = playerIndex(c, a[1]);
+    const setting = c.rt.enumIndex(a[2]);
+    const value = truthy(a[3]);
+    const before = c.rt.hooks?.getPlayerAlliance?.(source, other, setting);
+    c.rt.hooks?.setPlayerAlliance?.(source, other, setting, value);
+    // TriggerRegisterPlayerAllianceChange：监视 source 与任意玩家的某一位。只有
+    // "旧值可读且确实改变"时才通知，避免初始化时的重复写入和读不到旧值时误触发；
+    // 矩阵本身的写入顺序/结果完全不变。
+    if (before !== undefined && before !== value) {
+      c.fireEvent?.(
+        "playerAlliance",
+        new Map<string, JassValue>([["TriggerPlayer", c.rt.playerHandle(source)]]),
+        (p) => c.rt.data<JassPlayer>(p[0])?.index === source && c.rt.enumIndex(p[1] ?? JNULL) === setting,
+      );
+    }
     return JNULL;
   });
   def(rt, "GetPlayerAlliance", (c, a) =>

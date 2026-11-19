@@ -479,16 +479,16 @@ export class MapBrowser {
         if (info.maxPlayers) e.players = info.maxPlayers;
         // A map this engine cannot PLAY is still a map, and still the player's: it keeps its
         // name, its badge and its row, and says why when hovered (src/compat/mapFormat.ts).
-        // …and a map from the OTHER game line is refused the same way (P4): the row stays,
-        // greyed, and the hover names both lines. This is the whole player-facing half of P4;
-        // the load door behind it is mapViewer's `mapLoadRefusal`, for the paths that never
-        // come through this list (a dev link, a host's map, a replay).
-        const mismatch = info.flavor === flavor()
-          ? undefined
-          : t("map.refuse.flavor", {
-              map: t(info.flavor === "hd" ? "flavor.hd" : "flavor.sd"),
-              client: t(flavor() === "hd" ? "flavor.hd" : "flavor.sd"),
-            });
+        // Classic (SD) maps are playable on both clients — Reforged runs them with the base
+        // module's classic art — so only an HD map on the SD client is greyed here. The load
+        // door behind it is mapViewer's `mapLoadRefusal`, for the paths that never come
+        // through this list (a dev link, a host's map, a replay).
+        const mismatch = info.flavor === "hd" && flavor() === "sd"
+          ? t("map.refuse.flavor", {
+              map: t("flavor.hd"),
+              client: t("flavor.sd"),
+            })
+          : undefined;
         e.unsupported = unsupportedReason(info.format) ?? mismatch ?? undefined;
       } catch (err) {
         e.invalid = true;

@@ -79,4 +79,10 @@ export function registerStockNatives(rt: Runtime): void {
     c.rt.hooks?.setAllTypeSlots?.("unit", asInt(a[0]));
     return JNULL;
   });
+
+  // AddUnitToAllStock / RemoveItemFromAllStock — 对"所有商店"生效的批量入口。
+  // 我们的库存钩子是按单个商店建模的，没有全局钩子；伪造全局库存会让每个商店
+  // 的货架凭空变化，这里明确 no-op（地图自身的开局脚本仍可按店调用 Add*ToStock）。
+  def(rt, "AddUnitToAllStock", () => JNULL);
+  def(rt, "RemoveItemFromAllStock", () => JNULL);
 }

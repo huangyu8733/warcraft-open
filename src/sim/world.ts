@@ -2582,6 +2582,9 @@ export interface SimUnit {
    *  effect is what happens when the unit DIES, so the fact rides the victim. Dying under
    *  Doom summons `UnitID1` (`nba2`, a Doom Guard) for `Ndo3` = 120 seconds. */
   doomed: { abilityId: string; rank: number; sourceId: number; owner: number; team: number } | null;
+  /** PARASITE (`ANpa`/`ACpa`): the same shape again, but the warrior is born only while the
+   *  parasite is still ON the body — a buff that ran out or was dispelled leaves nothing. */
+  parasite: { abilityId: string; rank: number; sourceId: number; owner: number; team: number } | null;
   /** IMMOLATION (`AEim`): the ability id currently alight on this unit, "" when it is out.
    *  A toggle, not a cast — see tickImmolation for the mana it burns to stay lit. */
   immolation: string;
@@ -10134,6 +10137,7 @@ export class SimWorld {
       | "arrowShot"
       | "blackArrow"
       | "doomed"
+      | "parasite"
       | "immolation"
       | "immolationTick"
       | "cloakBurnTick"
@@ -10441,6 +10445,7 @@ export class SimWorld {
       arrowShot: null,
       blackArrow: null,
       doomed: null,
+      parasite: null,
       immolation: "",
       immolationTick: 0,
       cloakBurnTick: 0,
@@ -11941,12 +11946,24 @@ export class SimWorld {
     return u.baseSpeed > 0 && (u.uprooted || !this.rootAbility(u));
   }
 
+  /** The radius a RANGE test measures from. For a building that is the footprint it actually
+   *  occupies — the same hull `assignAttackSlot` places a melee ring around — not the small
+   *  collision circle at its centre. A Wolf Rider standing against the visible wall of a Great
+   *  Hall is hull-adjacent even though its centre is half a footprint away; measuring by
+   *  `radius` alone called that "Target is outside range" with the target right there. */
+  private hullRadius(u: SimUnit): number {
+    if (!u.building) return u.radius;
+    const fp = u.pathStamp?.fp;
+    const hull = fp ? footprintRadius(fp) : (u.footprint || 2) * PATHING_CELL * 0.5;
+    return Math.max(u.radius, hull);
+  }
+
   /** Is `t` inside the weapon `u` would answer it with — hull to hull, as every range in the
    *  sim is measured. False when nothing in the loadout may strike it at all. */
   private inWeaponRange(u: SimUnit, t: SimUnit): boolean {
     const w = this.weaponVs(u, t);
     if (!w || this.cliffApart(u, t, w)) return false;
-    return Math.hypot(t.x - u.x, t.y - u.y) - u.radius - t.radius <= w.range;
+    return Math.hypot(t.x - u.x, t.y - u.y) - this.hullRadius(u) - this.hullRadius(t) <= w.range;
   }
 
   /** Assign `u` a fan-out slot for target `t` (once per target). Melee units get a
@@ -20882,6 +20899,9 @@ export class SimWorld {
     markDoom: (t, caster, def, rank) => {
       t.doomed = { abilityId: def.id, rank, sourceId: caster.id, owner: caster.owner, team: caster.team };
     },
+    markParasite: (t, caster, def, rank) => {
+      t.parasite = { abilityId: def.id, rank, sourceId: caster.id, owner: caster.owner, team: caster.team };
+    },
     voodoo: (caster, def, rank) => {
       caster.voodooLeft = def.levelData[Math.min(rank, def.levelData.length) - 1]?.duration || 30;
       caster.voodooAbil = def.id;
@@ -27001,6 +27021,23 @@ export class SimWorld {
         }
       }
     }
+    const parasite = u.parasite;
+    u.parasite = null;
+    if (parasite && this.abilities && u.buffs.some((b) => b.group === "parasite")) {
+      const def = this.abilities.get(parasite.abilityId);
+      const lvl = def?.levelData[Math.min(parasite.rank, def.levelData.length) - 1];
+      if (def && lvl && lvl.summon) {
+        const birthArt = this.abilities.buffFx(lvl.buffs[1] ?? "")[0]?.path ?? def.buffEffectArt;
+        for (let i = 0; i < Math.max(1, Math.round(this.dataOf(lvl, 1, 1))); i++) {
+          this.summonRequests.push({
+            unitId: lvl.summon, x: u.x, y: u.y, facing: u.facing, owner: parasite.owner, team: parasite.team,
+            // `DataC` is 0 on both Parasite rows: the warrior stays, it is not a timed summon.
+            summonLeft: this.dataOf(lvl, 2, 0), sourceId: parasite.sourceId,
+            summonArt: birthArt, unsummonArt: def.buffEffectArt, atPoint: true,
+          });
+        }
+      }
+    }
     const burn = u.incinerate;
     u.incinerate = null;
     if (burn && this.abilities && u.buffs.some((b) => b.group === "incinerate")) {
@@ -28287,6 +28324,17 @@ export class SimWorld {
           //
           // The corpse items above are not folded into this: they need their refusal checked
           // BEFORE the charge is spent, which this path cannot express.
+          //
+          // CHANNEL (`ANcl`) is the one scripted spell with no handler to run: the map's own
+          // triggers do the work, and the press is all they wait for. A no-target Channel item
+          // (人族无敌's 新手教程 is exactly this: `ANcl` + `EVENT_PLAYER_UNIT_USE_ITEM`) is a
+          // successful use that we simply have no effect to apply — without this it read as
+          // "unhandled", so the charge never came off and the event never fired. A targeted
+          // Channel still falls through: aiming it is the item path's business, not ours.
+          if (ad.code === "ANcl" && ad.target === "none") {
+            fired = true;
+            break;
+          }
           if (!SPELL_HANDLERS[ad.code]) return "unhandled";
           // A unit-aimed item pressed at nothing (or at something its row refuses) keeps its
           // charge. The HUD already asked itemUseError before spending the click, so this is

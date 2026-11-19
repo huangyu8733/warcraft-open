@@ -192,6 +192,9 @@ export interface InstalledFolder {
   present: boolean;
   /** What it says it is, when it is there and says anything. */
   version: string | null;
+  /** An MPQ-era classic install (no `.build.info`, has `war3.mpq`). Optional: a shell older
+   *  than this field serves none, and only the classic line can have one. */
+  mpq?: boolean;
 }
 
 export async function rememberedInstall(f: GameFlavor = flavor()): Promise<InstalledFolder> {

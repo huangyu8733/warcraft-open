@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { startServer } from "./server.mjs";
-import { deleteDownloadedMap, downloadedMapExists, installPathFromSettings, installPathPatch, installVersion, listDownloadedMaps, looksLikeInstall, normalizeFlavor, serveInstall, writeCustomKeys, writeDownloadedMap } from "./install.mjs";
+import { deleteDownloadedMap, downloadedMapExists, installPathFromSettings, installPathPatch, installVersion, isMpqInstall, listDownloadedMaps, looksLikeInstall, normalizeFlavor, serveInstall, writeCustomKeys, writeDownloadedMap } from "./install.mjs";
 import { downloadFromSources } from "./download.mjs";
 import { detectInstall } from "./locate.mjs";
 import { startBeacon } from "./beacon.mjs";
@@ -436,10 +436,13 @@ const currentInstall = (which = activeFlavor) => {
   const path = remembered ?? (f === "sd" ? process.env.WARCRAFT_OPEN_INSTALL ?? null : null);
   return {
     path,
-    valid: !!path && looksLikeInstall(path),
+    valid: !!path && looksLikeInstall(path, f),
     /** The folder is still THERE — told apart from "there but the wrong build". */
     present: !!path && existsSync(path),
     version: path ? installVersion(path) : null,
+    /** An MPQ-era classic folder: no `.build.info`, so `version` is null and the launcher's
+     *  verdict must read the shape instead (src/ui/home.ts, src/vfs/version.ts). */
+    mpq: !!path && isMpqInstall(path),
   };
 };
 
@@ -534,7 +537,19 @@ app.whenReady().then(async () => {
     // A folder that is not an install is refused HERE, where the disk is: the page would have to
     // mount it to find out, and "that is not a Warcraft III folder" is a better answer than a
     // mount failing three steps later.
-    if (!picked || !looksLikeInstall(picked)) return null;
+    if (!picked) return null;
+    if (!looksLikeInstall(picked, target)) {
+      // Say why, or the dialog looks like it did nothing: 1.27 and older pass the mount but the
+      // 1.30.4 menus/tables cannot use them (src/vfs/version.ts `gate.sdTooOld`).
+      await dialog.showMessageBox({
+        type: "warning",
+        message: target === "hd"
+          ? "HD needs a Warcraft III: Reforged install (2.0 or newer)."
+          : "The classic line needs Warcraft III 1.30 or newer. Folders from 1.27 and older are not supported.",
+        detail: picked,
+      });
+      return null;
+    }
     writeSettings(installPathPatch(target, picked));
     return picked;
   });
@@ -561,7 +576,7 @@ app.whenReady().then(async () => {
       const folder = await downloadFromSources(sources, filePaths[0], (progress) => {
         if (!event.sender.isDestroyed()) event.sender.send("ow3:install-download-progress", progress);
       }, downloadAbort.signal);
-      if (!looksLikeInstall(folder)) {
+      if (!looksLikeInstall(folder, target)) {
         throw new Error(`The download finished, but ${folder} is not a supported Warcraft III install.`);
       }
       writeSettings(installPathPatch(target, folder));

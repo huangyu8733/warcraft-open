@@ -12,6 +12,7 @@ import {
 import { fadePanels, FADE_MS, LATE_PANEL_DELAY_MS, type PanelDirection } from "./anim";
 import { applyOverride, layer, type FdfOverride } from "../../overrides";
 import { widescreen } from "../widescreen";
+import { createFullscreenToggle } from "../fullscreen";
 import {
   buildCheckBox, buildEditBox, buildList, buildPopup, buildScrollFrame, buildSlider, buildTextArea,
   widgetKind,
@@ -343,6 +344,14 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     ]).then(() => undefined);
   };
 
+  // 浏览器里的全屏开关：主菜单 / 战役 / 局域网 / 载入 / 记分板这些「对局之外」的屏幕各挂一颗。
+  // 进对局之后的面板（ESC、任务、聊天）不重复挂——那里由 HUD 自己的按钮负责；桌面应用与
+  // iPhone Safari 由工厂直接返回 null。
+  const fullscreen = document.body.classList.contains("in-game")
+    && opts.overlayClass !== "fdf-loading" && opts.overlayClass !== "fdf-score"
+    ? null
+    : createFullscreenToggle("screen-fullscreen");
+
   const screen: FdfScreen = {
     element: overlay,
     relayout: build,
@@ -377,9 +386,11 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     dispose(): void {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKey);
+      overlay.removeEventListener("focusout", onFocusOut);
       offFontReady();
       for (const off of disposers) off();
       disposers = [];
+      fullscreen?.dispose();
       overlay.remove();
     },
   };
@@ -387,6 +398,7 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
   // Mount BEFORE the first build: the layout measures the overlay's own box, and an element
   // that isn't in the document yet measures 0.
   opts.container.appendChild(overlay);
+  if (fullscreen) opts.container.appendChild(fullscreen.element);
   build();
 
   // The layout measures every TEXT frame's width off a canvas in the game font (measureTextFrame
@@ -400,8 +412,30 @@ export async function mountFdfScreen(opts: FdfScreenOptions): Promise<FdfScreen>
     ? () => {}
     : onGameFontsReady(() => { if (overlay.isConnected) build(); });
 
-  const onResize = (): void => build();
+  // A phone's soft keyboard resizes the window, and a rebuild here would destroy the very
+  // <input> the keyboard belongs to — the field vanished, the keyboard closed, and typing a
+  // profile name became impossible. While one of OUR fields has the focus the rebuild waits;
+  // focusout (keyboard down, or a click elsewhere) is what releases it.
+  const inputFocused = (): boolean => {
+    const a = document.activeElement as HTMLElement | null;
+    return !!a && overlay.contains(a)
+      && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable);
+  };
+  let relayoutPending = false;
+  const onResize = (): void => {
+    if (inputFocused()) { relayoutPending = true; return; }
+    build();
+  };
+  const onFocusOut = (): void => {
+    if (!relayoutPending) return;
+    window.setTimeout(() => {
+      if (!overlay.isConnected || inputFocused()) return; // moved to another field: keep waiting
+      relayoutPending = false;
+      build();
+    }, 0);
+  };
   window.addEventListener("resize", onResize);
+  overlay.addEventListener("focusout", onFocusOut);
 
   const onKey = (e: KeyboardEvent): void => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
@@ -944,6 +978,19 @@ function renderButtonLayers(
     if (nm && stateNames.has(nm)) continue; // pushed/disabled/highlight handled above
     const childEl = renderFrame(child, el, ctx, abs);
     if (childEl && nm && nm === textName) childEl.classList.add("fdf-btn-text");
+  }
+  // A BUTTON the SCRIPT made by type (`DzCreateFrameByTagName("GLUETEXTBUTTON", …)`) has no
+  // FDF template and so no Text child — its caption arrives as a text override on the button
+  // itself. Draw it centred at the button's own FrameFont size, unless a template's Text
+  // child already provides the label.
+  if (!textName && ctx.textOverrides[f.name] !== undefined) {
+    const label = document.createElement("div");
+    label.className = "fdf-btn-caption";
+    label.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;text-align:center;";
+    const size = firstProp(f, "FrameFont")?.args[1]?.n ?? 0.013;
+    label.style.fontSize = `${Math.max(7, size * ctx.fit.scale)}px`;
+    label.innerHTML = wc3ToHtml(ctx.textOverrides[f.name]);
+    el.appendChild(label);
   }
 }
 

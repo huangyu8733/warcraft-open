@@ -63,6 +63,10 @@ export interface BarSpec {
    *  swatch (render/teamColor.ts `neutralTeamColor`) and a black bar reads as an empty one, so
    *  each is given a colour of its own here. Only the "Team Colored" style looks at this. */
   colorSlot: number;
+  /** Is this unit an ENEMY of the local player? The Default style paints a hostile bar red
+   *  whatever its health is — the original's green→yellow→red tint is what YOUR side wears;
+   *  a full-health enemy does not read as friendly. (RtsController.barHostile.) */
+  hostile: boolean;
   /** An ALLIED hero's learned spells, in the order the hero carries them — the discreet row
    *  of small icons floated over the bar so you can read what your teammate has to hand.
    *  null for everything else: your own hero's spells are already on your command card, and
@@ -551,9 +555,9 @@ export class WorldOverlays {
         last.hpFrac = s.hpFrac;
         bar.hp.style.width = `${s.hpFrac * 100}%`;
       }
-      // WC3 tints the bar green→yellow→red by HP fraction (own, ally, and enemy alike — the
-      // original's floating bars aren't team-coloured). The tint is baked into the fill art,
-      // so the state picks an image rather than a colour.
+      // WC3 tints YOUR side's bar green→yellow→red by HP fraction; a HOSTILE unit wears red
+      // from full health down, which is how you read friend from enemy at a glance. The tint
+      // is baked into the fill art, so the state picks an image rather than a colour.
       //
       // Under "Team Colored" (issue #141) it is a flat colour instead, and it does NOT move as
       // the bar drains: the bar answers *whose* rather than *how hurt*, and a colour that
@@ -561,7 +565,7 @@ export class WorldOverlays {
       // `[data-state="team"]` multiplies the game's own untinted slab by this colour, which is
       // exactly what the engine does to the green one.
       const team = teamStyle ? this.barColor(s.colorSlot) : null;
-      const state = team ? "team" : s.hpFrac > 0.6 ? "green" : s.hpFrac > 0.3 ? "yellow" : "red";
+      const state = team ? "team" : s.hostile ? "red" : s.hpFrac > 0.6 ? "green" : s.hpFrac > 0.3 ? "yellow" : "red";
       if (last.state !== state || last.teamColor !== (team ?? "")) {
         last.state = state;
         last.teamColor = team ?? "";

@@ -109,7 +109,7 @@ export async function mountHdCampaign(
    * The views call the helper themselves (a repaint re-zooms the nodes it just built), so the root
    * is held rather than captured: it does not exist until the view below returns.
    */
-  const uiScale = (): number => Math.max(0.5, window.innerHeight / 1080);
+  const uiScale = (): number => Math.max(0.25, window.innerHeight / 1080);
   /** `SIDE_BORDER_SIZE` in the reference's glue module. */
   const SIDE_BORDER = 33;
   let mounted: HTMLElement | null = null;

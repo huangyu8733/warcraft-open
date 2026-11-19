@@ -172,6 +172,11 @@ export function buildScriptFrameTree(model: FrameModel, lib: FdfLibrary): Script
     if (byType && node.type === "TEXT" && !node.props.some((p) => p.key === "FrameFont")) {
       node.props.push({ key: "FrameFont", args: [str("MasterFont"), num(DEFAULT_TEXT_HEIGHT * s), str("")] });
     }
+    // `DzFrameSetFont` names a .ttf inside the map archive — the drawing's fonts are CSS, so
+    // it takes the SIZE and keeps its own face. Lay it over the type's default above.
+    if (f.fontHeight > 0 && (node.type === "TEXT" || node.type === "STRING")) {
+      setProp(node, "FrameFont", [str("MasterFont"), num(f.fontHeight * s), str("")]);
+    }
     if (f.alpha < 255) out.alpha[node.name] = Math.max(0, f.alpha) / 255;
     if (!f.enabled) out.disabled.push(node.name);
     if (f.tooltip && out.names.has(f.tooltip)) out.tooltips.push({ owner: node.name, tip: out.names.get(f.tooltip)! });
@@ -180,9 +185,13 @@ export function buildScriptFrameTree(model: FrameModel, lib: FdfLibrary): Script
     if (button || events?.size || f.tooltip) out.listen.push({ name: node.name, handle: f.handleId, events: [...(events ?? [])], button });
   };
 
-  /** The script's own children of `f` (not a stamped instance's inner frames). */
+  /** The script's own children of `f` (not a stamped instance's inner frames), in draw order:
+   *  `DzFrameSetPriority` may lift one over its siblings, everything else keeps the order the
+   *  script created them in. */
   const scriptChildren = (f: FrameObj): FrameObj[] =>
-    (childrenOf.get(f.handleId) ?? []).filter((c) => !c.origin && (c.instance === 0 || c.instance === c.handleId) && out.names.has(c.handleId));
+    (childrenOf.get(f.handleId) ?? [])
+      .filter((c) => !c.origin && (c.instance === 0 || c.instance === c.handleId) && out.names.has(c.handleId))
+      .sort((a, b) => a.priority - b.priority);
 
   const build = (f: FrameObj): FdfFrame | null => {
     let node: FdfFrame;
@@ -234,12 +243,19 @@ export function buildScriptFrameTree(model: FrameModel, lib: FdfLibrary): Script
   };
 
   // The top of every chain the script built: a frame hung on the game's own UI (an origin
-  // frame, or nothing at all).
+  // frame, or nothing at all). Sorted by Dz priority (stable), so a frame the script lifted
+  // with DzFrameSetPriority is built after its siblings and paints over them.
+  const tops: FrameObj[] = [];
   for (const f of frames.values()) {
     if (f.origin || !out.names.has(f.handleId)) continue;
     if (f.instance !== 0 && f.instance !== f.handleId) continue; // drawn inside its instance
     const parent = frames.get(f.parent);
     if (parent && !parent.origin) continue; // drawn under its parent
+    tops.push(f);
+  }
+  tops.sort((a, b) => a.priority - b.priority);
+  for (const f of tops) {
+    const parent = frames.get(f.parent);
     const built = build(f);
     if (!built) continue;
     const free = /^SIMPLE/.test(built.type) || (!!parent && FREEING_PARENTS.has(parent.name));

@@ -798,6 +798,29 @@ const ME = { id: 2, name: "Joiner", host: false };
     lobby.close();
   }
 
+  console.log("\na page served by Warcraft Open's own relay stands on Warcraft Open");
+  {
+    // The hosted copy at warcraft.hhkj.me proxies /relay itself, so the address is both the page's
+    // own relay and the official server. It must be called by its name (not "This Computer"),
+    // watched once (not dialled again as a second list), and be nobody's to remove.
+    global.location = { protocol: "https:", host: "warcraft.hhkj.me" };
+    try {
+      const made = [];
+      const lobby = new LanLobby(() => { const t = fakeTransport(); made.push(t); return t; }, memoryStore());
+      await lobby.connect();
+      lobby.addRelay("warcraft.hhkj.me", "official");
+      await tick();
+      check("the page's own relay is known to be the official one", lobby.servedOfficialUrl, OFFICIAL);
+      check("…offered once, as this copy's own connection", lobby.hostTargets, [{ url: "", kind: "own" }]);
+      check("…and named, on the Servers List", lobby.relays, [{ url: OFFICIAL, connected: true, source: "official" }]);
+      lobby.removeRelay(OFFICIAL);
+      check("…where it stays", lobby.relays.map((r) => r.url), [OFFICIAL]);
+      lobby.close();
+    } finally {
+      delete global.location;
+    }
+  }
+
   console.log("\njoining a friend's game keeps the official server watched");
   {
     const made = [];

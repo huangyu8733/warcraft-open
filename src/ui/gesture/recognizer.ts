@@ -45,6 +45,13 @@ export interface RecognizerOptions {
   enabled?: () => boolean;
   /** 识别出意图时调用。 */
   emit?: (intent: GestureIntent) => void;
+  /**
+   * 单指在世界里拖出一块时，每次 pointermove 回调一次：调用方据此实时画选框、
+   * 给框住的单位打预览圈，抬手前就能看清会选中谁（触摸没有鼠标的 hover 反馈）。
+   */
+  dragboxPreview?: (from: GesturePoint, to: GesturePoint) => void;
+  /** 这一次拖框结束 / 作废（抬手、取消、变成多指）：把选框与预览收掉。 */
+  dragboxPreviewEnd?: () => void;
   /** 默认只收 `touch`；笔也当触摸时需要事件绑定端自行放行。 */
   includePen?: boolean;
 }
@@ -91,6 +98,10 @@ export class GestureRecognizer {
   private readonly enabled: () => boolean;
   private readonly includePen: boolean;
   private readonly emit: (intent: GestureIntent) => void;
+  private readonly dragboxPreview?: (from: GesturePoint, to: GesturePoint) => void;
+  private readonly dragboxPreviewEnd?: () => void;
+  /** 已经画过预览，抬手时才知道要不要收。 */
+  private previewing = false;
 
   private readonly active = new Map<number, Track>();
   private multi: MultiState | null = null;
@@ -106,6 +117,15 @@ export class GestureRecognizer {
     this.enabled = options.enabled ?? (() => true);
     this.includePen = options.includePen ?? false;
     this.emit = options.emit ?? (() => {});
+    this.dragboxPreview = options.dragboxPreview;
+    this.dragboxPreviewEnd = options.dragboxPreviewEnd;
+  }
+
+  /** 收掉实时选框（没画过就不必惊动调用方）。 */
+  private endPreview(): void {
+    if (!this.previewing) return;
+    this.previewing = false;
+    this.dragboxPreviewEnd?.();
   }
 
   /** 活跃触摸指针数（供仲裁器判断是否接管浏览器手势）。 */
@@ -178,7 +198,10 @@ export class GestureRecognizer {
       edge: false,
     });
 
-    if (this.active.size >= 2) this.beginOrExtendMulti(at);
+    if (this.active.size >= 2) {
+      this.endPreview(); // 第二根手指进来：这一串不再可能是单指框选
+      this.beginOrExtendMulti(at);
+    }
     return true;
   }
 
@@ -188,6 +211,17 @@ export class GestureRecognizer {
     track.x = p.clientX;
     track.y = p.clientY;
     track.maxDist = Math.max(track.maxDist, distance(track.x, track.y, track.startX, track.startY));
+
+    // 单指在世界里拖过轻点容差：立刻进入「画框」——选框与预览圈跟着手指走，
+    // 抬手才真正选中（与鼠标拖框的反馈一致）。边缘按压在容差内，不会走到这里。
+    if (this.active.size === 1 && !this.multi && !track.multi && track.area === "world"
+      && !track.edge && track.maxDist > this.thresholds().tapSlopPx) {
+      this.previewing = true;
+      this.dragboxPreview?.(
+        { x: track.startX, y: track.startY },
+        { x: track.x, y: track.y },
+      );
+    }
 
     if (this.active.size < 2 || !this.multi) return true;
     const cluster = this.cluster();
@@ -255,6 +289,8 @@ export class GestureRecognizer {
     track.y = p.clientY;
     track.maxDist = Math.max(track.maxDist, distance(track.x, track.y, track.startX, track.startY));
     this.active.delete(p.pointerId);
+    // 选框的归属跟着这一段拖拽一起结束：先收预览，再（可能）提交 dragbox。
+    this.endPreview();
 
     // 还有手指在屏幕上：序列没结束。多指少了一根，质心基线跟着挪，免得被当成平移。
     if (this.active.size >= 1) {
@@ -324,24 +360,10 @@ export class GestureRecognizer {
     }
 
     if (dist > t.tapSlopPx) {
-      if (track.area === "world" && durationMs <= t.swipeMaxMs && dist >= t.swipeMinDistPx) {
-        const speed = durationMs > 0 ? dist / durationMs : 0;
-        const length = dist || 1;
-        this.emit({
-          kind: "swipe",
-          x: to.x,
-          y: to.y,
-          from,
-          to,
-          vx: ((to.x - from.x) / length) * speed,
-          vy: ((to.y - from.y) / length) * speed,
-          pointers: 1,
-          durationMs,
-          area: track.area,
-        });
-      } else {
-        this.emit({ kind: "dragbox", x: to.x, y: to.y, from, to, pointers: 1, durationMs, area: track.area });
-      }
+      // 单指拖动一律是框选。这里曾经把「快而短的划动」判成 swipe 平移镜头，手机上画框
+      // 常常被抢成平移，框选变得不可用（用户反馈）。镜头仍有双指平移 / 边缘按住 /
+      // 方向盘，单指留给「画一块，把这一块里能指挥的单位都选中」。
+      this.emit({ kind: "dragbox", x: to.x, y: to.y, from, to, pointers: 1, durationMs, area: track.area });
       this.lastTap = null;
       return true;
     }
@@ -384,6 +406,7 @@ export class GestureRecognizer {
 
   /** 清空全部活跃指针与序列状态。 */
   reset(): void {
+    this.endPreview();
     this.active.clear();
     this.multi = null;
     this.lastTap = null;

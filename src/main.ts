@@ -65,7 +65,9 @@ import { WebSocketTransport } from "./net/transport";
 import { isDesktopApp, onServersFound, onShellClosing } from "./assets/nativeInstall";
 import { watchForUpdates } from "./ui/updatePrompt";
 import { startGamepad } from "./ui/gamepad";
-import { adoptTouchVideoDefaults, applyGestureOptions, gestureClaims, gestureEnabled, startGesture } from "./ui/gesture";
+import {
+  adoptTouchVideoDefaults, applyGestureOptions, endGestureMatch, gestureClaims, gestureEnabled, startGesture,
+} from "./ui/gesture";
 import { installMouseCapture } from "./ui/mouseCapture";
 import { mountOptions } from "./ui/fdfOptions";
 import { applyAudioOptions, loadOptions } from "./data/options";
@@ -90,6 +92,7 @@ import { mountScoreScreen, scoreScreenMusic } from "./ui/scoreScreen";
 import { mountHdScoreScreen } from "./ui/hd/score";
 import type { ScoreTable } from "./game/scoreTable";
 import { mountHome, type GateLoad, type Home } from "./ui/home";
+import { mountRotateHint } from "./ui/rotateHint";
 import { dismissBootSplash, mountBootSplash, progressBootSplash } from "./ui/bootSplash";
 import { setFdfClickSound, type FdfScreen } from "./ui/fdf/render";
 import { GlueAudio } from "./ui/glueAudio";
@@ -161,9 +164,10 @@ const ui = document.getElementById("ui") as HTMLElement;
 // miss everything that viewer had already loaded.
 const bootOptions = loadOptions();
 // The touch console's FIRST-BOOT quality suggestion (手机平板手势控制台方案.md §4.3 / §13): a
-// phone starts at 576p, a tablet at 720p, both with Low Performance Mode, and an HD phone at the
-// lowest rung — Reforged's `.dds` + `*Skin.txt` have no offline pack in a WebView (P4's gate).
-// Written only when no store exists, so a player's own choices are never overwritten.
+// phone starts at 576p and a tablet at 720p — resolution and frame cap only, Low Performance Mode
+// stays off — and an HD phone at the lowest rung: Reforged's `.dds` + `*Skin.txt` have no offline
+// pack in a WebView (P4's gate). Written only when no store exists, so a player's own choices are
+// never overwritten.
 adoptTouchVideoDefaults(bootOptions);
 applyVideoOptions(bootOptions);
 // Which context version the flavour asks for, before the first canvas can create one:
@@ -1906,6 +1910,9 @@ function endMatch(): void {
   const played = !!mapScene;
   mapScene?.dispose(); // …which silences the match's audio and flushes what it put on the page
   mapScene = null;
+  // The gesture console's fallback teardown: the host is gone already, but the panel could
+  // outlive it (in-game still set, or the quit-program path never changed a host).
+  endGestureMatch();
   // …and the canvas the match rendered into, WITH its WebGL context — but only if there was
   // one, since asking an untouched canvas for a context just to lose it would leave the next
   // match nothing to draw on.
@@ -2217,6 +2224,9 @@ if (!gestureEnabled()) installMouseCapture();
 // that Vite folds to `false` for `pnpm build`, so this branch and the dynamic import inside it
 // are dropped from the bundle entirely; there is no path from a shipped artifact to an asset
 // route. See src/dev/devBoot.ts and tools/vite-plugin-dev-install.ts.
+// 竖屏的手机/平板只看得到「请横屏」：菜单是按横屏世界画的，对局中则由 CSS 自动让开。
+mountRotateHint();
+
 if (replayBridge()) {
   // A REPLAY WINDOW: another version's replay, opened by a later desktop app in this version's
   // own page (src/replayBoot.ts). It watches the one replay it is handed and nothing else.

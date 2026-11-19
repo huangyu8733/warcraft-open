@@ -80,9 +80,13 @@ export async function loadProfile(
   // have nothing to fall back to anyway (there is no `Melee_V0\` / `Custom_V1\` in it).
   const hd = flavor() === "hd";
   if (isCascInstall(install.casc)) {
-    // A Reforged store mounts ONE of its two art modules over the base (`_DE` by default),
-    // and keeps that art on disk: 17 GB of DDS/MDX is not preloadable, and every model the
-    // match draws is fetched through the viewer's async solver anyway (P3).
+    // Read BEFORE the mount: the store is opened once, and the downgrade decision below needs
+    // the build without reopening it.
+    const version = buildInfoVersion(install.casc.buildInfo);
+    // A Reforged store mounts ONE of its two art modules over the base (`_DE` by default, the 3.x
+    // Definitive Edition set `hdArt()` names), and keeps that art on disk: 17 GB of DDS/MDX is
+    // not preloadable, and every model the match draws is fetched through the viewer's async
+    // solver anyway (P3).
     const casc = await CascDataSource.open(
       install.casc,
       onProgress,
@@ -91,7 +95,6 @@ export async function loadProfile(
     // A 1.31.1 store (the Internet Archive's copy "Download game files" falls back on) has its
     // game data put back to 1.30.4's before anything reads it (src/vfs/downgrade.ts) — UNDER the
     // patches, so they land on the same tables a 1.30.4 install has.
-    const version = buildInfoVersion(install.casc.buildInfo);
     const downgrade = hd ? null : downgradeEdits(version);
     const store: DataSource = downgrade ? new DowngradeDataSource(casc, downgrade, version ?? "") : casc;
     // …and the game's later patches UNDER the edition overlay, so they reach the live melee

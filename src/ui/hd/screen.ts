@@ -4,6 +4,7 @@ import type { WebUiAssets } from "./assets";
 import { animWait } from "../../render/animClock";
 import { playFdfClick } from "../fdf/render";
 import { applyHdTheme } from "./theme";
+import { createFullscreenToggle, type FullscreenToggle } from "../fullscreen";
 import "./hd.css";
 
 /**
@@ -19,6 +20,8 @@ export class HdScreen implements FdfScreen {
   readonly element: HTMLElement;
   /** Everything that fades between screens; the background art stays put underneath it. */
   readonly content: HTMLElement;
+  /** 浏览器里的全屏开关（经典界面也各挂一颗）；桌面应用没有。 */
+  private fullscreen: FullscreenToggle | null = null;
 
   constructor(className: string) {
     this.element = document.createElement("div");
@@ -39,6 +42,12 @@ export class HdScreen implements FdfScreen {
     // here, once, so a screen added later does not have to know the theme exists.
     applyHdTheme(this.element);
     document.body.appendChild(this.element);
+    // 前端菜单和经典界面一样没有控制台可以放全屏按钮，就挂在窗口右上角；进对局后由 HUD
+    // 自己那颗接手（桌面应用 / iPhone Safari 由工厂返回 null，这里什么也不加）。
+    if (!document.body.classList.contains("in-game")) {
+      this.fullscreen = createFullscreenToggle("screen-fullscreen");
+      if (this.fullscreen) document.body.appendChild(this.fullscreen.element);
+    }
     return this;
   }
 
@@ -47,6 +56,8 @@ export class HdScreen implements FdfScreen {
   }
 
   dispose(): void {
+    this.fullscreen?.dispose();
+    this.fullscreen = null;
     this.element.remove();
   }
 

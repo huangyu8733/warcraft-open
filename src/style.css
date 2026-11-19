@@ -1349,6 +1349,32 @@ body:not(.hud-tooltip-skinned) .dev-concede { outline: 1px solid rgba(200, 160, 
 .hud-iconbtn.pad-hover { filter: brightness(1.12); }
 .hud-iconbtn.pressed { transform: scale(0.98); }
 
+/* Fullscreen switch (ui/consoleUi.ts). It stands in the clear strip LEFT of the upper button
+   bar, which only a 16:10 / 16:9 stage has — on a 4:3 stage the bar is flush with the frame's
+   edge and consoleUi hides the button (Alt+Enter still works there). The plate is the gesture
+   HUD's tool-column one, so the same switch reads the same on both controls. */
+.hud-fullscreen {
+  position: absolute;
+  z-index: 6;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid rgba(243, 220, 154, 0.45);
+  border-radius: 4px;
+  background: rgba(18, 14, 8, 0.72);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  color: #efe4c8;
+}
+.hud-fullscreen:hover,
+.hud-fullscreen.pad-hover { filter: brightness(1.15); }
+.hud-fullscreen:active { transform: scale(0.96); }
+.hud-fullscreen svg { width: 18px; height: 18px; }
+
 /* Ally Color Mode button — the third socket of the column the console art punches to the
    RIGHT of the minimap (ui/hud.ts CONSOLE_ZONES.allyColor places it there). The art is the
    game's own `MiniMapAllyButton*` texture and carries its own gold rim, so there is nothing
@@ -2981,6 +3007,7 @@ body.hud-widget-skinned .hud-cargo-slot {
 .hud-progress-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 4px; }
 .hud-status-line { display: flex; align-items: center; gap: 10px; }
 .hud-status-icon {
+  position: relative;
   width: 34px;
   height: 34px;
   background-size: 100% 100%;
@@ -3026,6 +3053,7 @@ body.hud-widget-skinned .hud-cargo-slot {
 /* Training queue: positions 2..7 as dark gold-bordered slots. */
 .hud-queue { display: flex; gap: 4px; }
 .hud-queue-slot {
+  position: relative;
   width: 26px;
   height: 26px;
   background: #07080b;
@@ -3245,6 +3273,90 @@ body.hud-widget-skinned .hud-queue-slot:nth-child(6) { left: 82.81%; }
 /* The slot numbers are painted into the border art, so ours would double them up. */
 body.hud-widget-skinned .hud-queue-slot { color: transparent; }
 
+/* --- Queue icon overlays: progress sweep, run count, corner cancel --------------------
+   The icon carries the job's own fraction as a radial sweep (the same clockwise direction a
+   cooldown uses; `--q-progress` is written by ui/hud.ts), a run of identical units folds into
+   ONE icon wearing its count, and cancel is the × at the icon's top-right. The sweep darkens
+   the part still to go, so the bright wedge is what has been done. */
+.hud-q-sweep {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 2px;
+  pointer-events: none;
+  background: conic-gradient(from -90deg,
+    transparent 0 calc(var(--q-progress, 0) * 1turn),
+    rgba(4, 6, 10, 0.62) calc(var(--q-progress, 0) * 1turn) 1turn);
+}
+/* 18 px is small enough to sit in the corner of a queue hole and big enough for a finger:
+   the button is the whole visible disc, not a glyph inside a larger invisible box. */
+.hud-q-cancel {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(0, 0, 0, 0.65);
+  border-radius: 50%;
+  background: linear-gradient(180deg, #a52626, #6a1212 60%, #450909);
+  color: #ffe9e9;
+  font: 700 13px/15px var(--game-font);
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+.hud-q-cancel:hover,
+.hud-q-cancel.pad-hover { filter: brightness(1.2); }
+.hud-q-cancel[hidden],
+.hud-q-count[hidden] { display: none; }
+/* The run's count, centred on the icon. A disc behind the number keeps it readable over
+   bright art; the negative z-index keeps the disc under the digit inside the badge's own
+   stacking context (`isolation`), instead of behind the icon. */
+.hud-q-count {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+  pointer-events: none;
+  color: #fff;
+  font: 700 15px/1 var(--game-font);
+  text-shadow: 0 0 3px #000, 0 1px 2px #000, 0 0 6px rgba(0, 0, 0, 0.9);
+}
+.hud-q-count::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 68%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.42);
+}
+/* The placeholder console's slot number: a flex child, so it centres itself. */
+.hud-q-num { pointer-events: none; }
+/* HD's `BuildQueueBackdrop` paints a red ⊘ in the band left of the big slot — Reforged's own
+   cancel affordance. Cancel has moved to the icon's top-right, so this strip in the console's
+   colour presses that glyph out. 11/256 = 4.3%: the band ends where the big slot's gold frame
+   begins, so the frame itself is never clipped. Off while a structure is going up, when the
+   queue backdrop is off entirely. */
+.hud-q-mask { display: none; }
+body.hud-widget-skinned .hud-q-mask {
+  display: block;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 4.3%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(120% 100% at 0% 50%, #0b0906 60%, rgba(11, 9, 6, 0.85));
+}
+body.hud-widget-skinned .hud-progress-wrap.constructing .hud-q-mask { display: none; }
+
 
 .hud-inventory {
   padding: 6px 10px;
@@ -3316,6 +3428,32 @@ body.hud-widget-skinned .hud-queue-slot { color: transparent; }
    pointer, no sink and no gold rim, the DIS* art already saying it is not for clicking. */
 .hud-inv-slot.patron-view { cursor: default; }
 .hud-inv-slot.patron-view.pressed { transform: none; }
+/* 手势界面专属：物品格右上角的「×」丢弃钮。触屏没有右键，也就没法「右键拿起 → 点地面」，
+   所以给每件物品一个一步到位的出口。经典 HUD 不画它（默认 display:none），只有
+   #gesture-stage.gesture-on 里的物品格才显示；空格子/商店老板的格子由 JS 设 hidden。 */
+.hud-inv-drop {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 16px;
+  height: 16px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(216, 180, 90, 0.55);
+  border-radius: 50%;
+  background: rgba(20, 14, 6, 0.85);
+  color: #e8d8a8;
+  font: 700 12px / 1 var(--game-font);
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 2;
+}
+.hud-inv-drop[hidden] { display: none !important; }
+#gesture-stage.gesture-on .hud-inv-drop:not([hidden]) { display: flex; }
+.hud-inv-drop:hover,
+.hud-inv-drop:active { background: rgba(96, 22, 12, 0.92); border-color: #ffb0a0; color: #fff; }
 .hud-inv-slot:not(.empty):not(.patron-view):hover,
 .hud-inv-slot:not(.empty):not(.patron-view).pad-hover,
 body.carrying-item .hud-inv-slot:hover,
@@ -4008,58 +4146,6 @@ body.in-game .fdf-screen.fdf-ingame {
    because the top bar is backdrop-filtered and would otherwise be its containing block. */
 .gesture-help { display: inline-flex; }
 
-/* The launcher's touch-console switch (src/ui/gestureToggle.ts), beside the language picker. */
-.gesture-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid rgba(216, 180, 90, 0.35);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.03);
-  color: #b9b3a1;
-  font: inherit;
-  font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
-}
-
-.gesture-toggle::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #6b6455;
-}
-
-.gesture-toggle[data-on="true"] {
-  color: var(--ow3-gold);
-  border-color: rgba(216, 180, 90, 0.55);
-}
-
-.gesture-toggle[data-on="true"]::before {
-  background: #79c27d;
-  box-shadow: 0 0 6px rgba(121, 194, 125, 0.6);
-}
-
-.gesture-toggle:hover,
-.gesture-toggle:focus-visible {
-  color: #fff;
-  border-color: #c9a338;
-  background: rgba(255, 203, 46, 0.12);
-}
-
-/* A finger needs the same 44px minimum as the in-game console's controls. */
-@media (pointer: coarse) {
-  .gesture-toggle {
-    min-height: 44px;
-    padding: 0 14px;
-    font-size: 13px;
-  }
-}
-
 .gesture-help__button {
   display: inline-flex;
   align-items: center;
@@ -4084,6 +4170,57 @@ body.in-game .fdf-screen.fdf-ingame {
   border-color: #c9a338;
   background: rgba(255, 203, 46, 0.12);
 }
+
+/* Browser-only fullscreen switch (src/ui/fullscreen.ts `createFullscreenToggle`). The launcher's
+   copy sits in the top bar and wears the same gold rim as the "?" above; the copies the FDF / HD
+   menus and the loading screen float on their own live in the window's top-right corner. The
+   desktop app never gets one — the shell owns its window — so neither rule is gated here. */
+.home-fullscreen,
+.screen-fullscreen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(216, 180, 90, 0.45);
+  border-radius: 50%;
+  background: rgba(3, 5, 10, 0.55);
+  color: var(--ow3-gold);
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.home-fullscreen {
+  width: 26px;
+  height: 26px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.home-fullscreen svg { width: 14px; height: 14px; }
+
+.home-fullscreen:hover,
+.home-fullscreen:focus-visible,
+.screen-fullscreen:hover,
+.screen-fullscreen:focus-visible {
+  color: #fff;
+  border-color: #c9a338;
+  background: rgba(255, 203, 46, 0.12);
+}
+
+/* 钉在窗口右上角：菜单的 #ui 是会缩到 4:3 的容器，fixed 会跟着那个盒子走，正好落在
+   菜单自己的右上角，不会跑到黑边里。`--safe-*` 只在手势层里定义，这里给兜底值。 */
+.screen-fullscreen {
+  position: fixed;
+  top: calc(var(--safe-top, 0px) + 10px);
+  right: calc(var(--safe-right, 0px) + 10px);
+  z-index: 90;
+  width: 34px;
+  height: 34px;
+  pointer-events: auto;
+  background: rgba(3, 5, 10, 0.66);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+
+.screen-fullscreen svg { width: 18px; height: 18px; }
 
 .gesture-help__backdrop {
   position: fixed;
@@ -4391,6 +4528,31 @@ body.in-game .fdf-screen.fdf-ingame {
 
 .home-edition-actions .ow3-glue-btn-wrap { flex: 0 0 auto; }
 .home-edition-actions .ow3-glue-btn { min-width: 132px; }
+
+/* A pressed Launch / Change Folder is working (src/ui/home.ts): the caption steps back and a
+   ring turns over it. The button is also disabled, so the ring is what says "this press
+   registered" while a folder picker or a mount holds the page. */
+.home-edition-actions .ow3-glue-btn.is-loading .ow3-glue-btn__text { opacity: 0.3; }
+
+.home-btn-spinner {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  margin: auto;
+  border: 2px solid rgba(255, 203, 46, 0.25);
+  border-top-color: var(--ow3-gold);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: home-btn-spin 0.8s linear infinite;
+}
+
+.home-btn-spinner[hidden] { display: none; }
+
+@keyframes home-btn-spin {
+  to { transform: rotate(360deg); }
+}
 
 @media (max-width: 720px) {
   .home-edition { flex-direction: column; align-items: stretch; }
@@ -4788,6 +4950,52 @@ body.in-game .fdf-screen.fdf-ingame {
   line-height: 1.75;
   white-space: pre-line;
 }
+
+/* About：链接表 + 分块小标题 + 要点列表，观感与地图详情页的 meta 表一致。 */
+.home-about-links { max-width: 720px; }
+
+.home-about-links dd a {
+  color: var(--ow3-gold);
+  text-decoration: none;
+}
+
+.home-about-links dd a:hover { color: #fff; }
+
+.home-about-block {
+  max-width: 720px;
+  margin-top: 28px;
+}
+
+.home-about-block h2 {
+  margin: 0 0 10px;
+  color: var(--ow3-gold);
+  font-size: 17px;
+  font-weight: normal;
+  text-shadow: 1.5px 1.5px 0 #000;
+}
+
+.home-about-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ow3-text-dim);
+  font-size: 14px;
+  line-height: 1.9;
+}
+
+.home-page-muted {
+  color: #8d97a8;
+  font-size: 13px;
+}
+
+.home-about-link {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--ow3-gold);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.home-about-link:hover { color: #fff; }
 
 .home-page .home-section-head { margin-bottom: 22px; }
 
@@ -6373,13 +6581,17 @@ body.in-game .home { display: none; }
    under dialogs (7) and the loading layer (8), above the HUD. */
 #gesture-power {
   position: absolute;
+  /* 最右上角（安全区内），压在资源条右端之上 —— 只在手势关掉时出现。
+     手势开着时这颗钮借住到资源条金币的左边，见下面的 `.ghud-top #gesture-power`。 */
   top: calc(var(--safe-top) + 8px);
   right: calc(var(--safe-right) + 8px);
   z-index: 6;
   display: none;
+  width: 44px;
   min-width: 44px;
   height: 44px;
-  padding: 0 10px;
+  padding: 0;
+  place-items: center;
   pointer-events: auto;
   touch-action: manipulation;
   user-select: none;
@@ -6393,7 +6605,49 @@ body.in-game .home { display: none; }
   text-shadow: 0 1px 2px #000;
 }
 
-body.in-game #gesture-power { display: block; }
+body.in-game #gesture-power { display: grid; }
+
+/* 手势 HUD 开着时同样要能关掉手势：开关排在右上角菜单的正下方（顶部资源条在菜单
+   左侧，不去挤它）。手机上跟菜单一起缩到 0.5，见本文件末尾的窄屏规则。 */
+/* 手势 HUD 开着时这颗开关搬进顶部资源条、排在金币前面（ui/gesture/hud.ts 的 adoptAll），
+   图标是鼠标箭头：点它就是切回鼠标操作。尺寸跟着资源条走（34px 高），手机上随整条缩 0.5。 */
+.ghud-top #gesture-power {
+  position: static;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: var(--ghud-plate);
+}
+
+/* 图标 = 点它会切到的输入方式（鼠标箭头 / 手），按钮里只画这一枚 SVG。 */
+#gesture-power svg {
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+}
+
+.ghud-top #gesture-power svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* 手势帮助钮：跟资源条同一型号（34px 方块、木板底、金边），排在「鼠标箭头」左边。
+   齿轮/帮助圆钮原本是左下那列的 44px 圆钮，进顶栏后按条子的比例收一次。 */
+.ghud-top .ghud-zoom__btn {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: var(--ghud-plate);
+  box-shadow: var(--ghud-rim);
+}
+
+.ghud-top .ghud-zoom__btn svg {
+  width: 18px;
+  height: 18px;
+}
 
 #gesture-power[data-on="true"] {
   border-color: rgba(252, 211, 18, 0.72);
@@ -6720,7 +6974,7 @@ body.gesture-ui .gesture-card {
   display: none;
 }
 
-/* 数字编队条在手势模式里退场：编队改成大圆钮左侧的半圆图标（.ghud-gitem），
+/* 数字编队条在手势模式里退场：编队改成小地图下方的一排图标（.ghud-groups .ghud-gitem），
    不再出现 1 / 2 / 3 这种玩家看不懂的键位。 */
 body.gesture-ui .gesture-squad { display: none; }
 
@@ -6764,23 +7018,33 @@ body.gesture-ui #gesture-hud { display: block; }
   box-shadow: inset 0 0 0 1px rgba(243, 220, 154, 0.35), 0 2px 8px rgba(0, 0, 0, 0.55);
 }
 
-/* 编队图标：大圆钮**左侧**的半圆，与右侧命令环同心，图标常驻不隐藏。
-   每一组 = 圆图标（首单位原图/彩色队旗）+ 人数角标；选中后正下方浮出红色 ×。 */
-.ghud-actions .ghud-gitem {
+/* 编队条：小地图**正下方**的一排（横向排列、组多了自动换行）。
+   每一组 = 圆头像（首单位原图 / 彩色队旗）+ 人数角标；选中后右上角浮出红色垃圾桶。 */
+.ghud-groups {
   position: absolute;
-  transform: translate(-50%, -50%);
-  width: 42px;
-  height: 42px;
+  top: calc(var(--safe-top) + 8px + 156px + 6px);
+  left: calc(var(--safe-left) + 8px);
+  width: 168px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   pointer-events: none;
 }
 
-.ghud-actions .ghud-gitem > button { pointer-events: auto; }
+.ghud-groups .ghud-gitem {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  pointer-events: none;
+}
+
+.ghud-groups .ghud-gitem > button { pointer-events: auto; }
 
 .ghud-gflag,
 .ghud-gplus {
   position: relative;
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border: 1px solid #000;
   border-radius: 50%;
@@ -6793,22 +7057,20 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-gflag:active,
 .ghud-gplus:active { transform: scale(0.94); }
 
-/* 加号：一步编组，虚线金框，与组图标同尺寸同位置规律。 */
+/* 加号：一步编组，虚线金框，与组图标同尺寸；图标来自 Lucide 的 `plus`。 */
 .ghud-gplus {
+  display: grid;
+  place-items: center;
   border-style: dashed;
   border-color: rgba(243, 220, 154, 0.55);
   background: rgba(20, 17, 12, 0.6);
   box-shadow: none;
 }
 
-.ghud-gplus::after {
-  content: "+";
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
+.ghud-gplus svg {
+  width: 18px;
+  height: 18px;
   color: #f3dc9a;
-  font: 700 20px/1 sans-serif;
 }
 
 /* 有单位图标时铺满圆形，底边留一条队色。 */
@@ -6869,30 +7131,34 @@ body.gesture-ui #gesture-hud { display: block; }
     0 0 10px rgba(252, 211, 18, 0.35);
 }
 
-/* 取消编组：只在被选中的那一组正下方出现，红框小 ×。 */
+/* 取消编组：只在被选中的那一组右上角出现，红底垃圾桶（Lucide 的 `trash-2`）。 */
 .ghud-gclear {
   position: absolute;
-  top: 45px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 30px;
-  height: 24px;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 1px solid #000;
-  border-radius: 6px;
+  border-radius: 50%;
   background: linear-gradient(180deg, #5a1f1a 0%, #2a0f0c 100%);
   box-shadow:
     inset 0 0 0 1px rgba(255, 140, 120, 0.55),
     0 2px 5px rgba(0, 0, 0, 0.5);
   color: #ffb0a0;
-  font: 700 16px/1 sans-serif;
-  text-shadow: 0 1px 2px #000;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
+.ghud-gclear svg {
+  width: 12px;
+  height: 12px;
+}
+
 .ghud-gclear[hidden] { display: none; }
-.ghud-gclear:active { transform: translateX(-50%) scale(0.92); }
+.ghud-gclear:active { transform: scale(0.92); }
 
 .ghud-top {
   position: absolute;
@@ -6927,11 +7193,24 @@ body.gesture-ui #gesture-hud { display: block; }
   border-radius: 50%;
   border: 1px solid rgba(0, 0, 0, 0.7);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  background-image: var(--ghud-res-icon, none);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
-.ghud-res--gold::before { background: #f0c860; }
-.ghud-res--lumber::before { background: #b98246; }
-.ghud-res--food::before { background: #8fd18a; }
+/* 安装目录里有 ToolTip 图标时（hud.ts `paintResIcon`）画图标，色点只是缺资源时的退路。 */
+.ghud-res.has-icon::before {
+  width: 18px;
+  height: 18px;
+  border-color: transparent;
+  box-shadow: none;
+  background-color: transparent;
+}
+
+.ghud-res--gold::before { background-color: #f0c860; }
+.ghud-res--lumber::before { background-color: #b98246; }
+.ghud-res--food::before { background-color: #8fd18a; }
 
 /* 当前选择：头像 + 名称 + 生命 / 魔法，钉在左下；物品栏在它上面。 */
 .ghud-sel {
@@ -6959,10 +7238,165 @@ body.gesture-ui #gesture-hud { display: block; }
 
 /* 借来的单位头像：尺寸与经典控制台无关，这里给固定方块，边框自己画。 */
 .ghud-portrait {
+  position: relative;
   width: 68px;
   height: 68px;
   flex: none;
   pointer-events: auto;
+}
+
+/* 升级 / 训练 / 研究的进度，压在血蓝条下面。5px 高，金色，不抢血条的位置。 */
+.ghud-sel__prog {
+  height: 5px;
+  margin-top: 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.65);
+  box-shadow: inset 0 0 0 1px rgba(243, 220, 154, 0.3);
+  overflow: hidden;
+}
+
+.ghud-sel__prog[hidden] { display: none; }
+
+.ghud-sel__prog > i {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #b9862c, #f7e8ae);
+  transition: width 120ms linear;
+}
+
+/* 舱内乘客（金矿里的精灵 / 飞艇里的单位）：一排可点的小头像，点一个就放出来。
+   经典控制台用货舱面板做这件事，手势 HUD 没有那一块，在这里补上。 */
+.ghud-cargo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.ghud-cargo[hidden] { display: none; }
+
+.ghud-cargo__slot {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.75);
+  border-radius: 5px;
+  background: #111 center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  color: #f3dc9a;
+  font: 700 11px/1 var(--game-font, sans-serif);
+  cursor: pointer;
+  /* .ghud-sel 整块是 pointer-events: none（不让面板挡住地图），所以每一颗可点的东西
+     都要自己把事件要回来——头像格和右上角的 × 都有，这里漏了，点小头像会直接穿到地图上。 */
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ghud-cargo__slot:active { transform: scale(0.94); }
+
+/* 地上物品的说明正文：名称下面三行以内，超出按行裁掉（面板是浮在地图上的，不滚）。
+   颜色码已在 hud.ts 里剥掉，这里只管排版。 */
+.ghud-sel__desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  margin-top: 4px;
+  color: rgba(222, 219, 206, 0.88);
+  font: 11px/1.4 var(--game-font, sans-serif);
+  white-space: pre-line;
+}
+
+.ghud-sel__desc[hidden] { display: none; }
+
+/* 地上物品：附近谁能来捡——一排可点的单位头像，点谁就谁去捡。尺寸与舱内乘客一致，
+   也是 320px 面板里排得下的最大一档（6 个）。 */
+.ghud-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.ghud-pick[hidden] { display: none; }
+
+.ghud-pick__face {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.75);
+  border-radius: 5px;
+  background: #111 center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  color: #f3dc9a;
+  font: 700 11px/1 var(--game-font, sans-serif);
+  cursor: pointer;
+  /* .ghud-sel 整块 pointer-events: none，可点的格子都要自己把事件要回来（同舱内乘客）。 */
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ghud-pick__face:active { transform: scale(0.94); }
+
+/* 生产队列：建筑正在训练 / 研究的项目按顺序排成一排图标（含正在生产的那个）。
+   点哪一个就取消哪一个，与经典命令卡上的队列是同一个操作；不是自己建筑的队列只读。
+   一行最多 6 格（见 hud.ts 的 QUEUE_SLOTS）：不换行，格子随面板正文宽度均分、封顶 34px，
+   第 7 项（引擎上限）折成最后一格角上的 +N，不会把血条挤下去。 */
+.ghud-queue {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.ghud-queue[hidden] { display: none; }
+
+.ghud-queue__slot {
+  position: relative;
+  flex: 1 1 0;
+  max-width: 34px;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.75);
+  border-radius: 5px;
+  background: #111 center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  color: #f3dc9a;
+  font: 700 11px/1 var(--game-font, sans-serif);
+  cursor: pointer;
+  /* .ghud-sel 整块是 pointer-events: none，可点的格子自己把事件要回来。 */
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 队首（正在生产 / 研究）描一圈金边，其余排队的只描暗边。 */
+.ghud-queue__slot:first-child {
+  box-shadow: inset 0 0 0 1px rgba(252, 211, 18, 0.6);
+}
+
+.ghud-queue__slot:active { transform: scale(0.94); }
+
+.ghud-queue__slot:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* 第 7 项及以后折成的角标：贴在最后一格的右下角，点那一格取消的是它自己那一项。 */
+.ghud-queue__more {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 2px;
+  border: 1px solid #000;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #4a3f28, #1b150c);
+  color: #f7e8ae;
+  font: 700 9px/13px var(--game-font, sans-serif);
+  text-align: center;
+  pointer-events: none;
 }
 
 .ghud-portrait .hud-portrait {
@@ -7042,7 +7476,8 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-bar--hp i { background: linear-gradient(180deg, #9cf59c 0%, #3fae3f 60%, #1f6b1f 100%); }
 .ghud-bar--mp i { background: linear-gradient(180deg, #a8c8ff 0%, #3f74e0 60%, #22459a 100%); }
 
-/* 右下动作簇：大圆钮（攻击 / 移动）+ 12 槽命令环，槽位坐标由 hud.ts 的 layoutRing 写死。 */
+/* 右下动作簇：大圆钮（攻击 / 移动）+ 12 槽命令环，槽位坐标由 hud.ts 的 layoutRing 写死。
+   整个簇可以按 --ghud-panel-scale 等比缩放（锚在右下角），手机上默认缩到 0.65。 */
 .ghud-actions {
   position: absolute;
   right: calc(var(--safe-right) + 10px);
@@ -7050,7 +7485,148 @@ body.gesture-ui #gesture-hud { display: block; }
   width: var(--ghud-outer, 272px);
   height: var(--ghud-outer, 272px);
   pointer-events: none;
+  transform: scale(var(--ghud-panel-scale, 1));
+  transform-origin: 100% 100%;
 }
+
+/* 手机上动作簇占得太满：整体缩到 0.65（比原先的 0.5 放大约三成）；平板（≥1024 宽且 ≥720 高）
+   保持原尺寸。判据用**视口尺寸**而不是 pointer: coarse —— 开发者工具里模拟触摸、以及把窗口
+   拉小的桌面浏览器，pointer 不一定是 coarse，但控制台一样会显得过大。 */
+@media (max-width: 1000px), (max-height: 700px) {
+  #gesture-hud { --ghud-panel-scale: 0.65; }
+}
+
+/* 动作簇外侧的「说明」钮：打开当前单位的物品 / 技能说明。
+   挂在簇的外框上、默认在簇正上方，和环上的 12 个技能格分开，误触不到。 */
+.ghud-utils {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  display: flex;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.ghud-utils__btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background: var(--ghud-plate);
+  box-shadow: var(--ghud-rim);
+  color: #efe4c8;
+}
+
+.ghud-utils__btn:active { transform: scale(0.94); }
+.ghud-utils__btn svg { width: 19px; height: 19px; }
+
+/* 说明面板开着 = 钮亮着（和帮助钮同一条视觉）。 */
+.ghud-utils__btn.on {
+  background: #3b2f16;
+  color: #ffd863;
+  box-shadow:
+    inset 0 0 0 1px rgba(252, 211, 18, 0.6),
+    0 0 10px rgba(252, 211, 18, 0.3);
+}
+
+/* 右下动作簇的「物品 / 技能说明」：贴右下角的浮层，按当前选择现填。 */
+.ghud-cluster-help {
+  position: absolute;
+  right: calc(var(--safe-right) + 10px);
+  bottom: calc(var(--safe-bottom) + 10px);
+  z-index: 29;
+  width: min(330px, calc(100vw - 24px));
+  max-height: min(70vh, 440px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 14px 10px;
+  border: 1px solid #000;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(59, 52, 38, 0.98) 0%, rgba(26, 21, 14, 0.99) 60%, rgba(15, 12, 8, 0.99) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(243, 220, 154, 0.5),
+    0 18px 48px rgba(0, 0, 0, 0.65);
+  color: #efe4c8;
+  font-family: var(--ui-font);
+  pointer-events: auto;
+}
+
+.ghud-cluster-help[hidden] { display: none; }
+
+/* The panel's own scrollbar: the browser default is a light grey slab that cuts the dark
+   parchment in half. Thin, gold, and on a transparent track instead — the same metal the
+   panel's border and title use. (Firefox honours the two standard properties below.) */
+.ghud-cluster-help {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(243, 220, 154, 0.38) transparent;
+}
+
+.ghud-cluster-help::-webkit-scrollbar { width: 6px; }
+.ghud-cluster-help::-webkit-scrollbar-track { background: transparent; }
+.ghud-cluster-help::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(243, 220, 154, 0.38);
+}
+.ghud-cluster-help::-webkit-scrollbar-thumb:hover { background: rgba(243, 220, 154, 0.6); }
+
+.ghud-cluster-help__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 9px;
+  border-bottom: 1px solid rgba(243, 220, 154, 0.28);
+  background: linear-gradient(180deg, rgba(59, 52, 38, 0.99), rgba(36, 30, 21, 0.99));
+}
+
+.ghud-cluster-help__title {
+  flex: 1;
+  color: #f7e8ae;
+  font: 700 15px/1.2 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+.ghud-cluster-help__list { display: flex; flex-direction: column; }
+
+.ghud-cluster-help__section {
+  padding: 11px 0 5px;
+  color: #d9b978;
+  font: 700 12px/1.2 var(--game-font, sans-serif);
+  letter-spacing: 0.08em;
+}
+
+.ghud-cluster-help__empty {
+  padding: 16px 0 8px;
+  color: rgba(239, 228, 200, 0.55);
+  font: 13px/1.5 var(--ui-font);
+}
+
+.ghud-cluster-help__row {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  column-gap: 9px;
+  align-items: start;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(243, 220, 154, 0.12);
+}
+
+.ghud-cluster-help__row:last-child { border-bottom: none; }
+.ghud-cluster-help__row .ghud-help__ctrl-name { grid-column: 2; }
+.ghud-cluster-help__row .ghud-help__ctrl-meta {
+  grid-column: 2;
+  margin-top: 2px;
+  color: #ffcb2e;
+  font: 12px/1.4 var(--ui-font);
+}
+.ghud-cluster-help__row .ghud-help__ctrl-text { grid-column: 2; margin-top: 2px; }
 
 .ghud-attack {
   position: absolute;
@@ -7084,8 +7660,8 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-slot {
   position: absolute;
   transform: translate(-50%, -50%);
-  width: 48px;
-  height: 48px;
+  width: 38px;
+  height: 38px;
   padding: 0;
   pointer-events: auto;
   touch-action: none;
@@ -7100,13 +7676,203 @@ body.gesture-ui #gesture-hud { display: block; }
     inset 0 0 0 1px rgba(243, 220, 154, 0.4),
     0 2px 6px rgba(0, 0, 0, 0.55);
   color: #efe4c8;
-  font: 700 13px/1 var(--game-font, sans-serif);
+  font: 700 12px/1 var(--game-font, sans-serif);
   text-shadow: 0 1px 2px #000;
 }
 
 .ghud-slot[hidden] { display: none; }
 .ghud-slot.off { opacity: 0.32; }
 .ghud-slot:active { transform: translate(-50%, -50%) scale(0.92); }
+
+.ghud-slot__text { font-style: normal; }
+
+/* 冷却读数：与经典命令卡同一层暗扇形，中间盖剩余整秒（WC3 向上取整）。
+   单独一层压在图标上，但让开右上角的「+」和自动施法小闪电（z-index 2 / 3）。 */
+.ghud-slot__cd {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  font: 700 13px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  pointer-events: none;
+}
+
+.ghud-slot__cd[hidden] { display: none; }
+
+/* 可升级技能：右上角的小金「+」，点整格就直接学 / 升一级。 */
+.ghud-learn {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #f7e8ae 0%, #d9a93c 55%, #8a6412 100%);
+  box-shadow: 0 0 0 1px rgba(243, 220, 154, 0.35), 0 1px 3px rgba(0, 0, 0, 0.7);
+  color: #241a08;
+  font: 700 13px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.ghud-learn:active { transform: scale(0.88); }
+
+.ghud-learn[hidden] { display: none; }
+
+/* 自动施法开关：能设自动的技能，右上角一颗小闪电。关着是暗的，开着是金色的——和经典
+   命令卡上那圈闪光读的是同一个状态（`modal`）。点它只翻开关，不施法。 */
+.ghud-auto {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.85);
+  background: #2a2316;
+  color: #9a917c;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.ghud-auto svg { width: 10px; height: 10px; }
+/* 图标本身只有 16px，手指点不稳：向外扩一圈透明命中区，视觉不变。 */
+.ghud-auto::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+}
+.ghud-auto.on {
+  background: #f3dc9a;
+  color: #241a08;
+  box-shadow: 0 0 6px rgba(243, 220, 154, 0.7);
+}
+.ghud-auto:active { transform: scale(0.88); }
+.ghud-auto[hidden] { display: none; }
+
+/* 自动施法开着：技能图标外圈有两道金色光点绕着转（不是角上的小闪电在闪）。
+   用一圈 conic-gradient 的亮弧 + 环形遮罩，让它只留在图标边缘；转起来就是两道追光。 */
+.ghud-slot.auto-on::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  z-index: 1;
+  border-radius: 50%;
+  pointer-events: none;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg 22deg,
+    rgba(255, 238, 180, 0.25) 26deg,
+    rgba(255, 232, 150, 0.95) 30deg,
+    rgba(255, 206, 80, 0.85) 34deg,
+    transparent 40deg 202deg,
+    rgba(255, 238, 180, 0.25) 206deg,
+    rgba(255, 232, 150, 0.95) 210deg,
+    rgba(255, 206, 80, 0.85) 214deg,
+    transparent 220deg 360deg
+  );
+  -webkit-mask: radial-gradient(farthest-side, #0000 calc(100% - 3px), #000 calc(100% - 3px));
+  mask: radial-gradient(farthest-side, #0000 calc(100% - 3px), #000 calc(100% - 3px));
+  filter: drop-shadow(0 0 3px rgba(255, 216, 110, 0.8));
+  animation: ghud-slot-orbit 2.4s linear infinite;
+}
+
+@keyframes ghud-slot-orbit {
+  to { transform: rotate(360deg); }
+}
+
+/* 减少动态效果：保留金色描边，但不转。 */
+@media (prefers-reduced-motion: reduce) {
+  .ghud-slot.auto-on::before {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+.ghud-auto:active { transform: scale(0.88); }
+.ghud-auto[hidden] { display: none; }
+
+/* 同一格既能升级（+）又能设自动时，把「+」往左让开，两颗角标不叠在一起。 */
+.ghud-slot.has-auto .ghud-learn { right: 14px; }
+
+.ghud-slot.can-learn {
+  box-shadow:
+    inset 0 0 0 1px rgba(252, 211, 18, 0.85),
+    0 0 10px rgba(252, 211, 18, 0.4),
+    0 2px 6px rgba(0, 0, 0, 0.55);
+}
+
+/* 「进入下一页」的按钮（建造 / 英雄技能 / 法术书）在命令环**右侧**单独排半弧：
+   不占 12 个命令槽，也不和直接下令的按钮混在一起；右下角的 › 表示点进去还有一页。 */
+.ghud-enter {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ghud-enter[hidden] { display: none; }
+
+.ghud-eslot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background-color: #161210;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 108% 108%;
+  box-shadow:
+    inset 0 0 0 1px rgba(243, 220, 154, 0.55),
+    0 3px 9px rgba(0, 0, 0, 0.6);
+}
+
+.ghud-eslot::after {
+  content: "\203a";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  color: #f3dc9a;
+  font: 700 15px/1 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+.ghud-eslot.off { opacity: 0.32; }
+.ghud-eslot:active { transform: translate(-50%, -50%) scale(0.92); }
+
+/* 建造不再「点进去」：工人的建筑取建造页的列表，先补进命令环**空着的槽位**（hud.ts
+   `seatSideArc`，点了直接造）；环上摆不下的才排到攻击钮左侧的外圈半弧
+   （`layoutBuildArc`，半径与图标尺寸按弧长算，最多 12 个也不互相压边）。
+   前置没到的建筑仍是 `.off`，点了不生效——与卡面上的灰按钮同一条规则。 */
+.ghud-build {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ghud-build[hidden] { display: none; }
+
+/* 外圈半弧：格子更大，图标在格子里也铺得更满（104% → 116%），看起来明显比内环大。 */
+.ghud-bslot { background-size: 116% 116%; }
 
 /* 瞄准中（armed）：命令环整体亮一圈，提示「下一指落目标」。 */
 #gesture-hud.armed .ghud-slot,
@@ -7117,9 +7883,11 @@ body.gesture-ui #gesture-hud { display: block; }
     0 2px 6px rgba(0, 0, 0, 0.55);
 }
 
+/* 菜单钮钉在最右上角：PC / 平板 / 手机都一样（手机上只是整体再缩到 0.65）。
+   资源条在它左边留了 60px，不会被压住。 */
 .ghud-menu {
   position: absolute;
-  top: calc(var(--safe-top) + 60px);
+  top: calc(var(--safe-top) + 8px);
   right: calc(var(--safe-right) + 8px);
   width: 46px;
   height: 46px;
@@ -7136,4 +7904,540 @@ body.gesture-ui #gesture-hud { display: block; }
 }
 
 .ghud-menu:active { transform: scale(0.95); }
+
+/* 手机没有滚轮、也没有 ESC：左上角、小地图右侧一列工具钮——放大 / 缩小 / 取消选择。
+   小地图固定 168×156（top/left +8），所以这一列从 8+168+8 = 184px 开始。 */
+/* 手势控件自带 display:grid/flex，浏览器默认的 [hidden]{display:none} 会被盖掉；
+   这里统一让 hidden 算数（取消选择、物品栏、命令簇都靠它开关）。 */
+#gesture-hud [hidden] { display: none !important; }
+
+.ghud-zoom {
+  position: absolute;
+  top: calc(var(--safe-top) + 8px);
+  left: calc(var(--safe-left) + 184px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.ghud-zoom__btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background: var(--ghud-plate);
+  box-shadow: var(--ghud-rim);
+  color: #efe4c8;
+}
+.ghud-zoom__btn:active { transform: scale(0.94); }
+.ghud-zoom__btn svg { width: 22px; height: 22px; }
+
+/* 帮助按钮亮着 = 面板开着；此时整列工具钮浮到遮罩之上，同一个钮能再点一下关掉。 */
+.ghud-zoom__btn.on {
+  background: #3b2f16;
+  color: #ffd863;
+  box-shadow:
+    inset 0 0 0 1px rgba(252, 211, 18, 0.6),
+    0 0 10px rgba(252, 211, 18, 0.3);
+}
+
+/* 帮助面板：顶部资源条最左边、「鼠标箭头」旁边的「?」打开。遮罩铺满手势 HUD，点空白或按
+   Escape 关闭；面板是深色木板 + 金边，内容区自己滚动，底部详情栏固定。 */
+#ghud-help {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2vh 2vw;
+  background: rgba(8, 6, 3, 0.72);
+  pointer-events: auto;
+}
+
+.ghud-help__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 100%);
+  max-height: 88vh;
+  min-height: 0;
+  border: 1px solid #000;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(59, 52, 38, 0.98) 0%, rgba(26, 21, 14, 0.99) 60%, rgba(15, 12, 8, 0.99) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(243, 220, 154, 0.5),
+    0 18px 48px rgba(0, 0, 0, 0.65);
+  color: #efe4c8;
+  font-family: var(--ui-font);
+  outline: none;
+}
+
+.ghud-help__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(243, 220, 154, 0.28);
+}
+
+.ghud-help__title {
+  flex: 1;
+  color: #f7e8ae;
+  font: 700 18px/1.2 var(--game-font, sans-serif);
+  text-shadow: 0 1px 2px #000;
+}
+
+.ghud-help__close {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #5a1f1a, #2a0f0c 70%);
+  box-shadow: inset 0 0 0 1px rgba(255, 140, 120, 0.5);
+  color: #ffd7cd;
+  font: 700 18px/1 var(--game-font, sans-serif);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ghud-help__close:active { transform: scale(0.92); }
+
+.ghud-help__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 16px 0;
+}
+
+.ghud-help__tab {
+  padding: 6px 14px;
+  border: 1px solid rgba(243, 220, 154, 0.35);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #c9bd9d;
+  font: 600 13px/1.4 var(--ui-font);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ghud-help__tab.on {
+  border-color: rgba(252, 211, 18, 0.85);
+  background: linear-gradient(180deg, #4a3a1c, #2a2010);
+  color: #ffd863;
+  box-shadow: inset 0 0 0 1px rgba(252, 211, 18, 0.25);
+}
+
+.ghud-help__search {
+  margin: 10px 16px 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(243, 220, 154, 0.35);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #efe4c8;
+  font: 14px/1.4 var(--ui-font);
+  outline: none;
+  pointer-events: auto;
+}
+
+.ghud-help__search::placeholder { color: rgba(239, 228, 200, 0.4); }
+.ghud-help__search:focus { border-color: rgba(252, 211, 18, 0.7); }
+
+.ghud-help__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px 14px;
+  -webkit-overflow-scrolling: touch;
+  /* 不抢面板宽度：换标签 / 搜索结果长短变化时列表不横跳。 */
+  scrollbar-gutter: stable;
+  /* 系统滚动条是亮的、带箭头的，压在深色木板上很扎眼；换成一条细的金色滑块。 */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(216, 180, 90, 0.6) rgba(0, 0, 0, 0.4);
+}
+
+.ghud-help__body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.ghud-help__body::-webkit-scrollbar-track {
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.ghud-help__body::-webkit-scrollbar-thumb {
+  border: 1px solid rgba(0, 0, 0, 0.7);
+  border-radius: 4px;
+  background: linear-gradient(180deg, #c9a84f, #7c6428);
+}
+
+.ghud-help__body::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #e0c169, #94782f);
+}
+
+.ghud-help__body::-webkit-scrollbar-corner { background: transparent; }
+
+.ghud-help__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 10px;
+}
+
+.ghud-help__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 4px;
+  border: 1px solid rgba(0, 0, 0, 0.85);
+  border-radius: 4px;
+  background: rgba(22, 18, 12, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(243, 220, 154, 0.12);
+  color: #d9cfb4;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ghud-help__card:active { transform: scale(0.96); }
+
+.ghud-help__card.on {
+  border-color: rgba(252, 211, 18, 0.8);
+  box-shadow:
+    inset 0 0 0 1px rgba(252, 211, 18, 0.5),
+    0 0 10px rgba(252, 211, 18, 0.25);
+}
+
+.ghud-help__icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border: 1px solid #000;
+  border-radius: 3px;
+  background: #161210 center / cover no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(243, 220, 154, 0.35);
+  color: #f3dc9a;
+  font: 700 14px/1 var(--game-font, sans-serif);
+}
+
+.ghud-help__name {
+  width: 100%;
+  font: 12px/1.3 var(--ui-font);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ghud-help__ctrls { display: flex; flex-direction: column; }
+
+.ghud-help__ctrl {
+  display: grid;
+  grid-template-columns: 32px 132px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+  border-bottom: 1px solid rgba(243, 220, 154, 0.12);
+}
+
+.ghud-help__ctrl:last-child { border-bottom: none; }
+
+.ghud-help__ctrl-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(243, 220, 154, 0.3);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.35);
+  color: #f3dc9a;
+}
+
+.ghud-help__ctrl-icon svg { width: 16px; height: 16px; }
+.ghud-help__ctrl-name { color: #f7e8ae; font: 700 13px/1.35 var(--ui-font); }
+.ghud-help__ctrl-text { color: rgba(239, 228, 200, 0.72); font: 13px/1.5 var(--ui-font); }
+
+.ghud-help__empty {
+  padding: 40px 0;
+  color: rgba(239, 228, 200, 0.5);
+  font: 14px/1.5 var(--ui-font);
+  text-align: center;
+}
+
+.ghud-help__detail {
+  flex: none;
+  max-height: 34%;
+  overflow-y: auto;
+  padding: 10px 16px 14px;
+  border-top: 1px solid rgba(243, 220, 154, 0.3);
+  background: rgba(10, 8, 5, 0.85);
+}
+
+.ghud-help__detail-name {
+  display: block;
+  margin-bottom: 4px;
+  color: #ffd863;
+  font: 700 14px/1.3 var(--ui-font);
+}
+
+.ghud-help__detail-text {
+  margin: 0;
+  color: rgba(239, 228, 200, 0.82);
+  font: 13px/1.6 var(--ui-font);
+  white-space: pre-wrap;
+}
+
+/* 窄屏：面板铺满宽（100vw），标签与网格收紧，说明文字换到第二行。 */
+@media (max-width: 1000px), (max-height: 700px) {
+  /* 左上工具列浮在遮罩上（缩小 / 放大 / 取消 / 帮助，整体缩到 0.65 ≈ 130px 高），
+     面板让出这一条，避免按钮压在标题上。 */
+  #ghud-help {
+    padding: calc(var(--safe-top) + 146px) 0 0;
+    align-items: flex-start;
+  }
+
+  .ghud-help__panel {
+    width: 100%;
+    max-width: 100vw;
+    max-height: calc(100% - 8px);
+    border-radius: 0;
+  }
+
+  .ghud-help__head { padding: 10px 12px; }
+  .ghud-help__tabs { padding: 8px 12px 0; }
+  .ghud-help__search { margin: 8px 12px 0; }
+  .ghud-help__body { padding: 10px 12px; }
+
+  .ghud-help__grid {
+    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+    gap: 8px;
+  }
+
+  .ghud-help__icon { width: 48px; height: 48px; }
+
+  .ghud-help__ctrl {
+    grid-template-columns: 28px 1fr;
+    row-gap: 2px;
+  }
+
+  .ghud-help__ctrl-text { grid-column: 2; }
+}
+
+/* 左下角、物品栏上方：八方向移动盘 + 左右旋转。按住即持续移动 / 旋转（松开回正），
+   走的是相机原生的方向键与 Insert·Delete，触屏上等于给手机补了 WASD 和转视角。
+   高度沿用原来竖列的高度（4 颗 44px 钮 + 3 道 8px 缝），移动盘因此还停在原位；
+   右侧那列钮改成绕着盘心排开的半圆（见 .ghud-rot）。 */
+.ghud-view {
+  position: absolute;
+  left: calc(var(--safe-left) + 10px);
+  bottom: calc(var(--safe-bottom) + 176px);
+  display: flex;
+  align-items: center;
+  height: 200px;
+  pointer-events: none;
+}
+
+.ghud-pad {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  flex: 0 0 auto;
+  pointer-events: auto;
+  touch-action: none;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(32, 28, 20, 0.62), rgba(10, 10, 12, 0.82));
+  box-shadow: var(--ghud-rim), inset 0 0 0 1px rgba(243, 220, 154, 0.16);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ghud-pad__arrow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 9px solid rgba(239, 228, 200, 0.5);
+  transform: translate(-50%, -50%) rotate(var(--a)) translateY(-34px);
+  pointer-events: none;
+  transition: border-bottom-color 90ms linear;
+}
+
+.ghud-pad__arrow.on { border-bottom-color: #ffd863; }
+
+/* 四颗工具钮围着移动盘排成一个右侧半圆：盘心为原点，半径 = 盘半径 52 + 空隙 10 + 钮半径 22。
+   每颗钮只转角度（--a），再沿半径推出去，最后反向转回来保持图标正立。 */
+.ghud-rot {
+  --ghud-rot-r: 84px;
+  position: absolute;
+  left: 52px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.ghud-rot__btn {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid #000;
+  border-radius: 50%;
+  background: var(--ghud-plate);
+  box-shadow: var(--ghud-rim);
+  color: #efe4c8;
+  transform: rotate(var(--a, 0deg)) translateX(var(--ghud-rot-r)) rotate(calc(-1 * var(--a, 0deg)));
+}
+
+/* 从上到下：左转、右转、俯仰切换、镜头跟随，角度跨 150°，贴着盘的外缘。 */
+.ghud-rot__btn:nth-child(1) { --a: -75deg; }
+.ghud-rot__btn:nth-child(2) { --a: -25deg; }
+.ghud-rot__btn:nth-child(3) { --a: 25deg; }
+.ghud-rot__btn:nth-child(4) { --a: 75deg; }
+
+.ghud-rot__btn:active { background: #3b2f16; }
+.ghud-rot__btn.on { background: #3b2f16; color: #ffd863; }
+.ghud-rot__btn svg { width: 22px; height: 22px; }
+
+/* 手机上这块 HUD 占得太满：左列四块（小地图 / 编组 / 物品 / 选择面板）和左上角
+   工具列一起缩到 0.65（比原先的 0.5 放大约三成），各自以自己的角为锚点，位置仍然贴着
+   左上 / 左下。只用 transform，内部布局（小地图拖拽、6 格物品、进度条、小 ×）都不用改；
+   11 个按钮的热区跟着缩。缩放后小地图是 168×0.65 ≈ 109 宽、156×0.65 ≈ 101 高，
+   编组条与工具列的偏移量按这个尺寸重算，免得和放大后的邻居叠在一起。 */
+@media (max-width: 1000px), (max-height: 700px) {
+  .ghud-minimap {
+    transform: scale(0.65);
+    transform-origin: 0 0;
+  }
+  .ghud-groups {
+    top: calc(var(--safe-top) + 8px + 101px + 6px);
+    transform: scale(0.65);
+    transform-origin: 0 0;
+  }
+  .ghud-zoom {
+    left: calc(var(--safe-left) + 8px + 109px + 8px);
+    transform: scale(0.65);
+    transform-origin: 0 0;
+  }
+  .ghud-sel {
+    transform: scale(0.65);
+    transform-origin: 0 100%;
+  }
+  .ghud-inventory {
+    bottom: calc(var(--safe-bottom) + 73px);
+    transform: scale(0.65);
+    transform-origin: 0 100%;
+  }
+  /* 资源条（金币 / 木材 / 人口）缩 0.65，右端让出 40px 给菜单；菜单则钉在最右上角。 */
+  .ghud-top {
+    right: calc(var(--safe-right) + 40px);
+    transform: scale(0.65);
+    transform-origin: 100% 0;
+  }
+  .ghud-menu {
+    transform: scale(0.65);
+    transform-origin: 100% 0;
+  }
+  /* 视角控制也跟着缩 0.65，仍然压在物品栏上方。 */
+  .ghud-view {
+    bottom: calc(var(--safe-bottom) + 125px);
+    transform: scale(0.65);
+    transform-origin: 0 100%;
+  }
+}
+
+/* 「请横屏」（ui/rotateHint.ts）——竖屏的手机/平板只看得到这一层。
+   菜单和 FDF 界面按横屏的 0.8×0.6 世界绘制（ui/fdf/layout.ts fitBox 按高度缩放），
+   竖屏时世界宽度只剩宽高比×0.6，两栏会被挤出屏幕；对局中不提示，手势 HUD 本来
+   就是为竖屏做的。判据全部交给 CSS：旋转屏幕、进出对局都不需要 JS 再计算一次。 */
+.rotate-hint { display: none; }
+
+@media (orientation: portrait) and (pointer: coarse) {
+  body:not(.in-game) .rotate-hint {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding:
+      calc(env(safe-area-inset-top, 0px) + 24px)
+      30px
+      calc(env(safe-area-inset-bottom, 0px) + 24px);
+    background: radial-gradient(120% 80% at 50% 40%, rgba(22, 28, 40, 0.99), rgba(4, 6, 10, 0.995));
+    color: #e8e2d0;
+    font-family: var(--ui-font);
+    text-align: center;
+  }
+}
+
+.rotate-hint__phone {
+  width: 54px;
+  height: 92px;
+  border: 2px solid rgba(243, 220, 154, 0.85);
+  border-radius: 10px;
+  position: relative;
+  box-shadow: inset 0 0 18px rgba(243, 220, 154, 0.16), 0 0 22px rgba(0, 0, 0, 0.6);
+  animation: rotate-hint-turn 2.8s ease-in-out infinite;
+}
+
+.rotate-hint__phone::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: rgba(243, 220, 154, 0.85);
+}
+
+@keyframes rotate-hint-turn {
+  0%, 15% { transform: rotate(0deg); }
+  45%, 70% { transform: rotate(-90deg); }
+  100% { transform: rotate(0deg); }
+}
+
+.rotate-hint__title {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #f3dc9a;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.rotate-hint__desc {
+  margin: 0;
+  max-width: 26em;
+  font-size: 14px;
+  line-height: 1.65;
+  color: rgba(232, 226, 208, 0.72);
+}
 

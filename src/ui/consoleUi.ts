@@ -45,13 +45,16 @@
 // clipped by the viewport edge, exactly as they are in the game. `SIDE_FILLER` below is the
 // leftover width of the box itself.
 
+import { Maximize, Minimize, createElement as lucideIcon } from "lucide";
 import type { DataSource } from "../vfs/types";
 import { hdArt } from "../data/flavor";
+import { t } from "../i18n";
 import type { Arg, FdfFrame, FdfProp } from "./fdf/parser";
 import { type FdfLibrary } from "./fdf/library";
 import { UI_HEIGHT, UI_WIDTH } from "./fdf/layout";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { fitLine } from "./fdf/widgets";
+import { fullscreenActive, fullscreenSupported, toggleFullscreen } from "./fullscreen";
 import { wc3ToHtml } from "./wc3Text";
 import type { ResourceKind } from "./hud";
 
@@ -181,6 +184,9 @@ export class ConsoleUi {
   private mounting = false;
   private shown = true;
   private last: ConsoleResources | null = null;
+  /** The fullscreen switch left of the button bar (see `mountFullscreenButton`). */
+  private fsBtn: HTMLButtonElement | null = null;
+  private readonly onFullscreenChange = (): void => this.paintFullscreenButton();
 
   /** `skin` is the war3skins.txt section the chrome is decorated from — the console art and
    *  the button atlas are per-RACE (`orc-console-buttonstates2.blp`, `OrcUITile01`). */
@@ -190,6 +196,7 @@ export class ConsoleUi {
     private skin: string,
     private actions: ConsoleUiActions,
   ) {
+    document.addEventListener("fullscreenchange", this.onFullscreenChange);
     void this.build();
   }
 
@@ -288,6 +295,55 @@ export class ConsoleUi {
     const glow = this.actions.questGlow?.();
     const button = screen?.frame("UpperButtonBarQuestsButton");
     if (glow && button && glow.parentElement !== button) button.appendChild(glow);
+  }
+
+  /**
+   * The fullscreen switch in the clear strip LEFT of the upper button bar.
+   *
+   * It is OUR DOM rather than a fifth FDF button: the file's four fill their bar exactly
+   * (0.002 + 4 × 0.085 = 0.342) and the 0.343–0.459 hole belongs to the clock. A 16:10 / 16:9
+   * stage centres the authored 4:3 console, so the frame's left edge has a strip free and the
+   * switch stands there, vertically centred on the bar. A 4:3 stage has no such strip — the
+   * switch hides, and Alt+Enter (ui/fullscreen.ts) remains the way in and out.
+   *
+   * Re-appended on every build, because a resize empties the overlay.
+   */
+  private mountFullscreenButton(screen: FdfScreen): void {
+    if (!this.fsBtn) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "hud-fullscreen";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        toggleFullscreen();
+      });
+      this.fsBtn = btn;
+    }
+    const btn = this.fsBtn;
+    const host = screen.element;
+    const bar = screen.frame("UpperButtonBarFrame");
+    const barRect = bar?.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    const room = barRect ? barRect.left - hostRect.left : 0;
+    const show = !!barRect && fullscreenSupported() && room >= 40;
+    btn.style.display = show ? "" : "none";
+    if (show) {
+      btn.style.left = `${Math.round(room - 38)}px`;
+      btn.style.top = `${Math.round(barRect.top - hostRect.top + (barRect.height - 32) / 2)}px`;
+    }
+    this.paintFullscreenButton();
+    if (btn.parentElement !== host) host.appendChild(btn);
+  }
+
+  /** Icon and words follow the screen: "enter" while windowed, "exit" while fullscreen. */
+  private paintFullscreenButton(): void {
+    const btn = this.fsBtn;
+    if (!btn) return;
+    const on = fullscreenActive();
+    const label = t(on ? "hud.exitFullscreen" : "hud.fullscreen");
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.replaceChildren(lucideIcon(on ? Minimize : Maximize, { "stroke-width": 2.2, "aria-hidden": "true" }));
   }
 
   /** Push the current resource figures. Cheap to call every frame: it only writes the four
@@ -416,6 +472,9 @@ export class ConsoleUi {
   }
 
   dispose(): void {
+    document.removeEventListener("fullscreenchange", this.onFullscreenChange);
+    this.fsBtn?.remove();
+    this.fsBtn = null;
     this.screen?.dispose();
     this.screen = null;
     // The host owns the clock object itself and tears it down with the match; this only
@@ -463,6 +522,7 @@ export class ConsoleUi {
           this.applyEnabled(built);
           this.mountQuestGlow(built);
           this.applyObserver(built);
+          this.mountFullscreenButton(built);
         },
       });
       prev?.dispose();

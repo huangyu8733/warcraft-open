@@ -517,6 +517,38 @@ console.log("the authority's verdict reaches the player it is about, and nobody 
   check("…while the loser got this one too", seen.length, 2);
 }
 
+// A MAP's own dialog (profession/hero choice, mode vote) is raised by the AUTHORITY's script.
+// The client renders the relayed copy; its answer must travel back, or the trigger that
+// creates that player's character runs only on the client and the next snapshot erases it —
+// exactly "只有主机有人物" on 人族无敌.
+console.log("a client's dialog answer reaches the authority, stamped with its own seat");
+{
+  const { host, peer } = await room();
+  const hostLink = new MatchLink(channelFor(host), 0, SEATS);
+  const peerLink = new MatchLink(channelFor(peer), 1, SEATS, 1);
+  const relayed = [];
+  const answers = [];
+  peerLink.onDialog = (d) => relayed.push(d);
+  hostLink.onDialogClick = (p, d, b) => answers.push([p, d, b]);
+
+  hostLink.sendDialog(1, {
+    k: "dlg", message: "Choose your trade", dialogId: 77,
+    buttons: [{ text: "Farmer", quit: false, id: 91 }],
+  });
+  await tick();
+  check("the relayed dialog carries the authority's handles", [relayed[0]?.dialogId, relayed[0]?.buttons[0]?.id], [77, 91]);
+
+  check("the client can answer it", peerLink.sendDialogClick(77, 91), true);
+  await tick();
+  check("the host hears the click as that player", answers, [[1, 77, 91]]);
+
+  // A client answers its OWN dialogs only: the seat is the relay's stamp, not the payload's.
+  check("a handle-less (engine) dialog is not sent back", peerLink.sendDialogClick(-1, 91), false);
+  check("…and a negative button is refused too", peerLink.sendDialogClick(77, -2), false);
+  await tick();
+  check("neither reached the host", answers.length, 1);
+}
+
 // A MINIMAP SIGNAL (the Minimap Signal button, Alt-G, Alt+click) takes chat's road: the client
 // says only WHERE, the host stamps WHO from the relay, and the host alone addresses the allies.
 console.log("a minimap signal is stamped by the relay and reaches only the ally it is addressed to");

@@ -199,7 +199,12 @@ export async function mountLanCreateScreen(
 
   /** A place as a player reads it: the machine, the server's name, or the address they typed. */
   function targetLabel(t: HostTarget): string {
-    if (t.kind === "own") return lib?.string("THIS_COMPUTER") ?? "This Computer";
+    if (t.kind === "own") {
+      // On the hosted copy the relay behind the page IS Warcraft Open, so the "own" target is
+      // that server rather than this player's machine.
+      const official = lobby.servedOfficialUrl;
+      return official ? officialServerName(relayAuthority(official)) : lib?.string("THIS_COMPUTER") ?? "This Computer";
+    }
     if (t.kind === "official") return officialServerName(relayAuthority(t.url));
     return relayAuthority(t.url);
   }

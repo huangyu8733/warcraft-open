@@ -111,7 +111,7 @@ export async function mountHdCustomLobby(
   });
 
   const rescale = (): void => {
-    const zoom = String(Math.max(0.5, window.innerHeight / 1080));
+    const zoom = String(Math.max(0.25, window.innerHeight / 1080));
     root.style.zoom = zoom;
     back.style.zoom = zoom;
   };
@@ -131,9 +131,13 @@ export async function mountHdCustomLobby(
     teams.textContent = "";
     const left = el("div", "Official-TeamColumn");
     const right = el("div", "Official-TeamColumn");
-    teams.append(left, right);
 
     const order = [...new Set(state.seats.map((s) => s.team))].sort((a, b) => a - b);
+    // A one-team map has nothing for the second column: keeping it would leave half the page
+    // empty and squeeze every row's name into a couple of characters. The one section spans
+    // the page instead (`:only-child` in customGame.css).
+    teams.append(left);
+    if (order.length > 1) teams.appendChild(right);
     order.forEach((team, at) => {
       const column = at % 2 === 0 ? left : right;
       column.appendChild(teamSection(team));

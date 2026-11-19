@@ -358,4 +358,62 @@ export function registerItemNatives(rt: Runtime): void {
   // ChooseRandomCreepBJ, so without it a wave was a round of CreateNUnitsAtLoc(…, 0, …) and ended
   // the moment it began.
   def(rt, "ChooseRandomCreep", (c, a) => jInt(rawcodeToInt(c.rt.hooks?.chooseRandomCreep?.(asInt(a[0])) ?? "")));
+
+  // --- fixed item pools (CreateItemPool / ItemPoolAddItemType / PlaceRandomItem) ------
+  // Unlike ChooseRandomItem, which picks from the map's GLOBAL eligible-item list by class
+  // and level, a `itempool` is the map's OWN drop table: it adds specific item types with
+  // relative weights and PlaceRandomItem draws one at a point. TD maps build their chest
+  // drops this way (WuPinChi[1..10]) — the chest was consumed, the roll happened, and
+  // nothing dropped because these three natives were absent. The weight is relative, not a
+  // percentage: the draw is a single uniform over the SUM (common.j puts no ceiling on it).
+  // Draws use the runtime RNG, never Math.random, so a replay rolls the same items.
+  interface JassItemPool {
+    handleId: number;
+    entries: Array<{ typeId: string; weight: number }>;
+  }
+  const pool = (c: NativeCtx, v: JassValue): JassItemPool | undefined => c.rt.data<JassItemPool>(v);
+  def(rt, "CreateItemPool", (c) => {
+    const p: JassItemPool = { handleId: 0, entries: [] };
+    p.handleId = c.rt.handles.alloc(p);
+    return jHandle(p.handleId, "itempool");
+  });
+  def(rt, "ItemPoolAddItemType", (c, a) => {
+    const p = pool(c, a[0]);
+    if (p) p.entries.push({ typeId: intToRawcode(asInt(a[1])), weight: Math.max(0, asInt(a[2])) });
+    return JNULL;
+  });
+  def(rt, "PlaceRandomItem", (c, a) => {
+    const p = pool(c, a[0]);
+    if (!p || p.entries.length === 0) return JNULL;
+    let total = 0;
+    for (const e of p.entries) total += e.weight;
+    if (total <= 0) return JNULL; // every entry weighted out — nothing can drop
+    let roll = c.rt.random() * total;
+    let pick = p.entries[p.entries.length - 1]; // float slop lands on the last entry
+    for (const e of p.entries) {
+      if (e.weight <= 0) continue;
+      roll -= e.weight;
+      if (roll < 0) {
+        pick = e;
+        break;
+      }
+    }
+    return createItem(c, rawcodeToInt(pick.typeId), asNum(a[1]), asNum(a[2]));
+  });
+  // 清空并释放池句柄。地图在掉落表用完/重载时调用；不释放会让句柄表随局数增长。
+  def(rt, "DestroyItemPool", (c, a) => {
+    const p = pool(c, a[0]);
+    if (!p) return JNULL;
+    p.entries.length = 0;
+    c.rt.handles.free(p.handleId);
+    return JNULL;
+  });
+  // 从池中移除某类型的全部条目（common.j 语义：移除该类型的所有权重行）。
+  def(rt, "ItemPoolRemoveItemType", (c, a) => {
+    const p = pool(c, a[0]);
+    if (!p) return JNULL;
+    const typeId = intToRawcode(asInt(a[1]));
+    p.entries = p.entries.filter((e) => e.typeId !== typeId);
+    return JNULL;
+  });
 }

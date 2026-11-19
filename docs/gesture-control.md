@@ -129,9 +129,10 @@ hud.acceptsInput() && !hardPaused && userControl && !anyModalOpen() && !isTyping
 - **总开关热生效规则**：对局内开关（右上角）关掉 / 打开都立即生效 —— `index.ts` 的
   `setGestureEnabled()` 会挂上或摘掉整层（识别器、轨迹、控制台、Android 返回键接管）；
   `hd/options.ts` 的 `commitSave()` 仍保留一次重载提示，只是现在重载已非必需。
-- **启动器开关**（浏览器构建）：首页顶栏语言选择器旁的「手势：开 / 关」直接写
-  `gestureEnabled` 并重载页面。手机 / 平板浏览器不必先进对局找 Options；电脑浏览器先在
-  DevTools 打开触摸模拟，再开这个开关，即可用合成触摸事件测试。
+- **默认与可切换性**：手机 / 平板默认手势，桌面（含触屏笔记本）默认鼠标。默认值在
+  `data/options.ts` 的 `deviceGestureDefault()` 里按设备定；任何平台都能在 Options 或右上角
+  切到手势、再切回鼠标。显式选择由 `saveOptions()` 写进独立的 `warcraft-open.gesture-mode`
+  （`storedGestureMode()`），刷新后保持——旧存档里那个默认写下的 `true` 不会被误当成选择。
 - **对局内开关**：屏幕右上角（安全区内，44px 命中区）的「手势：开 / 关」按钮，
   由 [`ui/gesture/toggle.ts`](../src/ui/gesture/toggle.ts) 挂载、只在对局里显示。
   打开后**经典 HUD 让位**，换成 [`ui/gesture/hud.ts`](../src/ui/gesture/hud.ts) 的移动端布局：
@@ -141,7 +142,8 @@ hud.acceptsInput() && !hardPaused && userControl && !anyModalOpen() && !isTyping
   （`fdf-topbar`）、`.hud-console` 与消息列；F10 对话框 / 记分板 / 多面板 / 过场面板不受影响。
   关掉开关即恢复经典 HUD。`?gesture=1` 调试页里同样可以关掉。
 - 首启画质建议：`adoptTouchVideoDefaults()` 只在 `localStorage` 里没有任何选项存档时写入
-  （手机 576p、平板 720p、都开 Low Performance Mode；HD 手机 450p / 30fps），绝不覆盖玩家选择。
+  （手机 576p、平板 720p；HD 手机 450p / 30fps；Low Performance Mode 默认关闭），
+  绝不覆盖玩家选择。
 
 ## 6. Android 壳（P0 的资产来源）
 
@@ -207,3 +209,29 @@ pnpm test            # 统一入口，已包含 gesture:test（tools/test.mjs）
 - Android 上的存档 / 回放 / 自定义快捷键写入桥：只有读取与目录授权，`saveCustomKeys`、
   `saves`、`replays` 等仍未接，相关按钮在 Android 上不可用。
 - HD 手机只做「首启画质降档」这一道 gate，没有单独的 HD 离线资源包。
+
+## 9. 版本一致性（经典版 / 重制版）
+
+两版本的手势界面是**同一套实现**，不是两份界面：
+
+- `src/ui/gesture/*` 里没有任何 flavor 分支；唯一与版本有关的数是 `device.ts` 的
+  `consoleTop`（决定可操作区域的下边界，DE 比 SD/HD 高约 0.7% 舞台高度），它不增删控件。
+- 对局内只有一套 HUD（`src/ui/hud.ts`）。手势 HUD 把经典 HUD 的 `.hud-minimap` /
+  `.hud-portrait` / `.hud-inventory` **借**进 `#gesture-hud`（`adoptMinimap` /
+  `releaseMinimap` 等），两版本借的是同一批节点。
+- `body.gesture-ui` 的让位清单（`src/style.css` 6814-6835）只按 `fdf-topbar` / `hud-*`
+  这类**结构类名**选，不看 flavor；`#gesture-hud` 的显示也只有一条
+  `body.gesture-ui #gesture-hud { display: block; }`。
+- 实测（2026-11-19，Edge 1194×834，`?dev=1&gesture=1`，选中一个农民）：
+  sd 与 hd 的 `#gesture-hud` 子节点、23 个槽位（20 个可见）、8 向移动盘、2 个旋转钮、
+  3 个缩放钮、3 个资源 chip、编队条与选择面板的 `getBoundingClientRect` **逐项完全相同**
+  （x/y/w/h 一致），经典 `.fdf-screen.fdf-topbar` / `.hud-console` 等在两个版本都是
+  `display: none`。差异只在美术：HD 的图标、头像、小地图纹理来自 `.dds`，SD 来自 `.blp`。
+
+回归：`pnpm gesture:test` 的 `tools/gesture-flavor-test.cjs` 除了断言命令流一致，还断言
+上面那份让位清单存在、包含八个经典控制台选择器、且不带 flavor 条件；不要在
+`src/ui/gesture/` 里新增 `isHd()` / `flavor()` 分支，否则脚本会直接失败。
+
+本地复现：SD 需要 1.30.4 系的安装目录，HD 需要 3.x 的安装目录（启动器的版本闸门各自不同），
+例如 `http://localhost:5173/?dev=1&flavor=sd&gesture=1&map=EchoIsles` 与
+`http://localhost:5174/?dev=1&flavor=hd&gesture=1&map=BootyBay`。
