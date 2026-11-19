@@ -293,7 +293,7 @@ const source = decodePng(readFileSync(SOURCE));
 const box = tightBox(source);
 
 /** Every size any output asks for, rendered once. */
-const SIZES = [16, 24, 32, 48, 64, 128, 180, 192, 256, 512, 1024];
+const SIZES = [16, 24, 32, 48, 64, 72, 96, 128, 144, 180, 192, 256, 512, 1024];
 const bitmap = new Map(SIZES.map((size) => [size, square(source, box, size)]));
 const at = (size) => ({ size, rgba: bitmap.get(size) });
 const pngAt = (size) => encodePng(bitmap.get(size), size);
@@ -314,3 +314,9 @@ write(join(root, "public", "favicon.ico"), ico([16, 24, 32, 48].map(at)));
 write(join(root, "public", "icon-192.png"), pngAt(192));
 write(join(root, "public", "icon-512.png"), pngAt(512));
 write(join(root, "public", "apple-touch-icon.png"), pngAt(180));
+// Android's launcher icons: one PNG per density, read by the manifest's `android:icon`. Without
+// this set the APK carries no icon at all and every launcher draws the default robot.
+const ANDROID_MIPMAPS = [["mdpi", 48], ["hdpi", 72], ["xhdpi", 96], ["xxhdpi", 144], ["xxxhdpi", 192]];
+for (const [density, size] of ANDROID_MIPMAPS) {
+  write(join(root, "android", "app", "src", "main", "res", `mipmap-${density}`, "ic_launcher.png"), pngAt(size));
+}
