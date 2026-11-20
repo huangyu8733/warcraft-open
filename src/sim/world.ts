@@ -391,6 +391,10 @@ export function inventoryCapacity(dataA: unknown): number {
   return Math.max(0, Math.min(6, Math.trunc(Number(dataA)) || 0));
 }
 
+/** The furthest a blow that is still a BLOW can land. Stock melee rows all sit at 90–100
+ *  (`hfoo` 90, `ogru` 100); anything past this is a shot even when `weapTp` says `normal`. */
+const MELEE_REACH = 128;
+
 export function weaponsFromDef(def: UnitDef): SimWeapon[] {
   const out: SimWeapon[] = [];
   for (const s of def.weapons) {
@@ -399,7 +403,14 @@ export function weaponsFromDef(def: UnitDef): SimWeapon[] {
     // carries a `Missileart` for the air attack an orb wakes (see units.ts), so reading
     // the art as the signal made every one of them a thrower. slotMissileArt() asks the
     // same column what art, if any, this slot may show.
-    const ranged = isRangedWeapon(s.weaponType);
+    //
+    // But `weapTp` is not the whole story either: a row can be written `normal` at a range
+    // no sword reaches. Stock melee stops at 100 (Footman 90, Grunt 100); 人族无敌's 女猎手
+    // towers are `normal` at 700, and real WC3 hits from there like any other shot. Calling
+    // them melee made `cliffApart` reject every target on the raised lane they overlook —
+    // the towers sat there and "could not attack", and any ordered attack was refused with
+    // "target out of range" (CCS `Notinrange`). Beyond contact, a weapon is a shot.
+    const ranged = isRangedWeapon(s.weaponType) || s.range > MELEE_REACH;
     out.push({
       slot: s.slot,
       damage: s.damage,

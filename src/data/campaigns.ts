@@ -173,6 +173,12 @@ export interface Campaign {
    *  own `.w3xd` is encrypted and unreadable — and where the campaign's shared object data and
    *  imported art live. */
   archive?: CampaignArchive;
+  /** A player-made campaign opened from a `.w3n` in the install's `Maps\Campaign\` folder
+   *  (`customCampaignSources`), rather than a section of the game's own index. It is not part of
+   *  the Campaign screen's shelf — the Custom Campaign screen is where it is listed. */
+  custom?: boolean;
+  /** A custom campaign's blurb, from its `.w3f`; the Custom Campaign screen shows it. */
+  description?: string;
 }
 
 /** Read and parse the current edition's campaign index out of the mounted install. Returns []
@@ -262,6 +268,110 @@ async function attachCampaigns(vfs: DataSource, campaigns: Campaign[]): Promise<
       console.info(`[campaign] ${path} unlocked ${unlocked} chapter(s) of ${c.key}`);
     }
   }
+}
+
+/** Where player-made campaigns live: `Maps\Campaign\` — the folder the game already keeps its
+ *  campaign maps in, so a custom campaign sits with them rather than among the melee maps. The
+ *  `.w3n` itself never reaches a map list (`isCampaignArchive`), and `Maps\Download` stays what
+ *  it was: the place a downloadable DLC campaign unlocks its chapters from (`attachCampaigns`). */
+const CUSTOM_CAMPAIGN = /^Maps\\Campaign\\(?:[^\\]+\\)*[^\\]+\.w3n$/i;
+
+/** One `.w3n` on the Custom Campaign shelf, before and after its archive has been opened. The
+ *  file name is what the list shows until then: opening a campaign archive means reading the
+ *  whole `.w3n` (a big campaign is hundreds of megabytes), so it waits for a pick. */
+export interface CustomCampaignSource {
+  /** Install path — `Maps\Campaign\Arthas Rise of the Lich King(EN).w3n`. */
+  path: string;
+  /** The Campaign's stable key, so a screen can remember which row was picked. */
+  key: string;
+  /** The file's own name, without the extension. */
+  name: string;
+  /** Open the archive and make it a Campaign (cached: the second pick is free). Null when the
+   *  file is not a readable `.w3n`. */
+  load(): Promise<Campaign | null>;
+}
+
+/** Open archives, by lowercased path — the Custom Campaign screen is remounted every time Back
+ *  walks into it, and re-reading a 1 GB `.w3n` for the same pick is not a thing to do twice. */
+const customCampaignCache = new Map<string, Campaign>();
+
+/** Every `.w3n` in the install's `Maps\Campaign\` folder, in file order. */
+export function customCampaignSources(vfs: DataSource): CustomCampaignSource[] {
+  return vfs
+    .list()
+    .filter((path) => CUSTOM_CAMPAIGN.test(path))
+    .sort((a, b) => a.localeCompare(b))
+    .map((path) => {
+      let opening: Promise<Campaign | null> | null = null;
+      return {
+        path,
+        key: customCampaignKey(path),
+        // `vfs.list()` is lower-cased (the loose layer's keys), so the folder's own spelling is
+        // asked for separately: the shelf prints "Arthas Rise of the Lich King(EN)", not the key.
+        name: fileStem(vfs.displayName?.(path) ?? path),
+        load: (): Promise<Campaign | null> => {
+          const cached = customCampaignCache.get(path.toLowerCase());
+          if (cached) return Promise.resolve(cached);
+          opening ??= openCustomCampaign(vfs, path).then((c) => {
+            if (c) customCampaignCache.set(path.toLowerCase(), c);
+            return c;
+          });
+          return opening;
+        },
+      };
+    });
+}
+
+function customCampaignKey(path: string): string {
+  return `custom:${path.toLowerCase()}`;
+}
+
+function fileStem(path: string): string {
+  return (path.split(/[\\/]/).pop() ?? path).replace(/\.[^.]*$/, "");
+}
+
+async function openCustomCampaign(vfs: DataSource, path: string): Promise<Campaign | null> {
+  try {
+    const archive = openCampaignArchive(await vfs.read(path), path);
+    return archive ? campaignFromArchive(archive, path) : null;
+  } catch (err) {
+    console.warn(`[campaign] ${path} could not be read:`, err);
+    return null;
+  }
+}
+
+/** A `.w3n` as a Campaign: its chapters become missions, and every chapter starts UNENCRYPTED —
+ *  the archive is the map, which is the whole difference from a 3.0 DLC catalogue entry. */
+export function campaignFromArchive(archive: CampaignArchive, path: string): Campaign {
+  const missions: CampaignEntry[] = archive.chapters.map((chapter, i) => ({
+    header: `${i + 1}.`,
+    name: chapter.name,
+    file: chapter.file,
+    mission: true,
+    playable: true,
+    encrypted: false,
+  }));
+  return {
+    key: customCampaignKey(path),
+    header: archive.author,
+    name: archive.name || fileStem(path),
+    defaultOpen: true,
+    // No campaign-screen backdrop: a custom campaign's own `war3campBackdrop` art is addressed
+    // from INSIDE the archive and the 3D menu cannot mount a model out of it. The chapter list
+    // is what this shelf opens onto, and it wears the screen's ordinary backdrop.
+    background: null,
+    fog: { style: 0, r: 0, g: 0, b: 0, a: 0, density: 0, start: 0, end: 0 },
+    cursor: "Human",
+    ambientSound: null,
+    missions,
+    encrypted: false,
+    intro: null,
+    open: null,
+    end: null,
+    archive,
+    custom: true,
+    description: archive.description,
+  };
 }
 
 /** The number in `CampaignInfoDLC01.txt`, for ordering the DLC list. */

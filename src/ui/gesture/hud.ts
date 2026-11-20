@@ -15,7 +15,7 @@
 // 性能（§13）：没有 rAF；只在激活期间开一个 500ms 的低频读数定时器（资源 / 选择 / 冷却），
 // 关掉手势或离开对局立刻停表。
 
-import { CircleDot, CircleHelp, Coins, Crosshair, Eye, Flag, Hammer, ListOrdered, Maximize, Menu, Minimize, Move, Package, Plus, RotateCcw, RotateCw, Swords, Trash2, Users, X, Zap, ZoomIn, ZoomOut, createElement as lucideIcon } from "lucide";
+import { CircleDot, CircleHelp, Coins, Crosshair, Eye, Flag, Hammer, ListOrdered, Maximize, Menu, Minimize, Move, Package, Plus, RotateCcw, RotateCw, ScrollText, Swords, Trash2, Users, X, Zap, ZoomIn, ZoomOut, createElement as lucideIcon } from "lucide";
 import { t, type MessageKey } from "../../i18n";
 import { showCooldownNumbers } from "../../render/gameplayOptions";
 import { fullscreenActive, fullscreenSupported, toggleFullscreen } from "../fullscreen";
@@ -44,6 +44,8 @@ let topBar: HTMLDivElement | null = null;
 let clearSelBtn: HTMLButtonElement | null = null;
 /** 左下旋转列最下面的「镜头跟随」：亮着表示镜头锁在某个单位上（与 Ctrl+C 同一个开关）。 */
 let followBtn: HTMLButtonElement | null = null;
+/** 顶栏「任务说明」（F9）：这张图没有任务时置灰，见 syncGestureHud。 */
+let questsBtn: HTMLButtonElement | null = null;
 /** 跟随默认关着：手势选中单位只做选择，不抢镜头。玩家按跟随钮打开后就一直开着，
  *  换目标自动跟上（Ctrl+C 同一把骑乘锁）；自己拖镜头松开的锁不会被同一次选择重新
  *  接回去，只有换了目标才会再跟上。 */
@@ -228,14 +230,22 @@ function borrow(key: string, selector: string, into: HTMLElement | null, before:
     next: el.nextSibling,
     style: el.getAttribute("style") ?? "",
   });
-  into.insertBefore(el, before);
+  // `before`（资源条里的金币格）在借出去的那一瞬可能已经不在原位（HUD 重建 / 换布局），
+  // 拿一个不是子节点的锚点会让 insertBefore 抛 DOMException，退到末尾。
+  into.insertBefore(el, before && before.parentNode === into ? before : null);
 }
 
 function release(key: string): void {
   const b = borrowed.get(key);
   if (!b) return;
   b.el.setAttribute("style", b.style);
-  b.parent.insertBefore(b.el, b.next);
+  // 借走时记下的「下一个兄弟」可能已经不在原位了（进对局时 #ui 里的载入层 / 菜单随后被
+  // 移除，观察者布局又整块搬过小地图）。这时 insertBefore 会抛
+  // "The node before which the new node is to be inserted is not a child of this node."，
+  // 整层手势 UI 就停在半释放状态 —— 这正是「切回鼠标模式」点不动的原因。
+  // 锚点不在了就放回父节点末尾：位置差一点，但节点回得去，切换照常完成。
+  if (b.next && b.next.parentNode === b.parent) b.parent.insertBefore(b.el, b.next);
+  else b.parent.appendChild(b.el);
   borrowed.delete(key);
 }
 
@@ -294,6 +304,9 @@ function mount(): boolean {
 
   const el = document.createElement("div");
   el.id = "gesture-hud";
+  // 三档尺寸的唯一依据（style.css「手势 HUD 的三档尺寸」）：手机 0.65 / 平板 1 / 电脑 1.3。
+  // 设备类在 startup 与 resize 时由 device.ts 重算，这里只是把它写到根上给 CSS 读。
+  el.dataset.device = touchDevice().deviceClass;
 
   minimapSlot = document.createElement("div");
   minimapSlot.className = "ghud-minimap";
@@ -498,6 +511,17 @@ function mount(): boolean {
   // 帮助钮排在顶部资源条最前面：正好在「鼠标箭头」（切回鼠标操作的开关）左边，
   // 不跟左下的缩放/取消选择抢那一列。
   topBar?.prepend(helpBtn);
+  // 任务说明（F9）：手势模式把整条经典控制台藏了起来，那颗 Quests 钮也跟着没了，
+  // 而自定义地图与战役的目标 / 提示都写在任务日志里。补一颗，和帮助钮同一型号、紧挨着它，
+  // 点下去走宿主与 F9 同一条 togglePanel("quests")（再点一次由面板自己关）。
+  const quests = groupBarButton("ghud-zoom__btn", t("gesture.QUESTS"));
+  quests.appendChild(lucideIcon(ScrollText, { "stroke-width": 2.2, "aria-hidden": "true" }));
+  quests.addEventListener("click", (e) => {
+    e.preventDefault();
+    currentGestureHost()?.toggleQuests?.();
+  });
+  helpBtn.after(quests);
+  questsBtn = quests;
   zoomBar.append(zoomOut, zoomIn, clearSel);
   // 全屏开关：手机没有 Esc / Alt+Enter，进图时 home.ts 的全屏请求把人锁在全屏里，
   // 这一颗就是出口（也是入口）。放在左上角工具列最上面，小地图右侧。
@@ -1457,6 +1481,7 @@ function syncBuildArc(list: readonly GestureCardButton[]): void {
     }
     el.hidden = false;
     el.classList.toggle("off", card.disabled || !!card.passive);
+    el.classList.toggle("no-mana", !!card.noMana && !card.disabled);
     el.style.backgroundImage = card.icon ? `url("${card.icon}")` : "";
     text.textContent = card.icon ? "" : (card.hotkey ?? card.name ?? "").slice(0, 2).toUpperCase();
     // 学技能格：「+」是学这一门的入口；建筑格不画（建造直接点图标）。
@@ -1566,6 +1591,10 @@ export function syncGestureHud(): void {
   if (!root || !host) return;
   // HUD 比手势层晚建好时（同一帧里 match 刚起），下一次读数再试一次借经典节点。
   if (borrowed.size < 3) adoptAll();
+  // 设备类可能在运行中变化（Android 分屏把短边拖过 600、平板接上鼠标）：每次读数时对齐，
+  // 变化才写，避免每 500ms 都碰一次 DOM。
+  const device = touchDevice().deviceClass;
+  if (root.dataset.device !== device) root.dataset.device = device;
   layoutRing();
 
   const status = host.status?.() ?? null;
@@ -1581,6 +1610,9 @@ export function syncGestureHud(): void {
   if (selPanel) selPanel.hidden = !sel;
   // 没有选中任何单位时，左上角的「取消选择」没有意义，整颗钮不画。
   if (clearSelBtn) clearSelBtn.hidden = !sel;
+  // 任务说明与经典控制台的 Quests 钮同一条规矩：这张图没有（启用的）任务就置灰，
+  // 按下去也打不开（F9 同样打不开）。自定义地图与战役的触发器建了任务就会自己亮起来。
+  if (questsBtn) questsBtn.disabled = !(host.questsAvailable?.() ?? true);
   // 自动跟随开着时：换了选择就把相机接到新目标上（先松开旧目标，再锁新的）。同一次选择
   // 被玩家拖动镜头松开之后，这里不会立刻接回去——只有再选了别的单位才重新跟。
   // 物品选择的 id 是负数占位（-2000-itemId），不是一个能跟随的单位，不能拿来锁镜头。
@@ -1763,7 +1795,7 @@ export function syncGestureHud(): void {
       const seat = seated[i];
       if (!seat) {
         el.hidden = true;
-        el.classList.remove("can-learn", "has-auto", "auto-on");
+        el.classList.remove("can-learn", "has-auto", "auto-on", "no-mana");
         if (learn) learn.hidden = true;
         if (auto) auto.hidden = true;
         paintSlotCooldown(i, 0);
@@ -1772,6 +1804,7 @@ export function syncGestureHud(): void {
       // 空槽里的建造 / 学技能卡：与环上其他格子同一副壳，点了直接下令 / 学技能。
       el.hidden = false;
       el.classList.toggle("off", seat.disabled || !!seat.passive);
+      el.classList.remove("no-mana");
       el.style.backgroundImage = seat.icon ? `url("${seat.icon}")` : "";
       const label = slotTexts[i];
       if (label) label.textContent = seat.icon ? "" : (seat.hotkey ?? seat.name ?? "").slice(0, 2).toUpperCase();
@@ -1786,6 +1819,9 @@ export function syncGestureHud(): void {
     }
     el.hidden = false;
     el.classList.toggle("off", button.disabled || !!button.passive);
+    // 法力不够这一级：整格转灰，一眼看出按了也放不出来（经典卡是深蓝洗，手机上灰更直白）；
+    // 按钮本身仍然活——按下去照常走命令，由游戏自己喊「法力不足」。
+    el.classList.toggle("no-mana", !!button.noMana && !button.disabled);
     el.style.backgroundImage = button.icon ? `url("${button.icon}")` : "";
     const label = slotTexts[i];
     if (label) label.textContent = button.icon ? "" : (button.hotkey ?? button.name ?? "").slice(0, 2).toUpperCase();

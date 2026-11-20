@@ -4,7 +4,7 @@ import { createLanguagePicker } from "../i18n/switch";
 import { downloadedMapKey, safeMapName } from "../assets/downloadedMaps";
 import {
   deleteDownloadedMap, downloadedMapExists, isDesktopApp, listDownloadedMaps, loadNativeInstall,
-  openGameWindow, pickNativeInstall, quitNative, rememberedInstall, saveMapToDownload,
+  pickNativeInstall, quitNative, rememberedInstall, saveMapToDownload,
   checkUpdate, downloadUpdate, installUpdate, onUpdateState,
   type DownloadedMap, type InstalledFolder,
 } from "../assets/nativeInstall";
@@ -18,6 +18,7 @@ import {
 import { HD_REQUIRED_VERSION, versionVerdict } from "../vfs/version";
 import { buildInfoVersion } from "../vfs/casc";
 import { flavor, type GameFlavor } from "../data/flavor";
+import { SITE, siteUrl } from "../data/site";
 import { dismissBootSplash, mountBootSplash, type BootSplash } from "./bootSplash";
 import { createGestureHelp } from "./gestureHelp";
 import { createFullscreenToggle } from "./fullscreen";
@@ -70,14 +71,6 @@ interface SiteMap {
   downloadUrl: string | null;
 }
 
-/** The site this build reads maps from. A packaged build must set `VITE_WARCRAFT_OPEN_SITE_URL`;
- *  the browser build is served BY the site (https://warcraft.hhkj.me/play/), so it reads its own
- *  origin; a dev server falls back to the local site so the shelf works out of the box. */
-const SITE = (
-  (import.meta.env.VITE_WARCRAFT_OPEN_SITE_URL as string | undefined) ??
-  (import.meta.env.DEV ? "http://localhost:3000" : isDesktopApp() ? "" : location.origin)
-).replace(/\/+$/, "");
-
 const siteLocale = (): string => (currentLocale() === "zhCN" ? "zh" : "en");
 
 /** The two data lines the launcher can boot (src/data/flavor.ts), in the order they are shown. */
@@ -86,9 +79,9 @@ const LINES = ["sd", "hd"] as const;
 /**
  * The launcher page and the game page are the same page; `?play=` says which one this is.
  *
- * A game window is opened BY the launcher (`ow3:open-game`) with the line in `?flavor=`, and
- * starts loading on its own. The launcher itself never enters a game: it stays on the front page
- * so the other line can be started too — which is the whole point of one window per line.
+ * A launch takes THIS window over — no second window, in either build. The line the page booted
+ * on starts in place; the other line reloads the window onto its own play page (`?flavor=`),
+ * which starts loading on its own.
  */
 const PLAY_PARAM = "play";
 
@@ -945,14 +938,12 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
 
   /** A Launch press.
    *
-   *  Desktop: a window of its own (`ow3:open-game`), so the launcher survives and the other line
-   *  can be started too — one window per line is that build's own rule.
-   *
-   *  Browser: THIS page becomes the game. There is no second tab: the press settles the folder
-   *  (only a gesture may open the picker) and then starts here. The one exception is the OTHER
-   *  data line, whose tables this page did not parse — a line switch is a reload with
-   *  `?flavor=`, so the same tab navigates to that line's play page, the grant already carried
-   *  over through IndexedDB.
+   *  Both builds start the game in THIS page — no window is opened beside the launcher. The
+   *  press settles the folder (only a gesture may open the picker) and then starts here. The one
+   *  exception is the OTHER data line, whose tables this page did not parse: a line switch is a
+   *  reload with `?flavor=`, so the same window navigates to that line's play page (the grant
+   *  already carried over through IndexedDB in the browser, and through the shell's settings in
+   *  the app).
    */
   const launch = async (line: GameFlavor): Promise<void> => {
     if (busy || launching) return;
@@ -971,20 +962,14 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     setBusy(true, { line, kind: "play" });
     try {
       if (native) {
-        if (isGamePage) {
-          await startInThisPage(line);
-          return;
-        }
         if (!(await ensureInstall(line))) return;
-        setStatus(t("home.launchedWindow", { line: lineName(line) }));
-        if (await openGameWindow(line)) return;
-        // A shell older than the window-per-line split has nowhere else to put a game of this
-        // line's own; this page can still start the line it booted on.
         if (line === running) {
           await startInThisPage(line);
           return;
         }
-        setStatus(t("home.launchUnsupported"), true);
+        // The other line's tables were never parsed into this page; the same window reloads
+        // onto that line's play page, which starts on its own.
+        location.assign(playUrl(line));
         return;
       }
       // Browser: settle the folder with this press, then take THIS page over — never a new tab.
@@ -1127,7 +1112,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     const save = folder.saveMap;
     if (!save) {
       const link = document.createElement("a");
-      link.href = map.downloadUrl;
+      link.href = siteUrl(map.downloadUrl);
       link.download = safeMapName(map.fileName) ?? "";
       document.body.append(link);
       link.click();
@@ -1140,7 +1125,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     try {
       // Ask while the click is still in hand: the fetch below can end long after the gesture.
       if (folder.askMapWrite && !(await folder.askMapWrite())) throw new Error(t("home.mapWriteRefused"));
-      const res = await fetch(map.downloadUrl, { signal: abort.signal });
+      const res = await fetch(siteUrl(map.downloadUrl), { signal: abort.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const bytes = new Uint8Array(await res.arrayBuffer());
       const name = safeMapName(map.fileName);
@@ -1151,7 +1136,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       folder.files.set(downloadedMapKey(name), new File([bytes.slice()], name));
       const locale = currentLocale();
       try {
-        const sidecar = await fetch(`${map.downloadUrl}?lang=${locale}`, { signal: abort.signal });
+        const sidecar = await fetch(`${siteUrl(map.downloadUrl)}?lang=${locale}`, { signal: abort.signal });
         if (sidecar.ok) {
           const sidecarName = `${name}.${locale}.json`;
           const sidecarBytes = new Uint8Array(await sidecar.arrayBuffer());
@@ -1189,7 +1174,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
     btn.setDisabled(true);
     btn.setLabel(t("home.downloading"));
     try {
-      const res = await fetch(map.downloadUrl, { signal: abort.signal });
+      const res = await fetch(siteUrl(map.downloadUrl), { signal: abort.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const bytes = new Uint8Array(await res.arrayBuffer());
       const name = safeMapName(map.fileName);
@@ -1200,7 +1185,7 @@ export function mountHome(root: HTMLElement, onLoaded: (load: GateLoad) => void)
       // simply keeps its author's words, so a 404 here is normal and never fails the download.
       const locale = currentLocale();
       try {
-        const sidecar = await fetch(`${map.downloadUrl}?lang=${locale}`, { signal: abort.signal });
+        const sidecar = await fetch(`${siteUrl(map.downloadUrl)}?lang=${locale}`, { signal: abort.signal });
         if (sidecar.ok) {
           await saveMapToDownload(`${name}.${locale}.json`, new Uint8Array(await sidecar.arrayBuffer()));
         }

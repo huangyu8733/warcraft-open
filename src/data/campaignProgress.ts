@@ -131,11 +131,13 @@ export function isMissionOpen(_c: Campaign, _index: number, _p = loadProgress())
 /**
  * The campaigns this profile may SEE, in list order, each with its index into `campaigns`.
  * Every campaign in the library is listed (nothing is held back, see the rules at the top).
+ * Player-made campaigns are NOT part of this shelf — they are listed by the Custom Campaign
+ * screen (ui/fdfCustomCampaign.ts, ui/hd/customCampaign.ts) — so they are skipped here.
  */
 export function openCampaigns(campaigns: Campaign[], p = loadProgress()): Array<{ campaign: Campaign; index: number }> {
   return campaigns
     .map((campaign, index) => ({ campaign, index }))
-    .filter(({ index }) => isCampaignOpen(campaigns, index, p));
+    .filter(({ campaign, index }) => !campaign.custom && isCampaignOpen(campaigns, index, p));
 }
 
 /** One row of a chapter list: the entry, and — for a chapter — which of `campaign.missions`

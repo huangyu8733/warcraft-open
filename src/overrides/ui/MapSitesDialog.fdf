@@ -86,6 +86,17 @@ Frame "DIALOG" "MapSitesDialog" {
         }
     }
 
+    // Our own library (warcraft.hhkj.me/api/public/maps) — the only source this game can READ
+    // in every shell, and the same shelf the launcher's 地图 tab shows.
+    Frame "GLUETEXTBUTTON" "MapSitesTabOw3" INHERITS WITHCHILDREN "StandardBorderedButtonTemplate" {
+        Width 0.125,
+        Height 0.03,
+        SetPoint LEFT, "MapSitesTabWc3maps", RIGHT, 0.003, 0.0,
+        ButtonText "MapSitesTabOw3Text",
+        Frame "TEXT" "MapSitesTabOw3Text" INHERITS "StandardButtonTextTemplate" {
+        }
+    }
+
     // --- EpicWar, searched in place: a field, and the results under it.
     Frame "FRAME" "MapSitesPageSearch" {
         Width 0.62,

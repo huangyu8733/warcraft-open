@@ -1,6 +1,6 @@
 import { computerPlusDefault } from "../../data/options";
 import { GAME_SPEED_MAX, GAME_SPEED_MIN, toGameSpeed } from "../../data/gameSpeed";
-import { relayAuthority, type HostTarget, type LanLobby } from "../../net/lobby";
+import { ownHostLabel, relayAuthority, type HostTarget, type LanLobby } from "../../net/lobby";
 import { officialServerName } from "../../net/officialServer";
 import {
   DEFAULT_ADVANCED, OBSERVER_ITEMS, VISIBILITY_ITEMS,
@@ -16,9 +16,11 @@ import { HdScreen, el } from "./screen";
 import { webUiAssets } from "./assets";
 import { browseFolder, parentFolder } from "./browse";
 import { loadOfficialStyle } from "./official";
+import { openSystemMenu } from "./systemMenu";
 import { framed, imgDetailsRow, listRow, primaryButton } from "./officialMenu";
 import { lanShell, speedText } from "./lan";
 import { dropdown } from "./dropdown";
+import { touchDevice } from "../gesture/device";
 import { t } from "../../i18n";
 import { isRoc } from "../../data/edition";
 import { imageToDataUrl } from "../../render/blputil";
@@ -66,6 +68,7 @@ export async function mountHdLanCreateScreen(
     onTab: (tab) => { if (tab === "games") h.onCancel(); },
     columns: [t("hd.name"), "", ""],
     bottomRow: false,
+    onSystemMenu: () => openSystemMenu(screen, vfs, {}),
   });
   const { list, aside, listHeader } = shell;
   // The create screen's rows are files and folders — one column, wrapped names — not the
@@ -328,8 +331,16 @@ export async function mountHdLanCreateScreen(
 
   function target(): HostTarget | null {
     const targets = lobby.hostTargets;
-    return targets.find((x) => x.url === server)
-      ?? lobby.officialUrls.map((url) => targets.find((x) => x.url === url)).find((x) => !!x)
+    const chosen = targets.find((x) => x.url === server);
+    if (chosen) return chosen;
+    // In the Android shell the page comes off the internet, so "this computer" is the cloud
+    // relay; the phone's own embedded relay is handed to us as a discovered (`found`) server
+    // (MainActivity's bridge → src/net/discovery.ts) and that is where a LAN game belongs.
+    if (touchDevice().platform === "android-webview") {
+      const lan = targets.find((x) => x.kind === "found");
+      if (lan) return lan;
+    }
+    return lobby.officialUrls.map((url) => targets.find((x) => x.url === url)).find((x) => !!x)
       ?? targets[0]
       ?? null;
   }
@@ -340,7 +351,9 @@ export async function mountHdLanCreateScreen(
       // The hosted copy serves Warcraft Open's own relay, so a game created "here" is created
       // on Warcraft Open — not on this player's machine.
       const official = lobby.servedOfficialUrl;
-      return official ? officialServerName(relayAuthority(official)) : t("hd.thisComputer");
+      return official
+        ? officialServerName(relayAuthority(official))
+        : ownHostLabel(t("hd.thisComputer"), lobby.snapshot.host);
     }
     if (x.kind === "official") return officialServerName(relayAuthority(x.url));
     return relayAuthority(x.url);

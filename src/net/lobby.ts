@@ -212,6 +212,21 @@ export function reachabilityLine(host: HostInfo | null): { text: string; warn: b
   return { warn: false, text: t("lan.joinAt", { addresses: host.addresses.join(" / ") }) };
 }
 
+/**
+ * The create screen's "This Computer" entry, with the address the other machine types.
+ *
+ * The Server menu used to say only "This Computer", which is precisely the screen that leaves
+ * the other player with nothing to type — the host had to go into the lobby and read the row
+ * there. The relay already reports what this machine looks like from the network (HostInfo,
+ * server/hostInfo.mjs), so print the first address in the menu itself. A loopback-bound server
+ * has no LAN address at all and says that instead of looking like a working host.
+ */
+export function ownHostLabel(name: string, host: HostInfo | null): string {
+  if (!host) return name;
+  if (host.addresses.length) return `${name} (${host.addresses[0]})`;
+  return `${name} · ${t("lan.lanOnly")}`;
+}
+
 export class LanLobby {
   /** The relay we HOST on, rejoin to, and hand to the match. One of these, always. */
   private transport: LobbyTransport | null = null;

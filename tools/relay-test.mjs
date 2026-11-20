@@ -34,6 +34,23 @@ const clientProtocol = (() => {
   if (!m) throw new Error("could not find PROTOCOL_VERSION in src/net/protocol.ts");
   return Number(m[1]);
 })();
+/** The third copy: the phone's embedded relay (android/.../LanRelay.java). It never runs in
+ *  this test, so its number is compared statically — a handset one version behind is just as
+ *  dead a lobby as a server one, and harder to notice from a desk. */
+const androidProtocol = (() => {
+  const src = readFileSync(
+    join(REPO, "android", "app", "src", "main", "java", "me", "hhkj", "warcraft", "LanRelay.java"),
+    "utf8",
+  );
+  const m = /static final int PROTOCOL_VERSION\s*=\s*(\d+)/.exec(src);
+  if (!m) throw new Error("could not find PROTOCOL_VERSION in LanRelay.java");
+  return Number(m[1]);
+})();
+if (androidProtocol !== clientProtocol) {
+  throw new Error(
+    `android/LanRelay.java speaks protocol ${androidProtocol}, the client speaks ${clientProtocol}.`,
+  );
+}
 const PORT = 8799; // not the default, so a relay you already have running is left alone
 const URL = `ws://localhost:${PORT}`;
 /** The relay's ping interval, wound right down so a reaping is watchable inside a test run.

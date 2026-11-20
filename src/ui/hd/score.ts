@@ -8,6 +8,7 @@ import { TABS, mountScoreScreen, type ScoreScreen, type ScoreScreenOptions } fro
 import { t, type MessageKey } from "../../i18n";
 import { webUiAssets } from "./assets";
 import { loadOfficialStyle } from "./official";
+import { openSystemMenu } from "./systemMenu";
 import { el } from "./screen";
 import { applyHdTheme } from "./theme";
 import { backButton, cornerDecorations, primaryButton } from "./officialMenu";
@@ -165,7 +166,11 @@ export async function mountHdScoreScreen(opts: ScoreScreenOptions): Promise<Scor
   container.append(header, wrapper);
   root.appendChild(container);
 
-  const back = backButton(root, t("hd.back"), opts.onOk);
+  const back = backButton(root, t("hd.back"), opts.onOk, {
+    onSystemMenu: () =>
+      openSystemMenu({ element: root }, opts.vfs, { onQuit: opts.onOk }),
+    systemMenuLabel: t("hd.menu"),
+  });
   opts.container.appendChild(root);
 
   let tab = 0;

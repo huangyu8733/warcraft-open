@@ -3,6 +3,7 @@ import type { FdfScreen } from "../fdf/render";
 import { webUiAssets, type WebUiAssets } from "./assets";
 import { HdScreen, el } from "./screen";
 import { loadOfficialStyle } from "./official";
+import { openSystemMenu } from "./systemMenu";
 import {
   backButton,
   baseFrame,
@@ -81,6 +82,8 @@ export function lanShell(
     bottomRow?: boolean;
     /** The player's name box in the tab strip, and the Servers List beside it. */
     nameField?: boolean;
+    /** What the ☰ beside Back opens (ui/hd/systemMenu.ts). */
+    onSystemMenu?: () => void;
   },
 ): LanShell {
   const root = el("div", "LANGames");
@@ -154,7 +157,10 @@ export function lanShell(
   root.append(el("div", "Official-Background"), band);
   screen.content.appendChild(root);
   // The back control is the sheet's corner frame, outside the plate, on every file screen.
-  backButton(root, t("hd.back"), opts.onBack);
+  backButton(root, t("hd.back"), opts.onBack, {
+    onSystemMenu: opts.onSystemMenu,
+    systemMenuLabel: t("hd.menu"),
+  });
   screen.element.appendChild(cornerDecorations(opts.assets, !isRoc()));
 
   // 3.0 authors the band at 1080 lines and zooms with the window (`GetScale`). The lower
@@ -281,6 +287,7 @@ export async function mountHdLanScreen(
     onServers: () => void openServers(),
     columns: [t("hd.gameName"), t("hd.playersCount"), t("hd.host")],
     nameField: true,
+    onSystemMenu: () => openSystemMenu(screen, vfs, {}),
   });
   const { list, status, aside } = shell;
 

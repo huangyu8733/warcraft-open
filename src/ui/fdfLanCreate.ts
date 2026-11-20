@@ -1,7 +1,7 @@
 import { computerPlusDefault } from "../data/options";
 import { FOUR_STEP_TRACK } from "../vfs/derivedArt";
 import { GAME_SPEED_MAX, GAME_SPEED_MIN, gameSpeedLabel, toGameSpeed } from "../data/gameSpeed";
-import { relayAuthority, type HostTarget, type LanLobby } from "../net/lobby";
+import { ownHostLabel, relayAuthority, type HostTarget, type LanLobby } from "../net/lobby";
 import { officialServerName } from "../net/officialServer";
 import { LAN_ADVANCED_OPTIONS_OVERRIDE, LAN_CREATE_OVERRIDE, OW3_STRINGS } from "../overrides";
 import {
@@ -17,6 +17,7 @@ import {
   BLURB_SCROLLBAR_FDF, MapBrowser, adopt, findFrame, layoutInfoPane, nudgeX, setProp,
 } from "./mapBrowser";
 import { savedPlayerName } from "./fdfLan";
+import { touchDevice } from "./gesture/device";
 import { widescreen } from "./widescreen";
 
 // "Create Game" on the LAN screen, built from UI\FrameDef\Glue\LocalMultiplayerCreate.fdf:
@@ -48,7 +49,8 @@ import { widescreen } from "./widescreen";
 // which relay the room is announced on — this computer, which only the local network can reach,
 // or a server the Servers List watches, the Warcraft Open servers first (src/net/officialServer.ts).
 // It opens on wherever the host last put a game (`HOST_SERVER_KEY`) while that still answers,
-// and otherwise on the DEFAULT official server — EU — or the next one that answers.
+// and otherwise on the DEFAULT official server — EU — or the next one that answers. In the
+// Android shell it opens on the phone's own embedded relay instead (see `target`).
 
 const MAP_LIST_FDF = "UI\\FrameDef\\Glue\\MapListBox.fdf";
 const MAP_INFO_FDF = "UI\\FrameDef\\Glue\\MapInfoPane.fdf";
@@ -111,8 +113,16 @@ export async function mountLanCreateScreen(
    */
   const target = (): HostTarget | null => {
     const targets = lobby.hostTargets;
-    return targets.find((t) => t.url === server)
-      ?? lobby.officialUrls.map((url) => targets.find((t) => t.url === url)).find((t) => !!t)
+    const picked = targets.find((t) => t.url === server);
+    if (picked) return picked;
+    // In the Android shell the page comes off the internet, so "this computer" is a cloud box;
+    // the phone's own embedded relay arrives as a discovered (`found`) server (MainActivity's
+    // bridge), and a LAN game belongs on it.
+    if (touchDevice().platform === "android-webview") {
+      const lan = targets.find((t) => t.kind === "found");
+      if (lan) return lan;
+    }
+    return lobby.officialUrls.map((url) => targets.find((t) => t.url === url)).find((t) => !!t)
       ?? targets[0]
       ?? null;
   };
@@ -203,7 +213,9 @@ export async function mountLanCreateScreen(
       // On the hosted copy the relay behind the page IS Warcraft Open, so the "own" target is
       // that server rather than this player's machine.
       const official = lobby.servedOfficialUrl;
-      return official ? officialServerName(relayAuthority(official)) : lib?.string("THIS_COMPUTER") ?? "This Computer";
+      return official
+        ? officialServerName(relayAuthority(official))
+        : ownHostLabel(lib?.string("THIS_COMPUTER") ?? "This Computer", lobby.snapshot.host);
     }
     if (t.kind === "official") return officialServerName(relayAuthority(t.url));
     return relayAuthority(t.url);

@@ -1761,11 +1761,21 @@ export class Interpreter {
    * tests `GetTriggerUnit() == udg_Arthas` and then turns the villager to face
    * `GetEnteringUnit()`. Neither response is the unit the circle is centred ON; the script
    * already holds that one in the global it registered with. The filter's index does differ:
-   * the rect event's is its 3rd argument, the circle's its 4th. */
+   * the rect event's is its 3rd argument, the circle's its 4th.
+   *
+   * `GetTriggeringRegion` is the REGION the crossing happened in — not a response anyone can
+   * derive from the unit, which is why maps that branch on "which region did he enter" were
+   * getting null. GUI maps build their whole route out of it: 绿色循环圈 asks
+   * `GetHandleId(GetTriggeringRegion())` against the region handles it registered, picks the
+   * next waypoint from the match, and issues the move. With no response the lookup missed
+   * every branch and the monsters stood at their spawn. A `unitInRange` circle has no region
+   * (blizzard.j's own `TriggerRegisterUnitInRangeSimple` hands it one internally, but our
+   * registration is the circle), so it answers nothing — as in the game. */
   private fireRegionCrossing(reg: TriggerReg, trig: TriggerObj, u: UnitSnapshot, respKey: string): void {
     const handle = this.rt.unitForSim(u);
     if (!this.eventFilterPasses(reg.params[reg.kind === "unitInRange" ? 2 : 1], handle)) return;
     const responses = new Map<string, JassValue>([["TriggerUnit", handle], [respKey, handle]]);
+    if (reg.kind !== "unitInRange" && reg.params[0]) responses.set("TriggeringRegion", reg.params[0]);
     this.fireTrigger(trig, this.withTrigger(responses, trig, reg));
   }
 

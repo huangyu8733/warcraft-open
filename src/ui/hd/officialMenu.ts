@@ -3,6 +3,7 @@ import type { HdScreen } from "./screen";
 import { backgroundVideo, el } from "./screen";
 import { playFdfClick } from "../fdf/render";
 import { gameVersion } from "../../data/gameVersion";
+import { t } from "../../i18n";
 import { themeFace } from "./theme";
 
 /**
@@ -103,7 +104,7 @@ export function backButton(
     ? primaryButton("", opts.onSystemMenu, "Primary-Button-Small PersistentBackButton-System-Menu-Button")
     : el("div", "Primary-Button Primary-Button-Small PersistentBackButton-System-Menu-Button");
   if (opts.onSystemMenu) {
-    menu.setAttribute("aria-label", opts.systemMenuLabel ?? "Menu");
+    menu.setAttribute("aria-label", opts.systemMenuLabel ?? t("hd.menu"));
     // The icon is the button's whole face; the empty caption primaryButton() built is not.
     menu.querySelector(".Primary-Button-Content")?.remove();
   } else {

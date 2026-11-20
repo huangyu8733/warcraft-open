@@ -12152,6 +12152,9 @@ export class MapViewerScene {
         this.cancelArmedOrder();
       },
       toggleMenu: () => this.togglePanelByKey("menu"),
+      // 任务说明：手势 HUD 顶部那颗钮，与 F9 完全同一条路（含打开 / 关闭与点击音）。
+      toggleQuests: () => this.togglePanelByKey("quests"),
+      questsAvailable: () => this.mapScript?.interp.rt.quests.some((q) => q.enabled) ?? false,
       toggleChat: () => { this.hud?.padToggleChat(); },
       // A finger on the console is a real click at that point: the sync cursor's own
       // press/release, so SD FDF buttons and HD WebUI buttons need no touch-specific path.

@@ -8,7 +8,7 @@ import { toGameSpeed } from "../data/gameSpeed";
 import { DEFAULT_PROFILE } from "../vfs/profiles";
 import type { InstallFiles } from "../assets/opfs";
 import {
-  fetchCasc, fetchInstallAnsi, fetchInstallFile, type FileUrl, type InstallManifest,
+  fetchCasc, fetchInstallAnsi, fetchInstallFile, lazyMapFile, type FileUrl, type InstallManifest,
 } from "../assets/remoteInstall";
 import type { GateLoad } from "../ui/home";
 import { OBSERVER_PLAYER, type FogMode, type MeleeConfig, type SlotConfig } from "../ui/lobby";
@@ -343,10 +343,12 @@ export async function devBoot(hooks: DevBootHooks): Promise<void> {
   const queue: Array<{ name: string; key: string }> = archives.map((name) => ({ name, key: name.toLowerCase() }));
   if (mapPath) queue.push({ name: mapPath, key: mapPath });
   for (const name of listed) queue.push({ name, key: name });
-  // …and the install's downloadable campaigns (data/campaigns.ts). They are a handful of
-  // `.w3n` files in Maps\Download\, not a folder of maps, and whether the Campaign screen can
-  // play a DLC depends on reading them — so all of them are mounted.
-  for (const name of manifest.campaigns ?? []) queue.push({ name, key: name });
+  // …and the `.w3n` files under Maps\ (data/campaigns.ts): the 3.0 DLC packs in
+  // Maps\Download\, whose chapters the Campaign screen unlocks by reading them, and the
+  // player's own collections on the Maps\Campaign\ shelf. Mounted LAZY — a custom campaign is a
+  // whole campaign in one file (a gigabyte on the developer's shelf), and a list only needs its
+  // name; the Campaign screen reads the bytes when one is picked.
+  for (const name of manifest.campaigns ?? []) files.set(name, lazyMapFile(fileUrl, name));
   // The maps' own Chinese dictionaries beside them, when the served install has any
   // (i18n/mapLanguage.ts): the same two names `candidates` asks the VFS for, so what is fetched
   // here is exactly what the loader will look for. Only for the maps this boot mounts — the

@@ -397,15 +397,21 @@ export class VisionMap {
     // false, every span below then comes out NaN, the loops never run, and a building standing
     // beside the scout read as never seen (what tools/sim-minimap-test.cjs tripped on).
     if (!(radius > 0)) return this.stateAt(wx, wy);
+    // A footprint NARROWER than half a cell covers no cell CENTRE, so the centre-in-span
+    // arithmetic below comes out empty and the answer used to be "never seen" — for a
+    // building only eight units across (Castle Fight's castle, `collision` 8), standing in a
+    // cell that was fully lit. The floor is the same one `forEachBlockerCell` applies for the
+    // identical reason: a degenerate radius still asks its own cell.
+    const r = Math.max(radius, VISION_CELL / 2);
     // Spans computed inline rather than through `cellSpan`, which hands back a tuple. This is
     // the hottest call in the renderer's fog pass — asked for every doodad on the map, and
     // nine in ten of them are trees, which is what carries a radius (mapViewer.fogWidgets) —
     // so at ten passes a second the two throwaway arrays per call were ~90,000 allocations a
     // second on Extreme Candy War's 4,345 doodads.
-    const x0 = spanLo(wx - radius, this.originX);
-    const x1 = spanHi(wx + radius, this.originX, this.width);
-    const y0 = spanLo(wy - radius, this.originY);
-    const y1 = spanHi(wy + radius, this.originY, this.height);
+    const x0 = spanLo(wx - r, this.originX);
+    const x1 = spanHi(wx + r, this.originX, this.width);
+    const y0 = spanLo(wy - r, this.originY);
+    const y1 = spanHi(wy + r, this.originY, this.height);
     let best = FogState.Unexplored;
     for (let cy = y0; cy <= y1; cy++) {
       for (let cx = x0; cx <= x1; cx++) {

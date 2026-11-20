@@ -11,8 +11,8 @@ import { setGameTip } from "./gameTip";
 import { t } from "../i18n";
 import { mountWorking } from "./workingIndicator";
 import {
-  MAP_SITES, askToKeep, canSearchInGame, downloadEpicWar, epicWarThumb, importMapFiles,
-  onSiteDownload, onSiteProgress, openMapSite, searchEpicWar, siteById, siteView,
+  MAP_SITES, askToKeep, canSearchInGame, downloadEpicWar, downloadSiteMap, epicWarThumb, importMapFiles,
+  onSiteDownload, onSiteProgress, openMapSite, searchEpicWar, searchSiteMaps, siteById, siteView,
   type ArrivedMap, type EpicWarMap, type MapSiteId, type SiteViewBridge, type SiteViewState, type ViewRect,
 } from "./mapSites";
 
@@ -113,6 +113,7 @@ const ROW_PITCH = 0.047;
 const RESULTS_SCROLLBAR = "StandardScrollBarTemplate";
 
 const TAB_FRAME: Record<MapSiteId, string> = {
+  ow3: "MapSitesTabOw3",
   epicwar: "MapSitesTabEpicWar",
   hive: "MapSitesTabHive",
   wc3maps: "MapSitesTabWc3maps",
@@ -192,7 +193,9 @@ export async function showMapSitesDialog(opts: {
   /** The page a tab is drawn with: EpicWar searched in place, a site in the desktop app's view,
    *  or — a browser — a site the game can only open. */
   const pageFor = (id: MapSiteId): PageName =>
-    id === "epicwar" ? (inGame ? "MapSitesPageSearch" : "MapSitesPageSite") : view ? "MapSitesPageView" : "MapSitesPageSite";
+    id === "ow3" ? "MapSitesPageSearch"
+      : id === "epicwar" ? (inGame ? "MapSitesPageSearch" : "MapSitesPageSite")
+      : view ? "MapSitesPageView" : "MapSitesPageSite";
 
   // Both of these are read by the renderer on every build, so a row's handler or a button's
   // label is put here BEFORE the relayout that draws it (ui/fdf/render.ts `wireButton`).
@@ -252,7 +255,7 @@ export async function showMapSitesDialog(opts: {
           r.props.push({ key: "SetPoint", args: [str("TOPLEFT"), str("MapSitesResults"), str("TOPLEFT"), num(0), num(-i * ROW_PITCH)] });
           host.children.push(r);
           texts[`MapSitesRowName_r${i}`] = m.title;
-          texts[`MapSitesRowMeta_r${i}`] = [m.author && `by ${m.author}`, m.players ? `${m.players} players` : "", m.size, m.category]
+          texts[`MapSitesRowMeta_r${i}`] = [m.author && `by ${m.author}`, m.playersLabel ?? (m.players ? `${m.players} players` : ""), m.size, m.category]
             .filter(Boolean).join("  ·  ");
           texts[`MapSitesRowGetText_r${i}`] = rowState(m).label;
           handlers[`MapSitesRowGet_r${i}`] = () => void download(m, i);
@@ -331,7 +334,10 @@ export async function showMapSitesDialog(opts: {
         const img = document.createElement("img");
         img.className = "ow3-sites-thumb";
         img.alt = "";
-        void epicWarThumb(m).then((url) => { if (url) img.src = url; });
+        // Our own library's cover is a plain https URL (the CDN), so it is set directly; EpicWar's
+        // has to come through the site's proxy as bytes.
+        if (m.thumbUrl) img.src = m.thumbUrl;
+        else void epicWarThumb(m).then((url) => { if (url) img.src = url; });
         thumb.append(img);
       }
       s.frame(`MapSitesRow_r${i}`)?.classList.add("ow3-sites-row");
@@ -397,7 +403,17 @@ export async function showMapSitesDialog(opts: {
     if (id === model.tab) return;
     tracker?.leave();
     model.tab = id;
-    say(id !== "epicwar" && view ? t("mapsites.autoAdded") : "");
+    // Our library is a SHELF, not a search engine: opening it lists everything (empty query);
+    // the three outside sites are views the game can only point at.
+    say(id !== "epicwar" && id !== "ow3" && view ? t("mapsites.autoAdded") : "");
+    if (id === "ow3") {
+      model.query = "";
+      model.results = null;
+      model.note = "";
+      runSearch();
+      requestAnimationFrame(() => searchInput()?.focus());
+      return;
+    }
     relayout();
     if (pageFor(id) === "MapSitesPageSearch") requestAnimationFrame(() => searchInput()?.focus());
   };
@@ -406,26 +422,34 @@ export async function showMapSitesDialog(opts: {
   const runSearch = (): void => {
     window.clearTimeout(searchTimer);
     const q = model.query.trim();
+    const tab = model.tab;
     searchAbort?.abort();
-    if (!q) return;
+    // EpicWar is a search engine: no query, no rows. Our own library answers an empty query with
+    // the whole shelf, which is what the tab is for.
+    if (!q && tab !== "ow3") return;
     const abort = (searchAbort = new AbortController());
     model.searching = true;
     model.results = [];
     model.note = "";
     relayout();
-    searchEpicWar(q, abort.signal)
+    const answer = tab === "ow3" ? searchSiteMaps(q, abort.signal) : searchEpicWar(q, abort.signal);
+    answer
       .then((maps) => {
-        if (!open || abort.signal.aborted) return;
+        // `tab !== model.tab`: the player may have switched tabs while this was in flight, and
+        // the rows belong to the tab that asked.
+        if (!open || abort.signal.aborted || tab !== model.tab) return;
         model.results = maps;
-        model.note = maps.length ? "" : t("mapsites.noMatch", { query: q });
+        model.note = maps.length ? "" : q
+          ? t(tab === "ow3" ? "mapsites.noMatchLib" : "mapsites.noMatch", { query: q })
+          : t("mapsites.emptyLibrary");
       })
       .catch((err: Error) => {
-        if (!open || abort.signal.aborted) return;
+        if (!open || abort.signal.aborted || tab !== model.tab) return;
         model.results = [];
         model.note = t("mapsites.couldNotReach", { error: err.message });
       })
       .finally(() => {
-        if (!open || abort.signal.aborted) return;
+        if (!open || abort.signal.aborted || tab !== model.tab) return;
         model.searching = false;
         // A new list starts at its top (the renderer otherwise keeps the old scroll).
         const v = screen?.frame("MapSitesResults")?.querySelector<HTMLElement>(":scope > .fdf-scroll-view");
@@ -450,7 +474,7 @@ export async function showMapSitesDialog(opts: {
     paintRow(m, i, { label: t("mapsites.downloadingShort"), busy: true, done: false });
     try {
       await keep;
-      const got = await downloadEpicWar(m);
+      const got = model.tab === "ow3" ? await downloadSiteMap(m) : await downloadEpicWar(m);
       opts.arrive(got);
       paintRow(m, i, { label: t("mapsites.added"), busy: false, done: true });
       say(got.saveError ? t("mapsites.addedSession", { name: got.file.name, why: got.saveError }) : t("mapsites.addedTo", { name: got.file.name }));

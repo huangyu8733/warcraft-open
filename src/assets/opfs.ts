@@ -27,18 +27,16 @@ export type InstallFiles = Map<string, File>;
 export const MAPS_PREFIX = "Maps\\";
 
 const isMap = (name: string): boolean => /\.(w3m|w3x)$/i.test(name);
-/** A downloadable campaign — a whole campaign in one `.w3n` archive (data/campaignArchive.ts).
- *  Like a map it lives under `Maps\` and is read from the folder, but it is not one: it must
- *  never reach a map list. 3.0 ships its DLC chapters encrypted, and such an archive in
- *  `Maps\Download\` is what unlocks them (data/campaigns.ts `attachCampaigns`), so the VFS
- *  has to be handed it. */
+/** A campaign — a whole campaign in one `.w3n` archive (data/campaignArchive.ts). It must never
+ *  reach a map list: one under `Maps\Download\` is a downloadable DLC campaign the VFS is handed
+ *  so `attachCampaigns` can unlock its chapters (data/campaigns.ts), and one under
+ *  `Maps\Campaign\` is the player's own, listed by the Custom Campaign screen. */
 const isCampaignArchive = (name: string): boolean => /\.w3n$/i.test(name);
 /** A map's own sidecar beside it: a Chinese/English dictionary (i18n/mapLanguage.ts) or a voice
  *  pack (voice/mapVoice.ts). Not a map: it must not show up in any map list, but it IS an install
  *  file the VFS has to be able to read. */
 const isSidecarFile = (name: string): boolean => /\.(zhCN|enUS|voice)\.json$/i.test(name);
 const isUnderMaps = (key: string): boolean => key.toLowerCase().startsWith(MAPS_PREFIX.toLowerCase());
-
 /** The maps in a picked install, as `path → File` (path with WC3's `\` separators). */
 export function installMaps(files: InstallFiles): Map<string, File> {
   const maps = new Map<string, File>();
@@ -46,8 +44,9 @@ export function installMaps(files: InstallFiles): Map<string, File> {
   return maps;
 }
 
-/** Everything under `Maps\` — the maps AND their sidecars — for the VFS's loose layer
- *  (vfs/looseFiles.ts). The map list keeps using `installMaps`, which drops the sidecars. */
+/** Everything under `Maps\` — the maps, their sidecars AND the player's `Maps\Campaign\` `.w3n`
+ *  shelf — for the VFS's loose layer (vfs/looseFiles.ts). The map list keeps using `installMaps`,
+ *  which drops the sidecars and never sees a campaign. */
 export function installLooseFiles(files: InstallFiles): Map<string, File> {
   const loose = new Map<string, File>();
   for (const [key, file] of files) if (isUnderMaps(key)) loose.set(key, file);

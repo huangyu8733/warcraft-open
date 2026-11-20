@@ -67,6 +67,8 @@ export async function loadProfile(
   // …and the maps' own `.zhCN.json` sidecars (i18n/mapLanguage.ts), which are loose files beside
   // a map rather than archive entries — so they need the loose layer, not the map list.
   const loose = installLooseFiles(install.files);
+  // A `.w3n` counts here: the player's `Maps\Campaign\` campaign is read from the loose layer,
+  // and a DLC archive in `Maps\Download\` likewise (data/campaigns.ts).
   const hasSidecar = [...loose.keys()].some((key) => !/\.(w3m|w3x)$/i.test(key));
 
   // Both storages are handed out through the EDITION overlay (src/vfs/edition.ts): while the

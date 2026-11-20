@@ -11,8 +11,8 @@
     "linux-arm64": "https://warcraft.oss-cn-hangzhou.aliyuncs.com/warcraft-open/downloads/Warcraft-Open-2.0.0-arm64.AppImage"
   },
   "web": {
-    "version": "2.0.0",
-    "url": "https://warcraft.oss-cn-hangzhou.aliyuncs.com/warcraft-open/downloads/web-2.0.0.zip",
-    "size": 23566632
+    "version": "2.0.1",
+    "url": "https://warcraft.oss-cn-hangzhou.aliyuncs.com/warcraft-open/downloads/web-2.0.1.zip",
+    "size": 23568379
   }
 }

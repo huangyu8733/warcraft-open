@@ -41,7 +41,9 @@ import java.io.InputStream;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -91,6 +93,9 @@ public class MainActivity extends Activity {
     private static final String BUILD_INFO = ".build.info";
 
     private volatile WebView web;
+    private volatile LanRelay lanRelay;
+    /** LAN discovery: our datagram out, everybody else's relays in (LanBeacon). */
+    private volatile LanBeacon lanBeacon;
     private volatile int pendingPickCall = -1;
     private volatile String pendingPickFlavor = "sd";
     private volatile boolean backHandled;
@@ -114,6 +119,10 @@ public class MainActivity extends Activity {
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
+        // The page is https and the phone's own relay is ws:// on a LAN address
+        // (LanRelay). Without this the WebView refuses that socket as mixed content, and LAN
+        // hosting is dead on arrival.
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         // The page owns every gesture on its surface; the WebView's own zoom would fight the
         // game's camera and the gesture layer's pinch (docs/gesture-control.md).
         settings.setSupportZoom(false);
@@ -146,6 +155,20 @@ public class MainActivity extends Activity {
         });
 
         installPageBridge();
+
+        // The phone's own relay. It is what lets this app be a LAN HOST rather than only a
+        // client of the cloud relay: the page's discovered-server list is fed this address
+        // (PAGE_BRIDGE `servers`/`onServers`), and the game then announces its room here.
+        // Started on a thread of its own because the accept loop is that call's life.
+        lanRelay = new LanRelay();
+        new Thread(lanRelay::start, "lan-relay").start();
+
+        // …and the UDP beacon that lets this phone FIND other machines' relays (and be found)
+        // without anybody typing an address: the same datagram the desktop's beacon.mjs sends,
+        // heard here and handed to the page through `relayServers()` below.
+        LanBeacon beacon = new LanBeacon(lanRelay);
+        lanBeacon = beacon;
+        new Thread(beacon::start, "lan-beacon").start();
 
         if (savedInstanceState == null) web.loadUrl(PAGE);
         else web.restoreState(savedInstanceState);
@@ -424,55 +447,111 @@ public class MainActivity extends Activity {
 
     // ── One file, honouring `Range`: the content store is read in slices, never whole ──────────
 
-    private WebResourceResponse fileResponse(DocumentFile file, WebResourceRequest request) throws IOException {
+    /**
+     * The file's size, asked of every door the provider offers: the tree's own metadata
+     * ({@link DocumentFile#length()}), then the descriptor's stat, then the descriptor's channel.
+     * Some providers answer 0 to the first two and still hand out a seekable file. Returns -1
+     * when the size genuinely cannot be had — never 0, which would claim an empty file.
+     */
+    private long measure(DocumentFile file) {
         long size = file.length();
-        ContentResolver resolver = getContentResolver();
-        if (size <= 0) {
-            try (ParcelFileDescriptor probe = resolver.openFileDescriptor(file.getUri(), "r")) {
-                if (probe != null) size = probe.getStatSize();
-            } catch (IOException ignored) {
-                // A provider that cannot stat: the response will stream whatever it can.
-            }
+        if (size > 0) return size;
+        try (ParcelFileDescriptor probe =
+                     getContentResolver().openFileDescriptor(file.getUri(), "r")) {
+            if (probe == null) return -1;
+            long stat = probe.getStatSize();
+            if (stat > 0) return stat;
+        } catch (IOException | RuntimeException ignored) {
+            // fall through to the channel, which some providers answer where stat does not
         }
+        try (ParcelFileDescriptor probe =
+                     getContentResolver().openFileDescriptor(file.getUri(), "r");
+             ParcelFileDescriptor.AutoCloseInputStream stream =
+                     new ParcelFileDescriptor.AutoCloseInputStream(probe)) {
+            long channel = stream.getChannel().size();
+            return channel > 0 ? channel : -1;
+        } catch (IOException | RuntimeException err) {
+            return -1;
+        }
+    }
+
+    private WebResourceResponse fileResponse(DocumentFile file, WebResourceRequest request) throws IOException {
+        long size = measure(file);
+        String label = file.getName() + " (" + size + ")";
 
         Map<String, String> headers = cors();
         headers.put("Content-Type", "application/octet-stream");
         headers.put("Accept-Ranges", "bytes");
 
+        // The range comes from the PAGE as `?r=start-end`, not as a `Range` header: WebView fails
+        // any intercepted range whose start is not 0, whichever status the answer carries. The
+        // bridge rewrites the header before the request leaves the page (PAGE_BRIDGE), and a
+        // Range header is still honoured where one does arrive — the desktop shell's route.
         Map<String, String> sent = request.getRequestHeaders();
         String range = sent == null ? null : sent.get("Range");
         if (range == null && sent != null) range = sent.get("range");
+        if (range == null) {
+            String asked = request.getUrl().getQueryParameter("r");
+            if (asked != null) range = "bytes=" + asked;
+        }
         long start = 0;
-        long end = size > 0 ? size - 1 : 0;
-        boolean partial = false;
+        long requestedEnd = -1; // -1: open-ended, or no Range at all
+        boolean ranged = false;
         if (range != null) {
             Matcher m = RANGE.matcher(range.trim());
             if (m.matches()) {
                 start = Long.parseLong(m.group(1));
-                if (m.group(2).isEmpty()) end = size - 1;
-                else end = Math.min(Long.parseLong(m.group(2)), size - 1);
-                if (start > end || (size > 0 && start >= size)) {
-                    headers.put("Content-Range", "bytes */" + size);
-                    return new WebResourceResponse(null, null, 416, "Range Not Satisfiable", headers, null);
-                }
-                partial = true;
+                if (!m.group(2).isEmpty()) requestedEnd = Long.parseLong(m.group(2));
+                ranged = true;
             }
         }
-        long count = Math.max(0, end - start + 1);
-        headers.put("Content-Length", String.valueOf(count));
-        if (partial) headers.put("Content-Range", "bytes " + start + "-" + end + "/" + size);
 
-        if ("HEAD".equalsIgnoreCase(request.getMethod())) {
-            return new WebResourceResponse("application/octet-stream", null,
-                    partial ? 206 : 200, partial ? "Partial Content" : "OK", headers, null);
-        }
-        if (size <= 0) {
+        // A known size makes the response EXACT — the mount's ranged data.NNN reads and its HEAD
+        // (which takes `content-length` as the file's size) are both built on that.
+        if (size > 0) {
+            long last = size - 1;
+            long end = requestedEnd < 0 ? last : Math.min(requestedEnd, last);
+            if (ranged && (start > last || end < start)) {
+                headers.put("Content-Range", "bytes */" + size);
+                return new WebResourceResponse(null, null, 416, "Range Not Satisfiable", headers, null);
+            }
+            long from = ranged ? start : 0;
+            long count = end - from + 1;
+            headers.put("Content-Length", String.valueOf(count));
+            // WebView drops an intercepted 206 whose Content-Range starts anywhere but 0 — the
+            // fetch then fails with "Failed to fetch" before a byte is read. Answering 200 with
+            // the requested slice already in the body is the one form it takes; the page only
+            // checks res.ok and reads the bytes, and `no-store` keeps them from being cached as
+            // the whole file. (The slice is named in the URL by the bridge, not by a Range header;
+            // see PAGE_BRIDGE and the `r` query above.)
+            if ("HEAD".equalsIgnoreCase(request.getMethod())) {
+                return new WebResourceResponse("application/octet-stream", null, 200, "OK", headers, null);
+            }
             return new WebResourceResponse("application/octet-stream", null, 200, "OK", headers,
-                    new ByteArrayInputStream(new byte[0]));
+                    new LoggedInputStream(openRange(file.getUri(), from, count), label));
         }
-        return new WebResourceResponse("application/octet-stream", null,
-                partial ? 206 : 200, partial ? "Partial Content" : "OK", headers,
-                openRange(file.getUri(), start, count));
+
+        // The provider would not say how big the file is. Declaring a length anyway is a promise
+        // the stream cannot keep — Chromium cancels that response as "Failed to fetch", which is
+        // how a perfectly readable folder used to fail to mount. So say nothing and let the end
+        // of the stream be the end of the body. A Range with an explicit end still bounds the
+        // read exactly (the mount's data.NNN slices always send one), and a total of `*` says the
+        // length is genuinely unknown.
+        Log.w(TAG, "no size for " + file.getUri() + "; serving without content-length");
+        if (ranged && requestedEnd >= start) {
+            long count = requestedEnd - start + 1;
+            headers.put("Content-Length", String.valueOf(count));
+            if ("HEAD".equalsIgnoreCase(request.getMethod())) {
+                return new WebResourceResponse("application/octet-stream", null, 200, "OK", headers, null);
+            }
+            return new WebResourceResponse("application/octet-stream", null, 200, "OK", headers,
+                    new LoggedInputStream(openRange(file.getUri(), start, count), label));
+        }
+        if ("HEAD".equalsIgnoreCase(request.getMethod())) {
+            return new WebResourceResponse("application/octet-stream", null, 200, "OK", headers, null);
+        }
+        return new WebResourceResponse("application/octet-stream", null, 200, "OK", headers,
+                new LoggedInputStream(openRange(file.getUri(), start, Long.MAX_VALUE), label));
     }
 
     /**
@@ -490,6 +569,7 @@ public class MainActivity extends Activity {
                 channel.position(start);
                 return new LimitedInputStream(fis, count);
             } catch (IOException | RuntimeException err) {
+                Log.w(TAG, "seek to " + start + " failed, will skip instead", err);
                 if (fis != null) {
                     try {
                         fis.close();
@@ -559,6 +639,52 @@ public class MainActivity extends Activity {
         @Override
         public int available() throws IOException {
             return (int) Math.min(in.available(), Math.max(0, left));
+        }
+
+        @Override
+        public void close() throws IOException {
+            in.close();
+        }
+    }
+
+    /** Names the file when its body dies mid-read; Chromium would only say "net::ERR_FAILED". */
+    private static final class LoggedInputStream extends InputStream {
+        private final InputStream in;
+        private final String label;
+
+        LoggedInputStream(InputStream in, String label) {
+            this.in = in;
+            this.label = label;
+        }
+
+        @Override
+        public int read() throws IOException {
+            try {
+                return in.read();
+            } catch (IOException err) {
+                Log.w(TAG, "body read failed: " + label, err);
+                throw err;
+            }
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            try {
+                return in.read(buffer, offset, length);
+            } catch (IOException err) {
+                Log.w(TAG, "body read failed: " + label, err);
+                throw err;
+            }
+        }
+
+        @Override
+        public long skip(long n) throws IOException {
+            return in.skip(n);
+        }
+
+        @Override
+        public int available() throws IOException {
+            return in.available();
         }
 
         @Override
@@ -705,6 +831,51 @@ public class MainActivity extends Activity {
             return out.toString();
         }
 
+        /**
+         * The LAN relay this app is carrying, in the shape `ow3native.servers()` answers
+         * (`[{id,url}]`, src/assets/nativeInstall.ts). Empty before the relay has bound, and on
+         * a device with no network interface to name.
+         */
+        @JavascriptInterface
+        public String relayServers() {
+            LanRelay relay = lanRelay;
+            JSONArray out = new JSONArray();
+            Set<String> known = new LinkedHashSet<>();
+            // Ours FIRST: the page picks the first discovered relay as the default host on
+            // Android, and a game created here belongs on the phone's own relay.
+            if (relay != null && relay.port() > 0) {
+                try {
+                    for (String url : relay.urls()) {
+                        JSONObject one = new JSONObject();
+                        one.put("id", "android-lan");
+                        one.put("url", url);
+                        out.put(one);
+                        known.add(url);
+                    }
+                } catch (Exception err) {
+                    Log.w(TAG, "cannot list relay servers", err);
+                    return "[]";
+                }
+            }
+            // …then every other machine the beacon can hear, so their games appear in the LAN
+            // join list with nothing typed (LanBeacon reads the desktop's beacon.mjs datagrams).
+            LanBeacon beacon = lanBeacon;
+            if (beacon != null) {
+                try {
+                    for (LanBeacon.Peer peer : beacon.peers()) {
+                        if (!known.add(peer.url)) continue; // our own address heard back
+                        JSONObject one = new JSONObject();
+                        one.put("id", peer.id);
+                        one.put("url", peer.url);
+                        out.put(one);
+                    }
+                } catch (Exception err) {
+                    Log.w(TAG, "cannot list beacon servers", err);
+                }
+            }
+            return out.toString();
+        }
+
         /** Open the system folder picker. The answer arrives at `__ow3AndroidPick(call, name)`. */
         @JavascriptInterface
         public void pickInstall(String flavor, int call) {
@@ -787,6 +958,18 @@ public class MainActivity extends Activity {
         web.saveState(outState);
     }
 
+    /** The relay lives exactly as long as the window: the port and every room go with it. */
+    @Override
+    protected void onDestroy() {
+        LanRelay relay = lanRelay;
+        lanRelay = null;
+        if (relay != null) relay.stop();
+        LanBeacon beacon = lanBeacon;
+        lanBeacon = null;
+        if (beacon != null) beacon.stop();
+        super.onDestroy();
+    }
+
     /**
      * The page's bridge, injected before its first module. Two jobs, both small:
      *
@@ -816,10 +999,29 @@ public class MainActivity extends Activity {
             "    try { return json ? JSON.parse(json) : fallback; } catch (e) { return fallback; }",
             "  }",
             "  var fetch0 = window.fetch ? window.fetch.bind(window) : null;",
+            "  function rangeOf(headers) {",
+            "    if (!headers) return null;",
+            "    if (typeof headers.get === 'function') return headers.get('range');",
+            "    return headers.Range || headers.range || null;",
+            "  }",
             "  if (fetch0) {",
             "    window.fetch = function (input, init) {",
             "      if (typeof input === 'string' && input.indexOf('ow3-install://') === 0) {",
             "        var out = '/ow3-install/' + input.slice('ow3-install://'.length);",
+            "        var asked = rangeOf(init && init.headers);",
+            "        var m = asked ? /^bytes=(\\d+)-(\\d*)$/.exec(String(asked).trim()) : null;",
+            "        if (m) {",
+            "          out += (out.indexOf('?') < 0 ? '?' : '&') + 'r=' + m[1] + '-' + m[2];",
+            "          var copy = {};",
+            "          if (init.headers && typeof init.headers.forEach === 'function') {",
+            "            init.headers.forEach(function (v, k) { copy[k] = v; });",
+            "          } else if (init.headers) {",
+            "            for (var k in init.headers) copy[k] = init.headers[k];",
+            "          }",
+            "          delete copy.Range;",
+            "          delete copy.range;",
+            "          init = Object.assign({}, init, { headers: copy });",
+            "        }",
             "        return fetch0(out, init);",
             "      }",
             "      return fetch0(input, init);",
@@ -848,8 +1050,18 @@ public class MainActivity extends Activity {
             "        return Promise.resolve(f);",
             "      }",
             "    },",
-            "    servers: function () { return Promise.resolve([]); },",
-            "    onServers: function () { return function () {}; }",
+            "    servers: function () { return Promise.resolve(parse(native.relayServers(), [])); },",
+            "    onServers: function (fn) {",
+            "      var last = null;",
+            "      function tick() {",
+            "        var now = parse(native.relayServers(), []);",
+            "        var key = JSON.stringify(now);",
+            "        if (key !== last) { last = key; fn(now); }",
+            "      }",
+            "      tick();",
+            "      var timer = setInterval(tick, 3000);",
+            "      return function () { clearInterval(timer); };",
+            "    }",
             "  };",
             "})();");
 }

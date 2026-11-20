@@ -46,6 +46,12 @@ export class LooseFilesDataSource implements DataSource {
     return [...new Set([...this.inner.list(), ...this.files.keys()])];
   }
 
+  /** The file's own name as the folder spells it (see `DataSource.displayName`): the stored
+   *  `File` carries it, where the key this source lists is lower-cased. */
+  displayName(path: string): string | undefined {
+    return this.files.get(key(path))?.name;
+  }
+
   /**
    * The store's exploded archives, NOT ours: a player's loose copy of a chapter is a whole
    * `.w3x` file, which `exists`/`read` already answer. Without this pass-through a 1.30+ store

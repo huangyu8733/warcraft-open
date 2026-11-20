@@ -4,6 +4,7 @@ import { ART, webUiAssets } from "./assets";
 import { HdScreen, el } from "./screen";
 import { confirmDialog } from "./dialog";
 import { loadOfficialStyle } from "./official";
+import { openSystemMenu } from "./systemMenu";
 import {
   backdrop,
   backButton,
@@ -83,7 +84,10 @@ export async function mountHdProfiles(
     },
     columns: columns(),
   });
-  backButton(shell.root, t("hd.back"), h.onClose);
+  backButton(shell.root, t("hd.back"), h.onClose, {
+    onSystemMenu: () => openSystemMenu(screen, vfs, {}),
+    systemMenuLabel: t("hd.menu"),
+  });
 
   refresh();
   screen.attach(document.body);

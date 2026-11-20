@@ -14,6 +14,13 @@ export interface DataSource {
   /** Known file paths. Requires a listfile for MPQ sources (WC3's MPQs ship one). */
   list(): string[];
   /**
+   * A loose file's own name as the FOLDER spells it, or undefined when this source does not
+   * keep one under that path. `list()` is lower-cased (an install folder's case is not the
+   * game's), so a screen that PRINTS a loose file's name — the Custom Campaign shelf's `.w3n`
+   * rows — asks here instead of showing the key.
+   */
+  displayName?(path: string): string | undefined;
+  /**
    * The bytes the LOW-priority base archive (`War3.mpq`) had for a path an art module
    * (`War3HD.mpq` / `War3DE.mpq`) overrode, or null when nothing was overridden. Only the CASC
    * source implements this: 3.0's HD/DE modules replace a number of SD missile/spell models

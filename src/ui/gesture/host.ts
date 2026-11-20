@@ -34,6 +34,10 @@ export interface GestureCardButton {
   cooldownLeft?: number;
   /** 冷却剩余比例 0..1：手势 HUD 用它画径向暗扇形。 */
   cooldownFrac?: number;
+  /** 法力不够这一级（与经典命令卡同一个 `noMana`，按这一级技能的法力消耗算）。
+   *  手势 HUD 把整格转成灰阶——手机上比经典卡那层深蓝洗更直白；按下去仍然有效，
+   *  会照常听到「法力不足」。 */
+  noMana?: boolean;
   /** 正在生效（自动施法 / 开关类）：镜像画成高亮，和 HUD 的 `armed` 一致。 */
   active?: boolean;
   /** 点下去只是翻到下一张卡（建造页 / 英雄技能页 / 法术书页），不是立刻下令。
@@ -207,6 +211,13 @@ export interface GestureMatchHost {
   cancel(): void;
   /** 三指轻点：F10 菜单。 */
   toggleMenu(): void;
+  /** 任务说明（F9 的任务日志）。手势模式藏起了整条经典控制台，那颗 Quests 钮也跟着没了，
+   *  自定义地图与战役的目标 / 提示就没有别的入口——所以单独开一扇门，走的是和 F9 同一条
+   *  `togglePanel("quests")`。 */
+  toggleQuests?(): void;
+  /** 这张图有没有（启用的）任务：没有就置灰那颗钮，与经典控制台 Quests 钮为同一事实
+   *  （Blizzard.j 的 melee 初始化不建任务，F9 在 melee 图上也打不开）。 */
+  questsAvailable?(): boolean;
   /** 聊天行开关。 */
   toggleChat(): void;
 

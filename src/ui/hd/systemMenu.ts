@@ -38,11 +38,15 @@ export interface SystemMenuHandlers {
   singlePlayer?: SinglePlayerShortcuts;
 }
 
-/** Mount the system menu over `screen`; Escape or a click outside closes it. */
-export function openSystemMenu(screen: HdScreen, vfs: DataSource, h: SystemMenuHandlers): void {
+/** Mount the system menu over the target's element; Escape or a click outside closes it. */
+export function openSystemMenu(
+  target: Pick<HdScreen, "element">,
+  vfs: DataSource,
+  h: SystemMenuHandlers,
+): void {
   // One at a time — the button that opens it is under the overlay, but the keyboard can still
   // reach it, and every listener below must be paired with the one overlay that owns it.
-  screen.element.querySelector(".hd-system-menu")?.remove();
+  target.element.querySelector(".hd-system-menu")?.remove();
 
   const overlay = el("div", "hd-system-menu");
   const scrim = el("div", "hd-system-menu-scrim");
@@ -96,8 +100,13 @@ export function openSystemMenu(screen: HdScreen, vfs: DataSource, h: SystemMenuH
 
   row.appendChild(actions.panel);
   overlay.append(scrim, row);
-  scrim.onclick = close;
-  screen.element.appendChild(overlay);
+  // Only a click on the scrim itself closes: a click on the row (or a panel) must reach the
+  // menu's own controls. Testing the target also keeps the overlay safe if it is ever mounted
+  // on an element that already contains the button that opened it.
+  scrim.addEventListener("click", (e) => {
+    if (e.target === scrim) close();
+  });
+  target.element.appendChild(overlay);
 
   // The plates are authored for a 1080-line window, like every other 3.0 screen; only the row
   // is zoomed so the scrim still covers the whole window at any size.

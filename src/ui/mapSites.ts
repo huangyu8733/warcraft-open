@@ -24,9 +24,10 @@ import { downloadedMapKey, keepDownloadedMap, requestMapWriteAccess } from "../a
 // (assets/downloadedMaps.ts): `Maps\Download\<file name>`, an ordinary map of the install from
 // then on.
 
-import { t } from "../i18n";
+import { currentLocale, t } from "../i18n";
+import { SITE, siteUrl } from "../data/site";
 
-export type MapSiteId = "hive" | "epicwar" | "wc3maps";
+export type MapSiteId = "ow3" | "hive" | "epicwar" | "wc3maps";
 
 export interface MapSite {
   id: MapSiteId;
@@ -41,6 +42,16 @@ export interface MapSite {
 }
 
 export const MAP_SITES: readonly MapSite[] = [
+  {
+    // The site's own library — the only one of the four the game can READ everywhere, because
+    // the API is ours and answers with CORS (web/app/api/public/maps). It is listed first: it is
+    // the shelf a player of THIS build is most likely to want (the launcher's 地图 tab is the
+    // same list), and the other three are the outside world.
+    id: "ow3",
+    name: "Warcraft Open",
+    blurb: t("mapsites.blurb.ow3"),
+    home: `${SITE || "https://warcraft.hhkj.me"}/maps`,
+  },
   {
     id: "epicwar",
     name: "EpicWar",
@@ -146,6 +157,8 @@ export interface EpicWarMap {
   author: string;
   /** Player slots, 0 when the row does not say. */
   players: number;
+  /** The slots as the source words them ("5v5"), when it does — our own library does. */
+  playersLabel?: string;
   category: string;
   date: string;
   downloads: string;
@@ -155,6 +168,9 @@ export interface EpicWarMap {
   /** The signed download link. Good for a while, not for ever — a stale one is re-read. */
   download: string;
   thumb: string | null;
+  /** A thumbnail the page can load DIRECTLY (our own site's cover), unlike EpicWar's, which has
+   *  to come through the proxy as bytes. */
+  thumbUrl?: string;
   /** A file the game can keep and play (.w3x/.w3m), not a campaign or an archive. */
   playable: boolean;
 }
@@ -227,6 +243,74 @@ export function epicWarThumb(m: EpicWarMap): Promise<string | null> {
     thumbs.set(m.id, got);
   }
   return got;
+}
+
+// --- the site's own library -------------------------------------------------------------
+
+/** The fields `web/app/api/public/maps` answers with (the launcher's shelf reads the same ones). */
+interface LibraryMapJson {
+  slug: string;
+  name: string;
+  fileSize: number | null;
+  version: string | null;
+  author: string | null;
+  players: string | null;
+  category: string | null;
+  fileName: string;
+  downloadUrl: string | null;
+  coverUrl: string | null;
+}
+
+const siteLocale = (): string => (currentLocale() === "zhCN" ? "zh" : "en");
+
+const sizeLabel = (bytes: number | null): string => {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
+/**
+ * The site's map library, searched in place — the SAME list the launcher's 地图 tab shows
+ * (`web/app/api/public/maps`), so a map found here is one the launcher already knows about.
+ *
+ * Unlike EpicWar, no proxy is needed anywhere: the API answers with `Access-Control-Allow-Origin`
+ * for exactly this reason, so the browser build and the Android app can read it as well as the
+ * desktop app. The query is matched server-side (`?q=`); an empty one lists the shelf.
+ */
+export async function searchSiteMaps(query: string, signal?: AbortSignal): Promise<EpicWarMap[]> {
+  if (!SITE) throw new Error(t("mapsites.notConfigured"));
+  const params = new URLSearchParams({ locale: siteLocale(), limit: "60" });
+  if (query.trim()) params.set("q", query.trim());
+  const res = await fetch(`${SITE}/api/public/maps?${params}`, { signal });
+  if (!res.ok) throw new Error(t("mapsites.siteAnswered", { status: res.status }));
+  const body = (await res.json()) as { maps?: LibraryMapJson[] };
+  return (body.maps ?? []).map((map) => {
+    const fileName = map.fileName || "";
+    return {
+      id: map.slug,
+      title: map.name || map.slug,
+      author: map.author ?? "",
+      players: parseInt(map.players ?? "", 10) || 0,
+      playersLabel: map.players ?? "",
+      category: map.category ?? "",
+      date: map.version ? `v${map.version}` : "",
+      downloads: "",
+      fileName,
+      size: sizeLabel(map.fileSize),
+      download: siteUrl(map.downloadUrl ?? ""),
+      thumb: null,
+      thumbUrl: map.coverUrl ?? undefined,
+      playable: !!map.downloadUrl && /\.(w3x|w3m)$/i.test(fileName),
+    };
+  });
+}
+
+/** Download a library result and keep it. A plain `fetch`: the file endpoint is CORS-open. */
+export async function downloadSiteMap(m: EpicWarMap, signal?: AbortSignal): Promise<ArrivedMap> {
+  if (!m.playable || !m.download) throw new Error(t("mapsites.notPlayable"));
+  const res = await fetch(m.download, { signal });
+  if (!res.ok) throw new Error(t("mapsites.siteAnswered", { status: res.status }));
+  return keepDownloadedMap(m.fileName, new Uint8Array(await res.arrayBuffer()));
 }
 
 // --- a map, kept --------------------------------------------------------------------

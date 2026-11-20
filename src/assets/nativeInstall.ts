@@ -32,12 +32,6 @@ interface NativeBridge {
     get(): Promise<GameFlavor>;
     set(flavor: GameFlavor): Promise<unknown>;
   };
-  /**
-   * Open a game window on `flavor`, leaving the launcher where it is. This is what makes the two
-   * lines independent: each has its own window, its own mount, and its own running game, so the
-   * classic and the Reforged client can be up at the same time. Absent on an older shell.
-   */
-  openGame?(flavor: GameFlavor): Promise<boolean>;
   /** Absent on a shell older than "Download game files". */
   downloadInstall?(sources: GameFilesSource[], onProgress: (p: DownloadProgress) => void, flavor?: GameFlavor): Promise<string | null>;
   /** The load gate's Cancel: abort that transfer mid-flight. Absent with it. */
@@ -123,20 +117,6 @@ export const setNativeVsync = async (on: boolean): Promise<void> => { await brid
 export const relaunchNative = (): void => void bridge()?.relaunch?.();
 /** Quit the desktop app entirely (electron/main.mjs `ow3:quit`). */
 export const quitNative = (): void => void bridge()?.quit?.();
-
-/**
- * Start a game in a WINDOW OF ITS OWN, on `flavor`, and leave this launcher as it is.
- *
- * The two lines cannot share a page — `data/*` parses its tables once per renderer — and they
- * should not have to: a window each is what lets a player keep the classic game up while the
- * Reforged one loads, or run both at once. False when the shell predates the split, which is the
- * caller's cue to fall back to starting in this page.
- */
-export async function openGameWindow(f: GameFlavor = flavor()): Promise<boolean> {
-  const open = bridge()?.openGame;
-  if (!open) return false;
-  return (await open(f)) !== false;
-}
 
 export const downloadUpdate = (): void => void bridge()?.update?.download();
 export const installUpdate = (): void => void bridge()?.update?.install();

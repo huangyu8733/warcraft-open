@@ -36,7 +36,7 @@ import { replaySink } from "./game/replaySink";
 declare const __OW3_VERSION__: string;
 declare const __OW3_COMMIT__: string;
 declare const __OW3_SIM_FINGERPRINT__: string;
-import { creditsMap, loadCampaigns, type Campaign, type CampaignEntry } from "./data/campaigns";
+import { creditsMap, customCampaignSources, loadCampaigns, type Campaign, type CampaignEntry } from "./data/campaigns";
 import { isRoc, setEdition, setMapDataSet } from "./data/edition";
 import { flavor, isHd } from "./data/flavor";
 import { gameVersion, setGameVersion } from "./data/gameVersion";
@@ -803,12 +803,29 @@ function loadSavedScreen(vfs: DataSource): GlueScreenDef {
  *  their own, and that is the set whose single tall left-hand frame is the shape these two
  *  files are authored for (see ui/fdfCustomCampaign.ts for the full reasoning). */
 function customCampaignScreen(vfs: DataSource): GlueScreenDef {
+  // Every `.w3n` in the install's `Maps\Campaign\` folder — the game's own campaign-map folder,
+  // apart from the melee maps (data/campaigns.ts). The archives are opened only when a row is
+  // picked, by the screen.
+  const sources = customCampaignSources(vfs);
+  const play = (campaign: Campaign): void => {
+    // The chapter list, its chapter→chapter progression and the campaign data files all read
+    // the campaign back out of this array (chapter navigation, `pendingCampaign`), so a custom
+    // campaign joins the library the moment it is played.
+    if (!campaigns.some((c) => c.key === campaign.key)) campaigns.push(campaign);
+    campaignState = { campaign, chapters: true, difficulty: loadDifficulty() };
+    void glue.goTo(campaignScreen(vfs));
+  };
+  // Back from a custom campaign's chapter list lands on THIS shelf, on the campaign just played.
+  const initial = campaignState?.campaign.custom ? campaignState.campaign.key : null;
   if (isHd()) {
     return {
       chrome: "BattlenetCustomCreate",
       noChrome: true,
       mount: () => mountHdCustomCampaign(ui, vfs, {
         onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+        onPlay: play,
+        sources,
+        initial,
       }),
     };
   }
@@ -816,6 +833,9 @@ function customCampaignScreen(vfs: DataSource): GlueScreenDef {
     chrome: "BattlenetCustomCreate",
     mount: () => mountCustomCampaignScreen(ui, vfs, {
       onCancel: () => void glue.goTo(singlePlayerScreen(vfs)),
+      onPlay: play,
+      sources,
+      initial,
     }),
   };
 }
@@ -855,20 +875,27 @@ let campaignState: CampaignScreenState | null = null;
 /** Open the Campaign screen — on the chapter list of the campaign the player last touched,
  *  else on the campaign list. */
 async function openCampaignScreen(vfs: DataSource): Promise<void> {
-  if (!campaigns.length) campaigns = await loadCampaigns(vfs);
-  if (!campaigns.length) {
+  // The library, not just whatever a custom campaign pushed into the array on its way to its
+  // chapter list — that list is a stock campaign's until the index has been read.
+  if (!campaigns.some((c) => !c.custom)) campaigns = await loadCampaigns(vfs);
+  const stock = campaigns.filter((c) => !c.custom);
+  if (!stock.length) {
     // An install that ships neither edition's index (data/campaigns.ts `loadCampaigns`).
     console.warn("[Warcraft Open] no campaign index for this edition in this install — Campaign unavailable");
     return;
   }
-  campaignState ??= { campaign: campaigns[0], chapters: false, difficulty: loadDifficulty() };
+  // A custom campaign has no place on this shelf (data/campaignProgress.ts `openCampaigns`),
+  // so arriving here always starts from the library's first campaign.
+  if (!campaignState || campaignState.campaign.custom) {
+    campaignState = { campaign: stock[0], chapters: false, difficulty: loadDifficulty() };
+  }
   // The screen remembers the campaign across a trip into a mission, but the PROFILE it was
   // remembered under can have changed underneath it (ui/fdfSinglePlayerMenu.ts) — and a
   // campaign the profile in play has not opened is one it may not even see
   // (data/campaignProgress.ts). Fall back to the first, which is always open.
   const at = campaigns.indexOf(campaignState.campaign);
   if (at < 0 || !isCampaignOpen(campaigns, at)) {
-    campaignState = { campaign: campaigns[0], chapters: false, difficulty: loadDifficulty() };
+    campaignState = { campaign: stock[0], chapters: false, difficulty: loadDifficulty() };
   }
   await glue.goTo(campaignScreen(vfs));
 }
@@ -887,7 +914,14 @@ function campaignScreen(vfs: DataSource): GlueScreenDef {
     onPlayMission: (c: Campaign, index: number): void => void startCampaignMission(vfs, c, index, state.difficulty),
     chapterRefusal: (c: Campaign, index: number): Promise<string | null> => campaignChapterRefusal(vfs, c, index),
     onBack: (): void => {
-      if (state.chapters) { state.chapters = false; void glue.goTo(campaignScreen(vfs)); return; }
+      if (state.chapters) {
+        // A custom campaign was never on the Campaign screen's shelf, so Back goes back to
+        // the Custom Campaign screen it came from — on that campaign's row.
+        if (state.campaign.custom) { leaveCampaignScreen(); void glue.goTo(customCampaignScreen(vfs)); return; }
+        state.chapters = false;
+        void glue.goTo(campaignScreen(vfs));
+        return;
+      }
       leaveCampaignScreen();
       void glue.goTo(singlePlayerScreen(vfs));
     },
@@ -900,7 +934,7 @@ function campaignScreen(vfs: DataSource): GlueScreenDef {
       onArrived: () => applyMenuCursor(vfs, state.campaign.cursor),
       mount: () => {
         setCampaignAmbience(state.campaign);
-        return mountHdCampaign(ui, vfs, campaigns, state, handlers);
+        return mountHdCampaign(ui, vfs, campaigns.filter((c) => !c.custom), state, handlers);
       },
     };
   }
@@ -916,7 +950,7 @@ function campaignScreen(vfs: DataSource): GlueScreenDef {
     onArrived: () => applyMenuCursor(vfs, state.campaign.cursor),
     mount: () => {
       setCampaignAmbience(state.campaign);
-      return mountCampaignScreen(ui, vfs, campaigns, state, handlers);
+      return mountCampaignScreen(ui, vfs, campaigns.filter((c) => !c.custom), state, handlers);
     },
   };
 }

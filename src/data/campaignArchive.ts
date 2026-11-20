@@ -11,13 +11,14 @@ import type { DataSource } from "../vfs/types";
 // `war3campImported\`, and each chapter as a nested `.w3x`. A player who has one can play the
 // campaign, and this is the reader that says what is inside it.
 //
-// The `.w3f` layout, as measured on 3.0's two DLC archives: a `u32` format version, a `u32`
-// editor version, the campaign's own name/author/description/difficulty strings, a fixed run of
-// flags and art paths (its menu background and minimap), and then the chapter table —
-// `u32 count` followed by `count` records of `u32 open` + three NUL-terminated strings (name,
-// description, map file). WHERE that table starts is not fixed (the header's art fields are
-// variable-length), so the parse finds it: the offset whose count and records all stand up,
-// every record's map being a real entry in the archive.
+// The `.w3f` layout, as measured on 3.0's two DLC archives AND on player-made campaigns: three
+// `u32`s (format version, editor version, campaign version), then four NUL-terminated strings —
+// the campaign's name, difficulty, author and description — then a fixed run of flags and art
+// paths (its menu background and minimap), and then the chapter table — `u32 count` followed by
+// `count` records of `u32 open` + three NUL-terminated strings (name, description, map file).
+// WHERE that table starts is not fixed (the header's art fields are variable-length), so the
+// parse finds it: the offset whose count and records all stand up, every record's map being a
+// real entry in the archive.
 
 /** One chapter of a campaign archive: the words the chapter list shows and the map it plays. */
 export interface CampaignChapter {
@@ -33,6 +34,13 @@ export interface CampaignChapter {
 export interface CampaignArchive {
   /** The install path the archive was read from, for diagnostics. */
   readonly label: string;
+  /** The campaign's own title from `war3campaign.w3f` (`TRIGSTR_nnn` resolved). Empty when the
+   *  archive does not state one — the list then falls back to the file name. */
+  readonly name: string;
+  /** The campaign's author, likewise resolved. */
+  readonly author: string;
+  /** Its blurb, likewise resolved. Empty when there is none. */
+  readonly description: string;
   /** The whole archive — chapter maps, imported art, the campaign's own data files. */
   readonly vfs: DataSource;
   readonly chapters: CampaignChapter[];
@@ -59,6 +67,7 @@ export function openCampaignArchive(bytes: Uint8Array, label: string): CampaignA
   const w3f = vfs.rawBytes("war3campaign.w3f");
   if (!w3f) return null;
   const resolveText = campaignStrings(vfs);
+  const info = parseHeader(w3f, resolveText);
   const chapters = parseChapters(w3f, vfs, resolveText);
   if (!chapters.length) return null;
   // Every map in the archive, not just the chapters: a chapter's script names the places
@@ -68,11 +77,45 @@ export function openCampaignArchive(bytes: Uint8Array, label: string): CampaignA
   for (const chapter of chapters) byName.set(stem(chapter.file), chapter.file);
   return {
     label,
+    ...info,
     vfs,
     chapters,
     find: (file) => byName.get(stem(file)) ?? null,
     read: (file) => vfs.read(file),
   };
+}
+
+/** The campaign's name/author/description out of the `.w3f` header — the four strings after the
+ *  three leading `u32`s. Decoded as UTF-8 because that is what both the 3.0 editor and the
+ *  player-made campaigns we have write (a `TRIGSTR_nnn` still resolves through the `.wts`). */
+function parseHeader(
+  bytes: Uint8Array,
+  resolveText: (value: string) => string,
+): { name: string; author: string; description: string } {
+  const none = { name: "", author: "", description: "" };
+  if (bytes.length < 16) return none;
+  let at = 12;
+  const values: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    const value = readHeaderString(bytes, at);
+    if (!value) return none;
+    values.push(resolveText(value.text));
+    at = value.next;
+  }
+  // Measured order on both `.w3f` versions: name, difficulty, author, description.
+  return { name: values[0], author: values[2], description: values[3] };
+}
+
+/** A NUL-terminated UTF-8 string, whatever bytes it holds — unlike `readString` this one is not
+ *  used to validate an offset, so accented and Chinese campaign names pass. Null only when the
+ *  terminator is missing or the window holds control bytes (a wrong offset). */
+function readHeaderString(bytes: Uint8Array, at: number): { text: string; next: number } | null {
+  let end = at;
+  while (end < bytes.length && bytes[end] !== 0) end++;
+  if (end >= bytes.length) return null;
+  const text = new TextDecoder("utf-8").decode(bytes.subarray(at, end));
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffd]/.test(text)) return null;
+  return { text, next: end + 1 };
 }
 
 /** `war3campaign.wts` → a TRIGSTR resolver (identity when the archive has none). */
@@ -87,17 +130,22 @@ function campaignStrings(vfs: DataSource): (value: string) => string {
   };
 }
 
-/** A NUL-terminated window-1252 string. Null when the bytes run out or hold control characters
- *  — which is what makes the scan below reject a wrong offset rather than read garbage. */
+/** A NUL-terminated UTF-8 string. Null when the bytes run out or hold control characters (or
+ *  are not UTF-8 at all) — which is what makes the scan below reject a wrong offset rather than
+ *  read garbage. UTF-8 because that is what the editor writes: a campaign's chapter names, and
+ *  a Chinese campaign's especially, are not ASCII. */
 function readString(bytes: Uint8Array, at: number): { text: string; next: number } | null {
-  let text = "";
-  for (let p = at; p < bytes.length; p++) {
-    const byte = bytes[p];
-    if (byte === 0) return { text, next: p + 1 };
-    if (byte < 9 || (byte > 13 && byte < 32) || byte > 126) return null;
-    text += String.fromCharCode(byte);
+  let end = at;
+  while (end < bytes.length && bytes[end] !== 0) end++;
+  if (end >= bytes.length) return null;
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(at, end));
+  } catch {
+    return null;
   }
-  return null;
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) return null;
+  return { text, next: end + 1 };
 }
 
 /**
@@ -108,6 +156,11 @@ function readString(bytes: Uint8Array, at: number): { text: string; next: number
  * paths before the count. A candidate stands only when the count is sane AND every record parses
  * AND every record's map is an entry the archive holds — three independent checks, so a stray
  * `1` in the header cannot be mistaken for a one-chapter campaign.
+ *
+ * The `u32` in front of each record is NOT a 0/1 flag: the 3.0 catalogues write 0/1 there, while
+ * a player-made campaign writes values that are not a bitmap or an order (the Arthas campaign
+ * writes 1, 3, 1, 1). Its meaning is not needed for anything the engine does with a chapter, so
+ * any value is let through — the map-name check is what keeps the scan honest.
  */
 function parseChapters(
   bytes: Uint8Array,
@@ -123,9 +176,7 @@ function parseChapters(
     let ok = true;
     for (let i = 0; i < count; i++) {
       if (p + 4 > bytes.length) { ok = false; break; }
-      const open = view.getUint32(p, true);
-      p += 4;
-      if (open > 1) { ok = false; break; }
+      p += 4; // chapter order — see above; not used to gate anything
       const name = readString(bytes, p);
       const description = name && readString(bytes, name.next);
       const file = description && readString(bytes, description.next);

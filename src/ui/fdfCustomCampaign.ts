@@ -1,11 +1,13 @@
 import type { DataSource } from "../vfs/types";
 import { loadDifficulty, saveDifficulty, type Difficulty } from "../data/campaignProgress";
+import type { Campaign, CustomCampaignSource } from "../data/campaigns";
 import type { FdfFrame } from "./fdf/parser";
 import type { FdfLibrary } from "./fdf/library";
 import { mountFdfScreen, type FdfScreen } from "./fdf/render";
 import { DIFFICULTIES } from "./fdfCampaign";
 import { adopt, arg, findFrame, nudgeX, num, setProp, size, str } from "./mapBrowser";
 import { widescreen } from "./widescreen";
+import { t } from "../i18n";
 
 // The Custom Campaign screen, built from the game's own UI\FrameDef\Glue\CustomCampaignMenu.fdf:
 // the list of installed custom campaigns down the left with the difficulty box under it, the
@@ -25,10 +27,12 @@ import { widescreen } from "./widescreen";
 // them to each other, exactly as MapInfoPane.fdf does — so the one unanchored frame is placed
 // here, the way ui/mapBrowser.ts `layoutInfoPane` places that pane's.
 //
-// THE LIST IS EMPTY on a stock install, and that is the reference's own behaviour rather than
-// a stub: a custom campaign is a `.w3n` the player drops into Maps\Download, this install has
-// none, and Warcraft Open does not open `.w3n` archives yet. Play Campaign stays greyed exactly as
-// it does there with nothing picked.
+// WHAT IS LISTED is the player's own shelf — every `.w3n` in the install's `Maps\Campaign\`
+// folder (data/campaigns.ts `customCampaignSources`), the folder the game keeps its campaign maps
+// in, so a campaign is never mixed into the melee maps. A campaign archive is opened only when
+// its row is picked: the whole `.w3n` has to be read for its chapter table, and a big campaign
+// is hundreds of megabytes the list alone must not spend. Until then the row wears the file's
+// own name.
 
 const LIST_FDF = "UI\\FrameDef\\Glue\\ListBoxWar3.fdf";
 
@@ -47,6 +51,12 @@ const NAME_H = 0.019;
 
 export interface CustomCampaignHandlers {
   onCancel: () => void;
+  /** Open the picked campaign on its chapter list (main.ts `customCampaignScreen`). */
+  onPlay: (campaign: Campaign) => void;
+  /** The `.w3n`s in the install's `Maps\Campaign\` folder (data/campaigns.ts). */
+  sources: CustomCampaignSource[];
+  /** The campaign to have picked already — Back walked here from its chapters. */
+  initial?: string | null;
 }
 
 export function mountCustomCampaignScreen(
@@ -58,6 +68,11 @@ export function mountCustomCampaignScreen(
   // player, not one per screen (data/campaignProgress.ts).
   let difficulty = loadDifficulty();
   let lib: FdfLibrary | null = null;
+  let picked = h.initial ? h.sources.find((source) => source.key === h.initial) ?? null : null;
+  let loaded: Campaign | null = null;
+  let failed = false;
+  /** Which pick the pending open belongs to — an answer for an older row is dropped. */
+  let opening = 0;
 
   return mountFdfScreen({
     container,
@@ -75,13 +90,27 @@ export function mountCustomCampaignScreen(
     latePanels: ["GameSettingsPanel", "CampaignInfoPane"],
     handlers: {
       CancelButton: h.onCancel,
+      OKButton: () => { if (loaded) h.onPlay(loaded); },
     },
-    onBuild: (s) => fill(s),
+    onBuild: (s) => {
+      fill(s);
+      if (picked) void open(s, picked);
+    },
   });
 
   function fill(s: FdfScreen): void {
     const list = s.list("ListBoxWar3");
-    list?.setItems([]);
+    if (list) {
+      list.setItems(h.sources.map((source) => ({ value: source.key, label: source.name })));
+      if (picked) list.select(picked.key);
+      list.onChange = (value) => {
+        const source = h.sources.find((candidate) => candidate.key === value) ?? null;
+        if (source) void open(s, source);
+      };
+      list.onActivate = (value) => {
+        if (loaded && loaded.key === value) h.onPlay(loaded);
+      };
+    }
 
     const select = s.popup("DifficultySelect");
     if (select) {
@@ -90,14 +119,37 @@ export function mountCustomCampaignScreen(
       select.onChange = (v) => { difficulty = v as Difficulty; saveDifficulty(difficulty); };
     }
 
-    // Nothing picked: the details are blank and the badge that describes a campaign is a
-    // FRAME rather than text, so it is hidden rather than emptied (as clearMapInfo does).
-    for (const name of ["CampaignNameValue", "AuthorValue", "DifficultyValue", "NumMissionsValue", "MapDescValue"]) {
-      s.setText(name, "");
-    }
+    paintDetails(s);
+  }
+
+  /** Pick a campaign; the archive is read here, once, and the details fill in when it lands. */
+  async function open(s: FdfScreen, source: CustomCampaignSource): Promise<void> {
+    picked = source;
+    loaded = null;
+    failed = false;
+    const seq = ++opening;
+    paintDetails(s);
+    const campaign = await source.load();
+    if (seq !== opening) return;
+    loaded = campaign;
+    failed = !campaign;
+    paintDetails(s);
+  }
+
+  function paintDetails(s: FdfScreen): void {
+    s.setText("CampaignNameValue", loaded?.name ?? picked?.name ?? "");
+    s.setText("AuthorValue", loaded?.header ?? "");
+    s.setText("DifficultyValue", lib?.string(DIFFICULTIES.find((d) => d.value === difficulty)?.key ?? "") ?? "");
+    s.setText("NumMissionsValue", loaded ? String(loaded.missions.length) : "");
+    s.setText(
+      "MapDescValue",
+      failed ? t("hd.campaignUnreadable") : loaded ? loaded.description ?? "" : picked ? t("hd.loading") : "",
+    );
+    // The badge that describes a campaign is a FRAME rather than text, so it is hidden rather
+    // than emptied (as clearMapInfo does) when there is no author to wear.
     const badge = s.frame("AuthIcon");
-    if (badge) badge.style.display = "none";
-    s.setEnabled("OKButton", false);
+    if (badge) badge.style.display = loaded?.header ? "" : "none";
+    s.setEnabled("OKButton", !!loaded);
   }
 }
 

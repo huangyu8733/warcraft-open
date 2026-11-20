@@ -6649,6 +6649,11 @@ body.in-game #gesture-power { display: grid; }
   height: 18px;
 }
 
+/* 这张图没有任务（melee）时的「任务说明」：灰下去，与经典控制台那颗 Quests 钮同一个事实。 */
+.ghud-top .ghud-zoom__btn:disabled {
+  opacity: 0.4;
+}
+
 #gesture-power[data-on="true"] {
   border-color: rgba(252, 211, 18, 0.72);
   color: #fcd312;
@@ -7003,6 +7008,8 @@ body.gesture-ui #gesture-hud { display: block; }
   width: 168px;
   height: 156px;
   pointer-events: auto;
+  transform: scale(var(--ghud-ui, 1));
+  transform-origin: 0 0;
 }
 
 .ghud-minimap .hud-minimap {
@@ -7022,13 +7029,15 @@ body.gesture-ui #gesture-hud { display: block; }
    每一组 = 圆头像（首单位原图 / 彩色队旗）+ 人数角标；选中后右上角浮出红色垃圾桶。 */
 .ghud-groups {
   position: absolute;
-  top: calc(var(--safe-top) + 8px + 156px + 6px);
+  top: calc(var(--safe-top) + var(--ghud-groups-top));
   left: calc(var(--safe-left) + 8px);
   width: 168px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   pointer-events: none;
+  transform: scale(var(--ghud-ui, 1));
+  transform-origin: 0 0;
 }
 
 .ghud-groups .ghud-gitem {
@@ -7163,10 +7172,12 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-top {
   position: absolute;
   top: calc(var(--safe-top) + 8px);
-  right: calc(var(--safe-right) + 60px);
+  right: calc(var(--safe-right) + var(--ghud-top-right));
   display: flex;
   gap: 6px;
   pointer-events: none;
+  transform: scale(var(--ghud-ui, 1));
+  transform-origin: 100% 0;
 }
 
 .ghud-res {
@@ -7227,6 +7238,8 @@ body.gesture-ui #gesture-hud { display: block; }
   background: var(--ghud-plate);
   box-shadow: var(--ghud-rim);
   pointer-events: none;
+  transform: scale(var(--ghud-ui, 1));
+  transform-origin: 0 100%;
 }
 
 .ghud-sel[hidden] { display: none; }
@@ -7413,8 +7426,10 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-inventory {
   position: absolute;
   left: calc(var(--safe-left) + 10px);
-  bottom: calc(var(--safe-bottom) + 96px);
+  bottom: calc(var(--safe-bottom) + var(--ghud-inv-bottom));
   pointer-events: auto;
+  transform: scale(var(--ghud-ui, 1));
+  transform-origin: 0 100%;
 }
 
 .ghud-inventory .hud-inventory {
@@ -7477,7 +7492,7 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-bar--mp i { background: linear-gradient(180deg, #a8c8ff 0%, #3f74e0 60%, #22459a 100%); }
 
 /* 右下动作簇：大圆钮（攻击 / 移动）+ 12 槽命令环，槽位坐标由 hud.ts 的 layoutRing 写死。
-   整个簇可以按 --ghud-panel-scale 等比缩放（锚在右下角），手机上默认缩到 0.65。 */
+   整个簇按 --ghud-ui 等比缩放（锚在右下角），三档系数见下面那段。 */
 .ghud-actions {
   position: absolute;
   right: calc(var(--safe-right) + 10px);
@@ -7485,15 +7500,54 @@ body.gesture-ui #gesture-hud { display: block; }
   width: var(--ghud-outer, 272px);
   height: var(--ghud-outer, 272px);
   pointer-events: none;
-  transform: scale(var(--ghud-panel-scale, 1));
+  transform: scale(var(--ghud-ui, 1));
   transform-origin: 100% 100%;
 }
 
-/* 手机上动作簇占得太满：整体缩到 0.65（比原先的 0.5 放大约三成）；平板（≥1024 宽且 ≥720 高）
-   保持原尺寸。判据用**视口尺寸**而不是 pointer: coarse —— 开发者工具里模拟触摸、以及把窗口
-   拉小的桌面浏览器，pointer 不一定是 coarse，但控制台一样会显得过大。 */
+/* ---- 手势 HUD 的三档尺寸（手机 / 平板 / 电脑）------------------------------------------
+   档位只有一个来源：ui/gesture/device.ts 的 `deviceClass`，挂载时写在根上
+   （`#gesture-hud[data-device="phone|tablet|desktop-touch"]`）。早先 CSS 自己按视口宽高猜，
+   于是「窗口拉小的桌面浏览器」和「横屏手机」会落进同一档；现在设备说什么是什么。
+
+   三档的系数就是 `--ghud-ui`：手机 0.65（168×156 的小地图缩成 109×101，技能格 38→25）、
+   平板 1（原尺寸）、电脑 1.3（38→49 的技能格、44→57 的工具钮，桌面上才看得清）。
+   每块仍以自己的角为锚点 `transform: scale()`，内部布局、按钮热区、小地图拖拽都不用改；
+   邻居的偏移量按未缩放的原始尺寸重算三份，写成下面这五个变量，谁缩放都不会压住谁。 */
+#gesture-hud {
+  --ghud-ui: 1;
+  --ghud-groups-top: 170px;   /* 小地图 156 + 8 + 6 */
+  --ghud-zoom-left: 184px;    /* 8 + 168 + 8 */
+  --ghud-inv-bottom: 96px;    /* 选中面板 86 + 底边 10 */
+  --ghud-view-bottom: 176px;  /* 物品栏 42 再往上 38 */
+  --ghud-top-right: 60px;     /* 菜单 46 + 8 + 6 */
+}
+#gesture-hud[data-device="phone"] {
+  --ghud-ui: 0.65;
+  --ghud-groups-top: 115px;
+  --ghud-zoom-left: 125px;
+  --ghud-inv-bottom: 73px;
+  --ghud-view-bottom: 125px;
+  --ghud-top-right: 40px;
+}
+#gesture-hud[data-device="desktop-touch"] {
+  --ghud-ui: 1.3;
+  --ghud-groups-top: 217px;
+  --ghud-zoom-left: 234px;
+  --ghud-inv-bottom: 130px;
+  --ghud-view-bottom: 226px;
+  --ghud-top-right: 74px;
+}
+/* 桌面窗口缩到手机大小时（半屏、开发者工具里调试），1.3 会占掉半屏：退回原尺寸。
+   手机/平板不受这条影响——它们的档位由设备给，不看窗口。 */
 @media (max-width: 1000px), (max-height: 700px) {
-  #gesture-hud { --ghud-panel-scale: 0.65; }
+  #gesture-hud[data-device="desktop-touch"] {
+    --ghud-ui: 1;
+    --ghud-groups-top: 170px;
+    --ghud-zoom-left: 184px;
+    --ghud-inv-bottom: 96px;
+    --ghud-view-bottom: 176px;
+    --ghud-top-right: 60px;
+  }
 }
 
 /* 动作簇外侧的「说明」钮：打开当前单位的物品 / 技能说明。
@@ -7682,6 +7736,10 @@ body.gesture-ui #gesture-hud { display: block; }
 
 .ghud-slot[hidden] { display: none; }
 .ghud-slot.off { opacity: 0.32; }
+/* 技能的法力不够这一级：整格转灰（经典卡是深蓝洗，手机上一眼要看懂，灰更直白）。
+   按钮仍然是活的——按下去照常下令，由游戏自己喊「法力不足」，所以不像 `.off` 那样压到
+   几乎看不见。 */
+.ghud-slot.no-mana { filter: grayscale(1) brightness(0.7); }
 .ghud-slot:active { transform: translate(-50%, -50%) scale(0.92); }
 
 .ghud-slot__text { font-style: normal; }
@@ -7901,9 +7959,12 @@ body.gesture-ui #gesture-hud { display: block; }
   box-shadow: var(--ghud-rim);
   color: #efe4c8;
   font: 700 12px/1 var(--game-font, sans-serif);
+  transform: scale(var(--ghud-ui, 1));
+  transform-origin: 100% 0;
 }
 
-.ghud-menu:active { transform: scale(0.95); }
+/* 按下的回弹叠在档位缩放上（两个 scale 相乘，不必写 calc 乘法）。 */
+.ghud-menu:active { transform: scale(var(--ghud-ui, 1)) scale(0.95); }
 
 /* 手机没有滚轮、也没有 ESC：左上角、小地图右侧一列工具钮——放大 / 缩小 / 取消选择。
    小地图固定 168×156（top/left +8），所以这一列从 8+168+8 = 184px 开始。 */
@@ -7914,11 +7975,13 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-zoom {
   position: absolute;
   top: calc(var(--safe-top) + 8px);
-  left: calc(var(--safe-left) + 184px);
+  left: calc(var(--safe-left) + var(--ghud-zoom-left));
   display: flex;
   flex-direction: column;
   gap: 8px;
   pointer-events: none;
+  transform: scale(var(--ghud-ui, 1));
+  transform-origin: 0 0;
 }
 .ghud-zoom__btn {
   width: 44px;
@@ -8243,11 +8306,13 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-view {
   position: absolute;
   left: calc(var(--safe-left) + 10px);
-  bottom: calc(var(--safe-bottom) + 176px);
+  bottom: calc(var(--safe-bottom) + var(--ghud-view-bottom));
   display: flex;
   align-items: center;
   height: 200px;
   pointer-events: none;
+  transform: scale(var(--ghud-ui, 1));
+  transform-origin: 0 100%;
 }
 
 .ghud-pad {
@@ -8323,52 +8388,8 @@ body.gesture-ui #gesture-hud { display: block; }
 .ghud-rot__btn.on { background: #3b2f16; color: #ffd863; }
 .ghud-rot__btn svg { width: 22px; height: 22px; }
 
-/* 手机上这块 HUD 占得太满：左列四块（小地图 / 编组 / 物品 / 选择面板）和左上角
-   工具列一起缩到 0.65（比原先的 0.5 放大约三成），各自以自己的角为锚点，位置仍然贴着
-   左上 / 左下。只用 transform，内部布局（小地图拖拽、6 格物品、进度条、小 ×）都不用改；
-   11 个按钮的热区跟着缩。缩放后小地图是 168×0.65 ≈ 109 宽、156×0.65 ≈ 101 高，
-   编组条与工具列的偏移量按这个尺寸重算，免得和放大后的邻居叠在一起。 */
-@media (max-width: 1000px), (max-height: 700px) {
-  .ghud-minimap {
-    transform: scale(0.65);
-    transform-origin: 0 0;
-  }
-  .ghud-groups {
-    top: calc(var(--safe-top) + 8px + 101px + 6px);
-    transform: scale(0.65);
-    transform-origin: 0 0;
-  }
-  .ghud-zoom {
-    left: calc(var(--safe-left) + 8px + 109px + 8px);
-    transform: scale(0.65);
-    transform-origin: 0 0;
-  }
-  .ghud-sel {
-    transform: scale(0.65);
-    transform-origin: 0 100%;
-  }
-  .ghud-inventory {
-    bottom: calc(var(--safe-bottom) + 73px);
-    transform: scale(0.65);
-    transform-origin: 0 100%;
-  }
-  /* 资源条（金币 / 木材 / 人口）缩 0.65，右端让出 40px 给菜单；菜单则钉在最右上角。 */
-  .ghud-top {
-    right: calc(var(--safe-right) + 40px);
-    transform: scale(0.65);
-    transform-origin: 100% 0;
-  }
-  .ghud-menu {
-    transform: scale(0.65);
-    transform-origin: 100% 0;
-  }
-  /* 视角控制也跟着缩 0.65，仍然压在物品栏上方。 */
-  .ghud-view {
-    bottom: calc(var(--safe-bottom) + 125px);
-    transform: scale(0.65);
-    transform-origin: 0 100%;
-  }
-}
+/* 三档尺寸见前面「手势 HUD 的三档尺寸」那段：每块只认 --ghud-ui 与环境给的偏移变量，
+   这里不再按视口或指针另写一套。 */
 
 /* 「请横屏」（ui/rotateHint.ts）——竖屏的手机/平板只看得到这一层。
    菜单和 FDF 界面按横屏的 0.8×0.6 世界绘制（ui/fdf/layout.ts fitBox 按高度缩放），

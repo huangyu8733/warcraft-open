@@ -87,7 +87,13 @@ export async function mountHdSaveGame(
     },
     columns: columns(),
   });
-  backButton(shell.root, t("hd.back"), h.onClose);
+  backButton(shell.root, t("hd.back"), h.onClose, {
+    // The system menu mounts this panel (systemMenu.ts imports openSaveGamePanel), so the
+    // opener is loaded on demand to keep the module graph acyclic.
+    onSystemMenu: () =>
+      void import("./systemMenu").then((m) => m.openSystemMenu(screen, vfs, {})),
+    systemMenuLabel: t("hd.menu"),
+  });
 
   let entries: SaveListEntry[] = [];
   let selected: string | null = null;

@@ -271,9 +271,14 @@ War3x/War3xLocal), not in the install's `Maps\` folder the Custom Game screen br
 bytes come from the VFS, and `startGame` takes `File | Uint8Array`. From there it is the
 ordinary custom-map path: the map is not melee-flagged, so its own triggers set the mission up.
 
-`.w3n` campaign archives (a custom campaign packaged as one file) are a separate thing and are
-**not** implemented — the stock campaigns ship as loose maps inside the MPQs, and the only
-`.w3n` in an MPQ-era install is War3x's `DemoCampaign.w3n`.
+`.w3n` campaign archives (a custom campaign packaged as one file) live in the install's
+`Maps\Campaign\` folder — a folder of its own INSIDE `Maps\`, so a campaign is never mixed into the
+map list. The Custom
+Campaign screen lists every `.w3n` there (`customCampaignSources`, `src/data/campaigns.ts`), and
+opening one reads its `war3campaign.w3f` — name, author, description and the chapter table — into
+the ordinary `Campaign` shape, so its chapters play through the same chapter screen as the stock
+ones. A `.w3n` under `Maps\Download\` is something else: it is the 3.0 DLC catalogue's encrypted
+chapter pack, and it only unlocks those chapters (`attachCampaigns`).
 
 For DRIVING one — a chapter cannot be reached through the dev boot's `?map=`, whose manifest
 lists the install's `Maps\` folder and not the archives — there is `?dev&chapter=NightElfX01`
@@ -773,7 +778,7 @@ the player actually chose would be gone for the rest of the campaign.
   first visit, a closer once the campaign is finished) and dead. WC3 ships
   them as `Movies\*.mpq` files that are, despite the extension, plain RIFF AVIs — nothing this
   engine decodes.
-- No saved games, and no custom-campaign (`.w3n`) screen. Profiles exist (issue #80) and own the
+- No saved games. Profiles exist (issue #80) and own the
   progress and the game caches above; the "personal saved games list" half of what one holds
   waits on saving. That is also why the defeat dialog's **Load** button is dead: it is the map's
   own button (`CustomDefeatLoadBJ` → `DisplayLoadDialog`) and there is nothing to load yet.
